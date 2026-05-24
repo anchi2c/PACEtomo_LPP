@@ -93,6 +93,19 @@ tgtTrackMnt     = False     # set to True if you also want the tracking target t
 debug           = False     # Enables additional output for a few processes (e.g. cross-correlation for all image alignments)
 breakpoints     = False     # Waits at every debug output for user to press B key.
 
+# Ronchigram / laser alignment (Trial LD area must match Record position; only exposure differs)
+doRonchigram       = False
+ronchiC3Offset     = -20          # added to ReportImageDistanceOffset before Trial shot
+ronchiDelay        = 2.0          # seconds after C3 offset change
+ronchiBinning      = 32
+ronchiPixelSize    = 0.973e-4 * 2 # um (unbinned; multiplied by binning in analysis)
+ronchiTargetPhaseA = 2.7          # vertical laser (rad)
+ronchiTargetPhaseB = 1.7          # horizontal laser (rad)
+ronchiCorrectKs    = [[6.74334974, -0.50967178], [0.62728835, 6.78255526]]
+ronchiPeakRadius   = 100
+ronchiMontage      = True         # also run before montage tile Record shots
+ronchiCorrMatrix   = [[0.212, 1.28], [1.22, -0.243]]  # phase-to-deflector coupling, scaled by 1e-5
+
 ########## END SETTINGS ########## 
 
 versionPACE = "1.9.2c"
@@ -108,6 +121,16 @@ import glob
 from functools import wraps
 import numpy as np
 from scipy import optimize
+
+try:
+    _script_path = sem.ReportScriptName()
+    if isinstance(_script_path, (list, tuple)):
+        _script_path = _script_path[0]
+    if _script_path:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(_script_path)))
+except Exception:
+    pass
+
 if sortByTilt: 
     import subprocess
     import mrcfile
@@ -169,6 +192,65 @@ def checkSlit(vec, size, tilt, pn):                                             
 def checkValves():
     if not int(sem.ReportColumnOrGunValve()):
         sem.SetColumnOrGunValve(1)
+
+def checkRonchigramSetup():
+    if not doRonchigram:
+        return
+    trial_exp, *_ = sem.ReportExposure("T")
+    record_exp, *_ = sem.ReportExposure("R")
+    if trial_exp <= 0 and sem.IsVariableDefined("warningRonchiTrial") == 0:
+        sem.Pause("WARNING: Trial exposure is zero or not set. Configure Trial with a very short exposure at the same position as Record.")
+        sem.SetPersistentVar("warningRonchiTrial", "")
+    if trial_exp >= record_exp * 0.5:
+        log("WARNING: Trial exposure should be much shorter than Record for negligible ronchigram dose.")
+    try:
+        t_shift = sem.ReportLDAreaShift("T")
+        if len(t_shift) >= 2 and np.linalg.norm(np.array(t_shift[:2], dtype=float)) > 0.01:
+            log("WARNING: Trial area position differs from Record. Set Trial LD offsets to match Record.")
+    except (AttributeError, TypeError, ValueError):
+        pass
+    log("NOTE: Ronchigram uses Trial at Record beam position. Set Trial LD offsets identical to Record; only exposure should differ.")
+
+def doRonchigramCorrection(set_track_fn=None):
+    if not doRonchigram:
+        return
+    from PACEtomo_ronchigram import analyze_ronchigram, apply_laser_correction
+    try:
+        sem.UpdateLowDoseParams("T")
+    except AttributeError:
+        pass
+    start_offset = sem.ReportImageDistanceOffset()
+    sem.GoToLowDoseArea("T")
+    sem.SetImageDistanceOffset(start_offset + ronchiC3Offset)
+    sem.Delay(ronchiDelay, "s")
+    sem.T()
+    sem.SetImageDistanceOffset(start_offset)
+    try:
+        image = np.asarray(sem.bufferImage("A"))
+        result = analyze_ronchigram(
+            image, ronchiPixelSize, ronchiBinning, ronchiTargetPhaseA, ronchiTargetPhaseB,
+            ronchiCorrectKs, peak_radius=ronchiPeakRadius, corr_matrix=ronchiCorrMatrix)
+        apply_laser_correction(sem, result["correction_x"], result["correction_y"])
+        log(f"Ronchigram: phase err V={round(result['phase_err_a'], 3)} rad | H={round(result['phase_err_b'], 3)} rad | "
+            f"dX={result['correction_x']:.3e} dY={result['correction_y']:.3e}")
+        if debug:
+            log(f"DEBUG: Ronchigram ks={np.array2string(result['ks'])} ks err={np.array2string(result['ks_error'])}")
+    except Exception as e:
+        log(f"WARNING: Ronchigram analysis failed: {e}. Continuing without laser correction.")
+    sem.GoToLowDoseArea("R")
+    if set_track_fn is not None:
+        set_track_fn()
+    if beamTiltComp:
+        sem.RestoreBeamTilt()
+
+def recordWithRonchi(set_track_fn=None, run_ronchi=True):
+    if run_ronchi and doRonchigram:
+        doRonchigramCorrection(set_track_fn=set_track_fn)
+    if beamTiltComp:
+        sem.AdjustBeamTiltforIS()
+    sem.Delay(delayIS, "s")
+    sem.R()
+    sem.S()
 
 def retryOpen(max_attempts=5, delay=5):
     """Decorator to retry function on permission exception."""
@@ -752,11 +834,7 @@ def Tilt(tilt):
         sem.SetFrameNameFormat(0, 0, 0x40)                                                      # turn off Sequential number
         sem.SetFrameNameFormat(0, 1, 0x400)                                                     # turn on tilt angle
         sem.SetFrameBaseName(0, 1, 0, os.path.splitext(targets[pos]["tsfile"])[0] + f"_tilt_{str(tiltStepCounter).zfill(3)}_angle")  # include collection order and tilt angle in frame name
-        if beamTiltComp: 
-            sem.AdjustBeamTiltforIS()
-        sem.Delay(delayIS, "s")
-        sem.R()
-        sem.S()
+        recordWithRonchi(set_track_fn=setTrack if pos == 0 else None)
 
         bufISXpre = 0                                                                           # only non 0 if two tracking images are taken
         bufISYpre = 0
@@ -768,8 +846,7 @@ def Tilt(tilt):
                 ASX, ASY = sem.ReportAlignShift()[4:6]
                 if abs(ASX) > alignLimit * 1000 or abs(ASY) > alignLimit * 1000:
                     bufISXpre, bufISYpre = sem.ReportISforBufferShift()                         # have to be added only to ISset but not ISali (since ali only considers the IS chain of ali images)
-                    sem.R()
-                    sem.S()
+                    recordWithRonchi(set_track_fn=setTrack if pos == 0 else None)
                     alignTo("O", debug)
 
         bufISX, bufISY = sem.ReportISforBufferShift()
@@ -815,11 +892,7 @@ def Tilt(tilt):
                         #correctedFocus = position[pos][pn]["focus"] - np.tan(np.radians(realTilt)) * montSSY
 
                         sem.SetDefocus(correctedFocus)
-                    if beamTiltComp: 
-                        sem.AdjustBeamTiltforIS()
-                    sem.Delay(delayIS, "s")
-                    sem.R()
-                    sem.S()
+                    recordWithRonchi(set_track_fn=setTrack if pos == 0 else None, run_ronchi=ronchiMontage)
 
                     mont_SSX, mont_SSY = sem.ReportSpecimenShift()
 
@@ -1067,6 +1140,8 @@ sem.ProgramTimeStamps()
 
 # Open last tgts or tgts_run file and read contents
 targets, savedRun, resume, geoPoints = parseTargets(tf[-1])
+
+checkRonchigramSetup()
 
 # Sanity check of settings
 if maxDefocus > minDefocus:

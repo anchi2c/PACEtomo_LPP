@@ -241,6 +241,22 @@ PACEtomo runs a grouped dose-symmetric tilt scheme. Before starting the PACEtomo
 | `previewAli` | `True` | <ul><li>If `True`, every target is aligned to its saved Preview image. This helps to keep your target centred if your `startTilt` is not 0.</li><li>If your field of view is large and your feature of choice does not have to be centred precisely, `previewAli` can be set to `False` to reduce the initial dose on your targets.</li><li>If `True` and only a View mag reference was saved for the target (e.g. from [targetsFromMontage](PACEtomo_targetsFromMontage.py) or [SPACEtomo](https://github.com/eisfabian/SPACEtomo)), SerialEM will attempt to align the Preview image to a View reference image.</li><li>`previewAli` can also be used for a `tgtPattern` if the grid is not very regular and grid vectors alone are not precise enough. In this case you should also set `alignToP = True`.</li></ul> |
 | `viewAli` | `False` | `viewAli` works similar to `previewAli` but only uses a View mag image for initial alignment to save exposure on the targets. If you rely on View images taken with high defocus offset, it is recommended to do the "High-Defocus Mag" and especially the "High-Defocus IS" calibrations. It is also used for [SPACEtomo](https://github.com/eisfabian/SPACEtomo). |
 
+#### Ronchigram / laser alignment settings:
+| Setting | Default | Description |
+| ------- | ------- | ----------- |
+| `doRonchigram` | `False` | If `True`, acquires a ronchigram in **Trial** mode before every Record image, analyzes fringe phases, and auto-corrects the laser via `SetXLensDeflector`. |
+| `ronchiC3Offset` | `-20` | Temporary C3 offset (`SetImageDistanceOffset`) applied during the Trial ronchigram shot. |
+| `ronchiDelay` | `2.0` | Delay [s] after changing C3 offset before acquiring the ronchigram. |
+| `ronchiBinning` | `32` | Binning factor used in FFT analysis (must match effective pixel size in `ronchiPixelSize`). |
+| `ronchiPixelSize` | microscope-specific | Unbinned pixel size [µm] at Trial/Record mag; multiplied by `ronchiBinning` in analysis. |
+| `ronchiTargetPhaseA` | `2.7` | Target phase [rad] for vertical laser fringe. |
+| `ronchiTargetPhaseB` | `1.7` | Target phase [rad] for horizontal laser fringe. |
+| `ronchiCorrectKs` | microscope-specific | Reference fringe spacing vector for phase analysis. |
+| `ronchiPeakRadius` | `100` | Peak suppression radius [pixels] in Fourier space. |
+| `ronchiMontage` | `True` | If `True`, also run ronchigram correction before montage tile Record shots. |
+| `ronchiCorrMatrix` | microscope-specific | Phase-to-deflector coupling matrix (scaled by 1e-5 internally). |
+
+**SerialEM setup for ronchigram:** Configure **Trial with the same position/beam settings as Record** (IS offset, beam shift, mag, defocus offset all matched). The only difference should be a **very short Trial exposure** so ronchigram dose is negligible. C3 offset for the ronchigram is applied temporarily by the script via `ronchiC3Offset`, not as a permanent low-dose offset. Analysis code lives in [`PACEtomo_ronchigram.py`](PACEtomo_ronchigram.py).
 
 #### Output settings:
 | Setting | Default | Description |
