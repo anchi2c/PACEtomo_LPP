@@ -282,9 +282,11 @@ def doRonchigramCorrection(set_track_fn=None):
     start_offset = sem.ReportImageDistanceOffset()
     sem.GoToLowDoseArea("T")
     sem.SetImageDistanceOffset(start_offset + ronchiC3Offset)
-    sem.Delay(ronchiDelay, "s")
-    sem.T()
-    sem.SetImageDistanceOffset(start_offset)
+    try:
+        sem.Delay(ronchiDelay, "s")
+        sem.T()
+    finally:
+        sem.SetImageDistanceOffset(start_offset)
     try:
         image = np.asarray(sem.bufferImage("A"))
         result = analyze_ronchigram(
