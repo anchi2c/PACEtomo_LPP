@@ -244,7 +244,7 @@ PACEtomo runs a grouped dose-symmetric tilt scheme. Before starting the PACEtomo
 #### Ronchigram / laser alignment settings:
 | Setting | Default | Description |
 | ------- | ------- | ----------- |
-| `doRonchigram` | `False` | If `True`, acquires a ronchigram in **Trial** mode before every Record image, analyzes fringe phases, and auto-corrects the laser via `SetXLensDeflector`. |
+| `doRonchigram` | `False` | If `True`, acquires a ronchigram in **Trial** mode before every Record image, analyzes fringe phases, and auto-corrects the XTilt via `SetXLensDeflector`. |
 | `ronchiC3Offset` | `-20` | Temporary C3 offset (`SetImageDistanceOffset`) applied during the Trial ronchigram shot. |
 | `ronchiDelay` | `2.0` | Delay [s] after changing C3 offset before acquiring the ronchigram. |
 | `ronchiBinning` | `32` | Binning factor used in FFT analysis (must match effective pixel size in `ronchiPixelSize`). |
@@ -256,7 +256,7 @@ PACEtomo runs a grouped dose-symmetric tilt scheme. Before starting the PACEtomo
 | `ronchiMontage` | `True` | If `True`, also run ronchigram correction before montage tile Record shots. |
 | `ronchiCorrMatrix` | microscope-specific | Phase-to-deflector coupling matrix (scaled by 1e-5 internally). |
 
-**SerialEM setup for ronchigram:** Configure **Trial with the same position/beam settings as Record** (IS offset, beam shift, mag, defocus offset all matched). The only difference should be a **very short Trial exposure** so ronchigram dose is negligible. C3 offset for the ronchigram is applied temporarily by the script via `ronchiC3Offset`, not as a permanent low-dose offset. Analysis code lives in [`PACEtomo_ronchigram.py`](PACEtomo_ronchigram.py).
+**SerialEM setup for ronchigram:** Configure **Trial with the same position/beam settings as Record** (IS offset, beam shift, mag, defocus offset all matched). The only difference should be a **very short Trial exposure** so ronchigram dose is negligible. C3 offset for the ronchigram is applied temporarily by the script via `ronchiC3Offset`, not as a permanent low-dose offset.
 
 #### Output settings:
 | Setting | Default | Description |
