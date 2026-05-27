@@ -18,7 +18,7 @@ offset      = 5     # +/- offset for measured positions in microns from tilt axi
 plot        = True  # plot measurements
 
 ctfDefocusLo   = -10.0   # CtfFind search range low [microns]
-ctfDefocusHi   = 2.0     # CtfFind search range high [microns]
+ctfDefocusHi   = -0.2     # CtfFind search range high [microns]
 target_defocus = -1.5    # defocus set before tilt series (microns)
 
 ########## END SETTINGS ########## 
@@ -72,9 +72,13 @@ sem.Echo("Currently set tilt axis offset: " + str(oldOffset))
 sem.Echo("##### Starting tilt axis offset estimation #####")
 sem.Echo(f"Defocus from CtfFind on Preview (range {ctfDefocusLo} to {ctfDefocusHi} microns).")
 sem.Echo("Rough eucentricity...")
+sem.GoToLowDoseArea("V")
+sem.SetImageShift(0, 0)
 sem.Eucentricity(1)
 
 sem.Echo("Setting defocus from CtfFind...")
+sem.GoToLowDoseArea("R")
+sem.SetImageShift(0, 0)
 sem.L()
 sem.NoMessageBoxOnError(1)
 try:
