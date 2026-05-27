@@ -37,6 +37,20 @@ tgtMntOverlap   = 0.05      # montage tile overlap as fraction of shorter camera
 
 debug           = False     # Enables additional output and plots for a few processes (e.g. measureGeo, vecByXCorr)
 
+########## Ronchigram / laser alignment (before Preview) ##########
+# Trial LD area must match Record position; only exposure should differ.
+doRonchigram       = False
+ronchiC3Offset     = -20
+ronchiDelay        = 2.0
+ronchiBinning      = 32
+ronchiPixelSize    = 0.973e-4 * 2 # um (unbinned; multiplied by binning in analysis)
+ronchiTargetPhaseA = 2.7
+ronchiTargetPhaseB = 1.7
+ronchiCorrectKs    = [[6.74334974, -0.50967178], [0.62728835, 6.78255526]]
+ronchiPeakRadius   = 100
+ronchiCorrMatrix   = [[0.212, 1.28], [1.22, -0.243]]
+########## END Ronchigram settings ##########
+
 ########## END SETTINGS ########## 
 
 import serialem as sem
@@ -67,6 +81,146 @@ if not versionCheck and sem.IsVariableDefined("warningVersion") == 0:
         sem.SetPersistentVar("warningVersion", "")
 
 ########### FUNCTIONS ###########
+
+##############################################################################
+# Ronchigram — image analysis (numpy / FFT only; no SerialEM calls)
+##############################################################################
+
+
+def _ronchi_bin_image(image, binning=32):
+    bins = [image[i:(image.shape[0] // binning * binning):binning, j:(image.shape[1] // binning * binning):binning]
+            for i in range(binning) for j in range(binning)]
+    return np.sum(bins, axis=0)
+
+
+def _ronchi_find_fourier_centered(image, padded_size=4096):
+    fourier = np.fft.fftshift(np.fft.fft2(image - np.mean(image), s=(padded_size, padded_size)))
+    center = np.array(image.shape) / 2
+    grid_y, grid_x = np.indices((padded_size, padded_size), dtype=float)
+    shifted_y = grid_y - padded_size / 2
+    shifted_x = grid_x - padded_size / 2
+    correction_phase_x = np.exp(2j * np.pi * shifted_x / padded_size * center[1])
+    correction_phase_y = np.exp(2j * np.pi * shifted_y / padded_size * center[0])
+    return fourier * correction_phase_x * correction_phase_y
+
+
+def _ronchi_report_angles(ks, start_angle=-135):
+    return np.mod(np.arctan2(-ks[:, 0], ks[:, 1]) * 180 / np.pi - start_angle, 360) + start_angle
+
+
+def _ronchi_find_peaks(fourier, radius=100, npeaks=4):
+    fourier_abs = np.abs(fourier).copy()
+    peak_locations = []
+    phases = []
+    size = np.shape(fourier_abs)[0]
+    peak_coords = [size // 2, size // 2]
+    fourier_abs[(peak_coords[0] - radius):(peak_coords[0] + radius),
+                (peak_coords[1] - radius):(peak_coords[1] + radius)] = 0
+    for _ in range(npeaks):
+        max_idx = np.argmax(fourier_abs)
+        peak_coords = np.unravel_index(max_idx, fourier_abs.shape)
+        peak_locations.append(peak_coords)
+        fourier_abs[(peak_coords[0] - radius):(peak_coords[0] + radius),
+                    (peak_coords[1] - radius):(peak_coords[1] + radius)] = 0
+        phases.append(np.angle(fourier[peak_coords]))
+    return np.array(peak_locations) - size / 2, np.array(phases)
+
+
+def _ronchi_find_ks_phases(corrected_fourier, pixel_size_um, npeaks=2, radius=100, binning=1, fourier_size=None):
+    if fourier_size is None:
+        fourier_size = corrected_fourier.shape[0]
+    peaks, phases = _ronchi_find_peaks(corrected_fourier, radius=radius, npeaks=npeaks * 2)
+    ordering = np.argsort(_ronchi_report_angles(peaks, start_angle=-135))
+    peaks = peaks[ordering][:npeaks]
+    phases = phases[ordering][:npeaks]
+    ks = peaks / fourier_size * 1 / (pixel_size_um * binning)
+    return ks, phases
+
+
+def analyze_ronchigram(image, pixel_size_um, binning, target_phase_a, target_phase_b,
+                       correct_ks, peak_radius=100, corr_matrix=None, corr_scale=1e-5):
+    if corr_matrix is None:
+        corr_matrix = [[0.212, 1.28], [1.22, -0.243]]
+    correct_ks = np.asarray(correct_ks, dtype=float)
+    binned = _ronchi_bin_image(np.asarray(image), binning=binning)
+    image_fft = _ronchi_find_fourier_centered(binned)
+    ks, phases = _ronchi_find_ks_phases(image_fft, pixel_size_um * binning, npeaks=2, radius=peak_radius, binning=1,
+                                       fourier_size=image_fft.shape[0])
+    phase_err_a = np.mod(phases[0] - target_phase_a + np.pi, 2 * np.pi) - np.pi
+    phase_err_b = np.mod(phases[1] - target_phase_b + np.pi, 2 * np.pi) - np.pi
+    corr = np.asarray(corr_matrix, dtype=float) * corr_scale
+    correction_x = phase_err_a * corr[0, 0] + phase_err_b * corr[0, 1]
+    correction_y = phase_err_a * corr[1, 0] + phase_err_b * corr[1, 1]
+    return {
+        "ks": ks, "phases": phases, "ks_error": ks - correct_ks,
+        "phase_err_a": phase_err_a, "phase_err_b": phase_err_b,
+        "correction_x": correction_x, "correction_y": correction_y,
+    }
+
+
+##############################################################################
+# Ronchigram — microscope aligner (Trial acquire, then return to Preview)
+##############################################################################
+
+
+def applyRonchigramXtiltCorrection(correction_x, correction_y, lens_index=2):
+    xtX, xtY = sem.ReportXLensDeflector(lens_index)
+    sem.SetXLensDeflector(lens_index, xtX + correction_x, xtY + correction_y)
+
+
+def checkRonchigramSetup():
+    if not doRonchigram:
+        return
+    trial_exp, *_ = sem.ReportExposure("T")
+    record_exp, *_ = sem.ReportExposure("R")
+    if trial_exp <= 0 and sem.IsVariableDefined("warningRonchiTrial") == 0:
+        sem.Pause("WARNING: Trial exposure is zero or not set. Configure Trial with a very short exposure at the same position as Record.")
+        sem.SetPersistentVar("warningRonchiTrial", "")
+    if trial_exp >= record_exp * 0.5:
+        log("WARNING: Trial exposure should be much shorter than Record for negligible ronchigram dose.")
+    try:
+        t_shift = sem.ReportLDAreaShift("T")
+        if len(t_shift) >= 2 and np.linalg.norm(np.array(t_shift[:2], dtype=float)) > 0.01:
+            log("WARNING: Trial area position differs from Record. Set Trial LD offsets to match Record.")
+    except (AttributeError, TypeError, ValueError):
+        pass
+    log("NOTE: Ronchigram uses Trial at Record beam position. Set Trial LD offsets identical to Record; only exposure should differ.")
+
+
+def doRonchigramCorrection():
+    if not doRonchigram:
+        return
+    try:
+        sem.UpdateLowDoseParams("T")
+    except AttributeError:
+        pass
+    start_offset = sem.ReportImageDistanceOffset()
+    sem.GoToLowDoseArea("T")
+    sem.SetImageDistanceOffset(start_offset + ronchiC3Offset)
+    try:
+        sem.Delay(ronchiDelay, "s")
+        sem.T()
+    finally:
+        sem.SetImageDistanceOffset(start_offset)
+    try:
+        image = np.asarray(sem.bufferImage("A"))
+        result = analyze_ronchigram(
+            image, ronchiPixelSize, ronchiBinning, ronchiTargetPhaseA, ronchiTargetPhaseB,
+            ronchiCorrectKs, peak_radius=ronchiPeakRadius, corr_matrix=ronchiCorrMatrix)
+        applyRonchigramXtiltCorrection(result["correction_x"], result["correction_y"])
+        log(f"Ronchigram: phase err V={round(result['phase_err_a'], 3)} rad | H={round(result['phase_err_b'], 3)} rad | "
+            f"dX={result['correction_x']:.3e} dY={result['correction_y']:.3e}")
+        if debug:
+            log(f"DEBUG: Ronchigram ks={np.array2string(result['ks'])} ks err={np.array2string(result['ks_error'])}")
+    except Exception as e:
+        log(f"WARNING: Ronchigram analysis failed: {e}. Continuing without laser correction.")
+    sem.GoToLowDoseArea("P")
+
+
+def ronchiBeforePreview():
+    if doRonchigram:
+        doRonchigramCorrection()
+
 
 def parseTargets(targetFile):
     with open(targetFile) as f:
@@ -237,6 +391,7 @@ def drag():
                 break
             sem.Delay(0.1, "s")
     if userConfirm == 1:
+        ronchiBeforePreview()
         sem.L()
         userRefine = 1
         while userRefine == 1:
@@ -259,6 +414,7 @@ def drag():
                     log("NOTE: Please press the <b> key after centering your target!")
                 while not sem.KeyBreak():
                     sem.Delay(0.1, "s")
+                ronchiBeforePreview()
                 sem.L()
         userInput = sem.YesNoBox("\n".join(["SAVE?", "", "Do you want to use the current image and coordinates as target " + str(targetNo + 1) + "?","If you choose no, a new view image is taken to align your target!"]))
 
@@ -1589,6 +1745,7 @@ if tf != []:
         tgtsFilePath = tf[-1]
 
 sem.GoToLowDoseArea("R")                                            # need SS to stage matrix for conversion
+checkRonchigramSetup()
 ss2sMatrix = np.array(sem.SpecimenToStageMatrix(0)).reshape((2, 2))
 s2ssMatrix = np.array(sem.StageToSpecimenMatrix(0)).reshape((2, 2))
 log(f"DEBUG: S2SS matrix: {s2ssMatrix}")
@@ -1708,6 +1865,7 @@ if editTgts == 0:
     if SSX0 > image_shift_threshold or SSY0 > image_shift_threshold:
         log("NOTE: Resetting image shift for tracking target because image shift was above threshold!")
         sem.ResetImageShift()
+        ronchiBeforePreview()
         sem.L()
         sem.AlignTo("B")
         stageX, stageY, stageZ = sem.ReportStageXYZ()
