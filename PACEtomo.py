@@ -93,7 +93,9 @@ tgtTrackMnt     = False     # set to True if you also want the tracking target t
 debug           = False     # Enables additional output for a few processes (e.g. cross-correlation for all image alignments)
 breakpoints     = False     # Waits at every debug output for user to press B key.
 
-# Ronchigram / laser alignment (Trial LD area must match Record position; only exposure differs)
+########## Ronchigram / laser alignment ##########
+# Trial LD area must match Record position; only exposure should differ.
+# Overridable from target file via _bset (e.g. _bset doRonchigram true).
 doRonchigram       = False
 ronchiC3Offset     = -20          # added to ReportImageDistanceOffset before Trial shot
 ronchiDelay        = 2.0          # seconds after C3 offset change
@@ -105,6 +107,7 @@ ronchiCorrectKs    = [[6.74334974, -0.50967178], [0.62728835, 6.78255526]]
 ronchiPeakRadius   = 100
 ronchiMontage      = True         # also run before montage tile Record shots
 ronchiCorrMatrix   = [[0.212, 1.28], [1.22, -0.243]]  # phase-to-deflector coupling, scaled by 1e-5
+########## END Ronchigram settings ##########
 
 ########## END SETTINGS ########## 
 
@@ -184,13 +187,21 @@ def checkValves():
     if not int(sem.ReportColumnOrGunValve()):
         sem.SetColumnOrGunValve(1)
 
-### Ronchigram analysis
-def ronchi_bin_image(image, binning=32):
+##############################################################################
+# Ronchigram — image analysis (numpy / FFT only; no SerialEM calls)
+#
+# Public API: analyze_ronchigram()
+# Internal helpers: _ronchi_bin_image, _ronchi_find_fourier_centered, ...
+##############################################################################
+
+
+def _ronchi_bin_image(image, binning=32):
     bins = [image[i:(image.shape[0] // binning * binning):binning, j:(image.shape[1] // binning * binning):binning]
             for i in range(binning) for j in range(binning)]
     return np.sum(bins, axis=0)
 
-def ronchi_find_fourier_centered(image, padded_size=4096):
+
+def _ronchi_find_fourier_centered(image, padded_size=4096):
     fourier = np.fft.fftshift(np.fft.fft2(image - np.mean(image), s=(padded_size, padded_size)))
     center = np.array(image.shape) / 2
     grid_y, grid_x = np.indices((padded_size, padded_size), dtype=float)
@@ -200,10 +211,12 @@ def ronchi_find_fourier_centered(image, padded_size=4096):
     correction_phase_y = np.exp(2j * np.pi * shifted_y / padded_size * center[0])
     return fourier * correction_phase_x * correction_phase_y
 
-def ronchi_report_angles(ks, start_angle=-135):
+
+def _ronchi_report_angles(ks, start_angle=-135):
     return np.mod(np.arctan2(-ks[:, 0], ks[:, 1]) * 180 / np.pi - start_angle, 360) + start_angle
 
-def ronchi_find_peaks(fourier, radius=100, npeaks=4):
+
+def _ronchi_find_peaks(fourier, radius=100, npeaks=4):
     fourier_abs = np.abs(fourier).copy()
     peak_locations = []
     phases = []
@@ -220,24 +233,27 @@ def ronchi_find_peaks(fourier, radius=100, npeaks=4):
         phases.append(np.angle(fourier[peak_coords]))
     return np.array(peak_locations) - size / 2, np.array(phases)
 
-def ronchi_find_ks_phases(corrected_fourier, pixel_size_um, npeaks=2, radius=100, binning=1, fourier_size=None):
+
+def _ronchi_find_ks_phases(corrected_fourier, pixel_size_um, npeaks=2, radius=100, binning=1, fourier_size=None):
     if fourier_size is None:
         fourier_size = corrected_fourier.shape[0]
-    peaks, phases = ronchi_find_peaks(corrected_fourier, radius=radius, npeaks=npeaks * 2)
-    ordering = np.argsort(ronchi_report_angles(peaks, start_angle=-135))
+    peaks, phases = _ronchi_find_peaks(corrected_fourier, radius=radius, npeaks=npeaks * 2)
+    ordering = np.argsort(_ronchi_report_angles(peaks, start_angle=-135))
     peaks = peaks[ordering][:npeaks]
     phases = phases[ordering][:npeaks]
     ks = peaks / fourier_size * 1 / (pixel_size_um * binning)
     return ks, phases
 
+
 def analyze_ronchigram(image, pixel_size_um, binning, target_phase_a, target_phase_b,
                        correct_ks, peak_radius=100, corr_matrix=None, corr_scale=1e-5):
+    """FFT peak phases -> laser deflector corrections (dict with correction_x/y, phases, ks, ...)."""
     if corr_matrix is None:
         corr_matrix = [[0.212, 1.28], [1.22, -0.243]]
     correct_ks = np.asarray(correct_ks, dtype=float)
-    binned = ronchi_bin_image(np.asarray(image), binning=binning)
-    image_fft = ronchi_find_fourier_centered(binned)
-    ks, phases = ronchi_find_ks_phases(image_fft, pixel_size_um * binning, npeaks=2, radius=peak_radius, binning=1,
+    binned = _ronchi_bin_image(np.asarray(image), binning=binning)
+    image_fft = _ronchi_find_fourier_centered(binned)
+    ks, phases = _ronchi_find_ks_phases(image_fft, pixel_size_um * binning, npeaks=2, radius=peak_radius, binning=1,
                                        fourier_size=image_fft.shape[0])
     phase_err_a = np.mod(phases[0] - target_phase_a + np.pi, 2 * np.pi) - np.pi
     phase_err_b = np.mod(phases[1] - target_phase_b + np.pi, 2 * np.pi) - np.pi
@@ -250,11 +266,25 @@ def analyze_ronchigram(image, pixel_size_um, binning, target_phase_a, target_pha
         "correction_x": correction_x, "correction_y": correction_y,
     }
 
-def applyRonchigramLaserCorrection(correction_x, correction_y, lens_index=2):
+
+##############################################################################
+# Ronchigram — microscope aligner (SerialEM: Trial acquire, apply, Record)
+#
+# Public API: checkRonchigramSetup(), doRonchigramCorrection(), recordWithRonchi()
+##############################################################################
+
+
+def applyRonchigramXtiltCorrection(correction_x, correction_y, lens_index=2):
+    """Apply calculated shifts to the X lens deflector."""
     xtX, xtY = sem.ReportXLensDeflector(lens_index)
     sem.SetXLensDeflector(lens_index, xtX + correction_x, xtY + correction_y)
 
+
 def checkRonchigramSetup():
+    """Startup checks when doRonchigram is enabled (called after parseTargets)."""
+    if doRonchigram and beamTiltComp:
+        sem.OKBox("ERROR: doRonchigram and beamTiltComp together is not implemented. Set doRonchigram = False or beamTiltComp = False.")
+        sem.Exit()
     if not doRonchigram:
         return
     trial_exp, *_ = sem.ReportExposure("T")
@@ -272,7 +302,9 @@ def checkRonchigramSetup():
         pass
     log("NOTE: Ronchigram uses Trial at Record beam position. Set Trial LD offsets identical to Record; only exposure should differ.")
 
+
 def doRonchigramCorrection(set_track_fn=None):
+    """Trial shot + analyze_ronchigram + laser correction; return to Record area."""
     if not doRonchigram:
         return
     try:
@@ -292,7 +324,7 @@ def doRonchigramCorrection(set_track_fn=None):
         result = analyze_ronchigram(
             image, ronchiPixelSize, ronchiBinning, ronchiTargetPhaseA, ronchiTargetPhaseB,
             ronchiCorrectKs, peak_radius=ronchiPeakRadius, corr_matrix=ronchiCorrMatrix)
-        applyRonchigramLaserCorrection(result["correction_x"], result["correction_y"])
+        applyRonchigramXtiltCorrection(result["correction_x"], result["correction_y"])
         log(f"Ronchigram: phase err V={round(result['phase_err_a'], 3)} rad | H={round(result['phase_err_b'], 3)} rad | "
             f"dX={result['correction_x']:.3e} dY={result['correction_y']:.3e}")
         if debug:
@@ -302,10 +334,12 @@ def doRonchigramCorrection(set_track_fn=None):
     sem.GoToLowDoseArea("R")
     if set_track_fn is not None:
         set_track_fn()
-    if beamTiltComp:
+    if beamTiltComp: # This is unreachable for now as beamTiltComp is not implemented with ronchi
         sem.RestoreBeamTilt()
 
+
 def recordWithRonchi(set_track_fn=None, run_ronchi=True):
+    """Optional ronchigram correction, then standard Record acquire (sem.R / sem.S)."""
     if run_ronchi and doRonchigram:
         doRonchigramCorrection(set_track_fn=set_track_fn)
     if beamTiltComp:
@@ -313,6 +347,9 @@ def recordWithRonchi(set_track_fn=None, run_ronchi=True):
     sem.Delay(delayIS, "s")
     sem.R()
     sem.S()
+
+
+########### PACEtomo functions (non-ronchigram) ###########
 
 def retryOpen(max_attempts=5, delay=5):
     """Decorator to retry function on permission exception."""
