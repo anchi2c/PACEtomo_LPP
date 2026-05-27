@@ -17,6 +17,10 @@ offset      = 5     # +/- offset for measured positions in microns from tilt axi
 
 plot        = True  # plot measurements
 
+useCtfFind    = False   # use CtfFind on Focus image (buffer A) instead of ReportAutoFocus
+ctfDefocusLo  = -10.0   # CtfFind search range low [microns] (more negative = more underfocus)
+ctfDefocusHi  = 2.0     # CtfFind search range high [microns]
+
 ########## END SETTINGS ########## 
 
 import serialem as sem
@@ -29,14 +33,30 @@ import matplotlib.pyplot as plt
 def dZ(alpha, y0):
     return y0 * np.tan(np.radians(-alpha))
 
+def measureDefocus():
+    if not useCtfFind:
+        defocus, *_ = sem.ReportAutoFocus()
+        return float(defocus)
+    sem.NoMessageBoxOnError(1)
+    try:
+        cfind = sem.CtfFind("A", ctfDefocusLo, ctfDefocusHi)
+        if len(cfind) > 0:
+            return float(cfind[0])
+    except Exception:
+        pass
+    finally:
+        sem.NoMessageBoxOnError(0)
+    sem.Echo("WARNING: CtfFind failed; using ReportAutoFocus for this point.")
+    defocus, *_ = sem.ReportAutoFocus()
+    return float(defocus)
+
 def Tilt(tilt):
     sem.TiltTo(tilt)
 
     for i in range(len(offsets)):
         sem.ImageShiftByMicrons(0, offsets[i])
         sem.G(-1)
-        defocus, *_ = sem.ReportAutoFocus()
-        focus[i].append(float(defocus))
+        focus[i].append(measureDefocus())
         sem.SetImageShift(0, 0)
 
     if tilt == 0:
@@ -56,6 +76,10 @@ oldOffset = sem.ReportTiltAxisOffset()[0]
 sem.Echo("Currently set tilt axis offset: " + str(oldOffset))
 
 sem.Echo("##### Starting tilt axis offset estimation #####")
+if useCtfFind:
+    sem.Echo(f"Defocus from CtfFind (range {ctfDefocusLo} to {ctfDefocusHi} microns).")
+else:
+    sem.Echo("Defocus from ReportAutoFocus after G.")
 sem.Echo("Rough eucentricity...")
 sem.Eucentricity(1)
 
