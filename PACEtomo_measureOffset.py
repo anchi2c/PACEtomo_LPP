@@ -6,7 +6,7 @@
 # Author:       Fabian Eisenstein
 # Created:      2022/05/10
 # Revision:     v1.8
-# Last Change:  2024/05/10: forced "Center Shift on Tilt axis" (1.8)
+# Last Change:  2026/05/27: beam-tilt autofocus defocus measurement (1.9)
 # ===================================================================
 
 ############ SETTINGS ############ 
@@ -17,9 +17,11 @@ offset      = 5     # +/- offset for measured positions in microns from tilt axi
 
 plot        = True  # plot measurements
 
-ctfDefocusLo   = -10.0   # CtfFind search range low [microns]
-ctfDefocusHi   = -0.2     # CtfFind search range high [microns]
-target_defocus = -1.5    # defocus set before tilt series (microns)
+# Beam-tilt autofocus (calibrated correction factor)
+tilt_angle_mrad = 5.0
+beam_tilt_correction = 3 / 6.7
+autofocus_cycles = 2   # cycles for initial autofocus (sem.G equivalent)
+measure_cycles = 1     # cycles per defocus measurement (sem.G(-1) equivalent)
 
 ########## END SETTINGS ########## 
 
@@ -33,24 +35,96 @@ import matplotlib.pyplot as plt
 def dZ(alpha, y0):
     return y0 * np.tan(np.radians(-alpha))
 
-def measureDefocus():
-    sem.NoMessageBoxOnError(1)
-    try:
-        cfind = sem.CtfFind("A", ctfDefocusLo, ctfDefocusHi)
-    finally:
-        sem.NoMessageBoxOnError(0)
-    if len(cfind) == 0:
-        sem.Echo("ERROR: CtfFind failed at this measurement point.")
-        sem.Exit()
-    return float(cfind[0])
+
+def beam_tilt_measure_defocus():
+    """
+    Beam-tilt autofocus measurement (AutoFocus_New macro logic).
+    Returns defocus [microns], drift speed x/y [nm/s].
+    """
+    beam_tilt = sem.ReportBeamTilt()
+    tilt_x_orig = float(beam_tilt[0])
+    tilt_y_orig = float(beam_tilt[1])
+    tilt_x_plus = tilt_x_orig + beam_tilt_correction * tilt_angle_mrad
+    tilt_x_minus = tilt_x_orig - beam_tilt_correction * tilt_angle_mrad
+
+    pixel_size_binned = float(sem.ReportCurrentPixelSize("R"))
+    binning = float(sem.ReportBinning("R"))
+    pixel_size_unbinned = pixel_size_binned / binning
+
+    sem.SetBeamTilt(tilt_x_plus, tilt_y_orig)
+    sem.F()
+    sem.ResetClock()
+    sem.Copy("A", "L")
+
+    sem.SetBeamTilt(tilt_x_minus, tilt_y_orig)
+    sem.F()
+    sem.AlignTo("L", 1)
+    align_shift_1 = sem.ReportAlignShift()
+    disp_x1_px = float(align_shift_1[0])
+    disp_y1_px = float(align_shift_1[1])
+
+    sem.SetBeamTilt(tilt_x_plus, tilt_y_orig)
+    sem.F()
+    elapsed = float(sem.ReportClock())
+
+    sem.SetBeamTilt(tilt_x_orig, tilt_y_orig)
+    sem.AlignTo("L", 1)
+    align_shift_2 = sem.ReportAlignShift()
+    disp_x2_px = float(align_shift_2[0])
+    disp_y2_px = float(align_shift_2[1])
+
+    drift_x = disp_x2_px * pixel_size_unbinned
+    drift_y = disp_y2_px * pixel_size_unbinned
+    speed_x = drift_x / elapsed if elapsed > 0 else 0.0
+    speed_y = drift_y / elapsed if elapsed > 0 else 0.0
+
+    displacement_from_tilt_x = (disp_x1_px - disp_x2_px / 2.0) * pixel_size_unbinned
+    displacement_from_tilt_y = (disp_y1_px - disp_y2_px / 2.0) * pixel_size_unbinned
+    displacement = np.sqrt(
+        displacement_from_tilt_x * displacement_from_tilt_x
+        + displacement_from_tilt_y * displacement_from_tilt_y
+    )
+
+    if displacement_from_tilt_x == 0:
+        sign = 1.0
+    else:
+        sign = displacement_from_tilt_x / abs(displacement_from_tilt_x)
+
+    defocus_measured = -1.0 * sign * displacement / tilt_angle_mrad
+    return defocus_measured, speed_x, speed_y
+
+
+def measure_defocus():
+    """Measure defocus only (sem.G(-1) equivalent)."""
+    sem.L()
+    defocus = np.nan
+    for _ in range(measure_cycles):
+        defocus, speed_x, speed_y = beam_tilt_measure_defocus()
+    sem.Echo(
+        f"Beam-tilt defocus: {defocus:.4f} microns, "
+        f"drift=({speed_x:.3f}, {speed_y:.3f}) nm/s"
+    )
+    return float(defocus)
+
+
+def autofocus_apply():
+    """Measure defocus and apply focus correction (sem.G equivalent)."""
+    defocus = np.nan
+    for _ in range(autofocus_cycles):
+        defocus, speed_x, speed_y = beam_tilt_measure_defocus()
+        sem.ChangeFocus(-defocus)
+    sem.Echo(
+        f"Beam-tilt autofocus applied, last defocus: {defocus:.4f} microns, "
+        f"drift=({speed_x:.3f}, {speed_y:.3f}) nm/s"
+    )
+
 
 def Tilt(tilt):
     sem.TiltTo(tilt)
 
     for i in range(len(offsets)):
         sem.ImageShiftByMicrons(0, offsets[i])
-        sem.L()
-        focus[i].append(measureDefocus())
+        focus[i].append(measure_defocus())
         sem.SetImageShift(0, 0)
 
     if tilt == 0:
@@ -70,26 +144,11 @@ oldOffset = sem.ReportTiltAxisOffset()[0]
 sem.Echo("Currently set tilt axis offset: " + str(oldOffset))
 
 sem.Echo("##### Starting tilt axis offset estimation #####")
-sem.Echo(f"Defocus from CtfFind on Preview (range {ctfDefocusLo} to {ctfDefocusHi} microns).")
 sem.Echo("Rough eucentricity...")
-sem.GoToLowDoseArea("V")
-sem.SetImageShift(0, 0)
 sem.Eucentricity(1)
 
-sem.Echo("Setting defocus from CtfFind...")
-sem.GoToLowDoseArea("R")
-sem.SetImageShift(0, 0)
-sem.L()
-sem.NoMessageBoxOnError(1)
-try:
-    cfind = sem.CtfFind("A", ctfDefocusLo, ctfDefocusHi)
-finally:
-    sem.NoMessageBoxOnError(0)
-if len(cfind) == 0:
-    sem.Echo("ERROR: CtfFind failed during initial setup.")
-    sem.Exit()
-current_defocus = float(cfind[0])
-sem.ChangeFocus(target_defocus - current_defocus)
+sem.Echo("Beam-tilt autofocus...")
+autofocus_apply()
 
 sem.Echo("Start tilt series...")
 starttilt = -maxTilt
