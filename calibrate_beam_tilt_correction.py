@@ -87,16 +87,15 @@ def run_autofocus_trial(correction):
     Returns:
       defocus_measured [microns], speed_x [nm/s], speed_y [nm/s]
     """
-    sem.ReportBeamTilt()
-    tilt_x_orig = float(sem.GetVariable("reportedValue1"))
-    tilt_y_orig = float(sem.GetVariable("reportedValue2"))
+    beam_tilt = sem.ReportBeamTilt()
+    tilt_x_orig = float(beam_tilt[0])
+    tilt_y_orig = float(beam_tilt[1])
     tilt_x_plus = tilt_x_orig + correction * tilt_angle_mrad
     tilt_x_minus = tilt_x_orig - correction * tilt_angle_mrad
 
-    sem.ReportCurrentPixelSize("R")
-    pixel_size_binned = float(sem.GetVariable("reportedValue1"))
-    sem.ReportBinning("R")
-    pixel_size_unbinned = pixel_size_binned / float(sem.GetVariable("reportedValue1"))
+    pixel_size_binned = float(sem.ReportCurrentPixelSize("R")[0])
+    binning = float(sem.ReportBinning("R")[0])
+    pixel_size_unbinned = pixel_size_binned / binning
 
     # Positive tilt
     sem.SetBeamTilt(tilt_x_plus, tilt_y_orig)
@@ -108,22 +107,21 @@ def run_autofocus_trial(correction):
     sem.SetBeamTilt(tilt_x_minus, tilt_y_orig)
     sem.F()
     sem.AlignTo("L", 1)
-    sem.ReportAlignShift()
-    disp_x1_px = float(sem.GetVariable("reportedValue1"))
-    disp_y1_px = float(sem.GetVariable("reportedValue2"))
+    align_shift_1 = sem.ReportAlignShift()
+    disp_x1_px = float(align_shift_1[0])
+    disp_y1_px = float(align_shift_1[1])
 
     # Positive tilt again
     sem.SetBeamTilt(tilt_x_plus, tilt_y_orig)
     sem.F()
-    sem.ReportClock()
-    elapsed = float(sem.GetVariable("reportedValue1"))
+    elapsed = float(sem.ReportClock())
 
     # Back to origin
     sem.SetBeamTilt(tilt_x_orig, tilt_y_orig)
     sem.AlignTo("L", 1)
-    sem.ReportAlignShift()
-    disp_x2_px = float(sem.GetVariable("reportedValue1"))
-    disp_y2_px = float(sem.GetVariable("reportedValue2"))
+    align_shift_2 = sem.ReportAlignShift()
+    disp_x2_px = float(align_shift_2[0])
+    disp_y2_px = float(align_shift_2[1])
 
     drift_x = disp_x2_px * pixel_size_unbinned
     drift_y = disp_y2_px * pixel_size_unbinned
