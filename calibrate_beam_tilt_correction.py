@@ -28,6 +28,14 @@ target_defocus_values = [-1.0, -2.0, -3.0, -4.0, -5.0]
 ctf_defocus_lo = -10.0
 ctf_defocus_hi = -0.2
 
+# Defocus convergence settings for setting each target defocus
+target_defocus_tolerance_um = 0.05
+max_defocus_adjust_iterations = 3
+
+# Number of autofocus cycles per correction test.
+# Delta is computed using the last cycle's autofocus value.
+autofocus_cycles = 2
+
 # Output file names (written in current SerialEM working directory)
 csv_measurements = "beam_tilt_correction_measurements.csv"
 csv_summary = "beam_tilt_correction_summary.csv"
@@ -50,15 +58,27 @@ def run_ctffind():
 
 
 def set_target_defocus(target_defocus):
-    """Adjust focus to target defocus using CtfFind readback."""
+    """Adjust focus to target defocus and verify with CtfFind."""
     sem.GoToLowDoseArea("R")
     sem.SetImageShift(0, 0)
-    sem.L()
-    current_defocus, _ = run_ctffind()
-    sem.ChangeFocus(target_defocus - current_defocus)
+    current_defocus = np.nan
+    for attempt in range(1, max_defocus_adjust_iterations + 1):
+        sem.L()
+        current_defocus, _ = run_ctffind()
+        error = target_defocus - current_defocus
+        sem.Echo(
+            f"Target defocus check {attempt}/{max_defocus_adjust_iterations}: "
+            f"current={current_defocus:.3f} um, target={target_defocus:.3f} um, "
+            f"error={error:.3f} um"
+        )
+        if abs(error) <= target_defocus_tolerance_um:
+            sem.Echo("Target defocus reached within tolerance.")
+            return current_defocus
+        sem.ChangeFocus(error)
     sem.Echo(
-        f"Set defocus from {current_defocus:.3f} to target {target_defocus:.3f} microns."
+        "WARNING: Target defocus not reached within tolerance after max iterations."
     )
+    return current_defocus
 
 
 def run_autofocus_trial(correction):
@@ -139,6 +159,9 @@ def save_measurements_csv(path, rows):
     fields = [
         "target_defocus_um",
         "beam_tilt_correction",
+        "autofocus_cycle_used",
+        "autofocus_defocus_cycle1_um",
+        "autofocus_defocus_cycle2_um",
         "autofocus_defocus_um",
         "ctf_defocus_um",
         "delta_um",
@@ -224,21 +247,31 @@ def main():
     for target_defocus in target_defocus_values:
         sem.Echo("------------------------------------------------")
         sem.Echo(f"Starting target defocus {target_defocus:.3f} um")
-        set_target_defocus(target_defocus)
+        reached_defocus = set_target_defocus(target_defocus)
+        sem.Echo(f"Defocus after adjustment loop: {reached_defocus:.3f} um")
 
         corr_vals = []
         delta_vals = []
         for corr in beam_tilt_corrections:
             corr = float(corr)
-            af_defocus, speed_x, speed_y = run_autofocus_trial(corr)
+            cycle_defocus = []
+            speed_x = 0.0
+            speed_y = 0.0
+            for _ in range(autofocus_cycles):
+                af_defocus, speed_x, speed_y = run_autofocus_trial(corr)
+                cycle_defocus.append(af_defocus)
+            af_defocus_used = cycle_defocus[-1]
+            cycle1 = cycle_defocus[0] if len(cycle_defocus) >= 1 else np.nan
+            cycle2 = cycle_defocus[1] if len(cycle_defocus) >= 2 else np.nan
 
             sem.L()
             ctf_defocus, ctf_res = run_ctffind()
-            delta = af_defocus - ctf_defocus
+            delta = af_defocus_used - ctf_defocus
 
             sem.Echo(
                 f"target={target_defocus:.3f} um, corr={corr:.4f}, "
-                f"AF={af_defocus:.4f} um, CTF={ctf_defocus:.4f} um, delta={delta:.4f} um, "
+                f"AF(last of {autofocus_cycles})={af_defocus_used:.4f} um, "
+                f"CTF={ctf_defocus:.4f} um, delta={delta:.4f} um, "
                 f"drift=({speed_x:.3f}, {speed_y:.3f}) nm/s"
             )
 
@@ -246,7 +279,10 @@ def main():
                 {
                     "target_defocus_um": target_defocus,
                     "beam_tilt_correction": corr,
-                    "autofocus_defocus_um": af_defocus,
+                    "autofocus_cycle_used": autofocus_cycles,
+                    "autofocus_defocus_cycle1_um": cycle1,
+                    "autofocus_defocus_cycle2_um": cycle2,
+                    "autofocus_defocus_um": af_defocus_used,
                     "ctf_defocus_um": ctf_defocus,
                     "delta_um": delta,
                     "ctf_resolution_A": ctf_res,
