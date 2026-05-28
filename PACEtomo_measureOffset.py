@@ -20,8 +20,11 @@ plot        = True  # plot measurements
 # Beam-tilt autofocus (calibrated correction factor)
 tilt_angle_mrad = 5.0
 beam_tilt_correction = 3 / 6.7
-autofocus_cycles = 2   # cycles for initial autofocus (sem.G equivalent)
-measure_cycles = 1     # cycles per defocus measurement (sem.G(-1) equivalent)
+autofocus_cycles = 2              # initial autofocus: correct focus to target_defocus (sem.G)
+measure_cycles = 1                # tilt loop: measure only, no focus change (sem.G(-1))
+
+target_defocus = -3.0             # defocus target for sem.G equivalent [microns]
+target_defocus_tolerance_um = 0.05
 
 ########## END SETTINGS ########## 
 
@@ -95,28 +98,30 @@ def beam_tilt_measure_defocus():
 
 
 def measure_defocus():
-    """Measure defocus only (sem.G(-1) equivalent)."""
-    sem.L()
+    """sem.G(-1): measure defocus only, no focus change."""
     defocus = np.nan
     for _ in range(measure_cycles):
         defocus, speed_x, speed_y = beam_tilt_measure_defocus()
     sem.Echo(
-        f"Beam-tilt defocus: {defocus:.4f} microns, "
-        f"drift=({speed_x:.3f}, {speed_y:.3f}) nm/s"
+        f"Defocus: {defocus:.4f} um, drift=({speed_x:.3f}, {speed_y:.3f}) nm/s"
     )
     return float(defocus)
 
 
 def autofocus_apply():
-    """Measure defocus and apply focus correction (sem.G equivalent)."""
+    """sem.G: measure defocus and correct to target_defocus."""
     defocus = np.nan
-    for _ in range(autofocus_cycles):
+    for cycle in range(1, autofocus_cycles + 1):
         defocus, speed_x, speed_y = beam_tilt_measure_defocus()
-        sem.ChangeFocus(-defocus)
-    sem.Echo(
-        f"Beam-tilt autofocus applied, last defocus: {defocus:.4f} microns, "
-        f"drift=({speed_x:.3f}, {speed_y:.3f}) nm/s"
-    )
+        error = target_defocus - defocus
+        sem.Echo(
+            f"Autofocus {cycle}/{autofocus_cycles}: "
+            f"measured={defocus:.4f} um, target={target_defocus:.3f} um, error={error:.3f} um"
+        )
+        if abs(error) <= target_defocus_tolerance_um:
+            return defocus
+        sem.ChangeFocus(error)
+    return defocus
 
 
 def Tilt(tilt):
@@ -147,7 +152,7 @@ sem.Echo("##### Starting tilt axis offset estimation #####")
 sem.Echo("Rough eucentricity...")
 sem.Eucentricity(1)
 
-sem.Echo("Beam-tilt autofocus...")
+sem.Echo(f"Beam-tilt autofocus to {target_defocus:.3f} microns (sem.G)...")
 autofocus_apply()
 
 sem.Echo("Start tilt series...")
