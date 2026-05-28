@@ -29,8 +29,8 @@ ctf_defocus_lo = -10.0
 ctf_defocus_hi = -0.2
 
 # Defocus convergence settings for setting each target defocus
-target_defocus_tolerance_um = 0.05
-max_defocus_adjust_iterations = 3
+target_defocus_tolerance_um = 0.01
+max_defocus_adjust_iterations = 5
 
 # Number of autofocus cycles per correction test.
 # Delta is computed using the last cycle's autofocus value.
@@ -93,8 +93,8 @@ def run_autofocus_trial(correction):
     tilt_x_plus = tilt_x_orig + correction * tilt_angle_mrad
     tilt_x_minus = tilt_x_orig - correction * tilt_angle_mrad
 
-    pixel_size_binned = float(sem.ReportCurrentPixelSize("R")[0])
-    binning = float(sem.ReportBinning("R")[0])
+    pixel_size_binned = float(sem.ReportCurrentPixelSize("R"))
+    binning = float(sem.ReportBinning("R"))
     pixel_size_unbinned = pixel_size_binned / binning
 
     # Positive tilt
