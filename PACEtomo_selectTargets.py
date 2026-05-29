@@ -37,6 +37,11 @@ tgtMntOverlap   = 0.05      # montage tile overlap as fraction of shorter camera
 
 debug           = False     # Enables additional output and plots for a few processes (e.g. measureGeo, vecByXCorr)
 
+# Beam-tilt defocus measurement (sem.G(-1) replacement)
+tilt_angle_mrad = 5.0
+beam_tilt_correction = 3 / 6.7
+measure_cycles = 1
+
 ########## Ronchigram / laser alignment (before Preview) ##########
 # Trial LD area must match Record position; only exposure should differ.
 doRonchigram       = False
@@ -683,6 +688,58 @@ def vecByXcorr(diameter):
     else:
         return success, vecA, vecB
 
+def beam_tilt_measure_defocus():
+    beam_tilt = sem.ReportBeamTilt()
+    tilt_x_orig = float(beam_tilt[0])
+    tilt_y_orig = float(beam_tilt[1])
+    tilt_x_plus = tilt_x_orig + beam_tilt_correction * tilt_angle_mrad
+    tilt_x_minus = tilt_x_orig - beam_tilt_correction * tilt_angle_mrad
+    pixel_size_binned = float(sem.ReportCurrentPixelSize("R"))
+    binning = float(sem.ReportBinning("R"))
+    pixel_size_unbinned = pixel_size_binned / binning
+    sem.SetBeamTilt(tilt_x_plus, tilt_y_orig)
+    sem.F()
+    sem.ResetClock()
+    sem.Copy("A", "L")
+    sem.SetBeamTilt(tilt_x_minus, tilt_y_orig)
+    sem.F()
+    sem.AlignTo("L", 1)
+    align_shift_1 = sem.ReportAlignShift()
+    disp_x1_px = float(align_shift_1[0])
+    disp_y1_px = float(align_shift_1[1])
+    sem.SetBeamTilt(tilt_x_plus, tilt_y_orig)
+    sem.F()
+    elapsed = float(sem.ReportClock())
+    sem.SetBeamTilt(tilt_x_orig, tilt_y_orig)
+    sem.AlignTo("L", 1)
+    align_shift_2 = sem.ReportAlignShift()
+    disp_x2_px = float(align_shift_2[0])
+    disp_y2_px = float(align_shift_2[1])
+    drift_x = disp_x2_px * pixel_size_unbinned
+    drift_y = disp_y2_px * pixel_size_unbinned
+    speed_x = drift_x / elapsed if elapsed > 0 else 0.0
+    speed_y = drift_y / elapsed if elapsed > 0 else 0.0
+    displacement_from_tilt_x = (disp_x1_px - disp_x2_px / 2.0) * pixel_size_unbinned
+    displacement_from_tilt_y = (disp_y1_px - disp_y2_px / 2.0) * pixel_size_unbinned
+    displacement = np.sqrt(
+        displacement_from_tilt_x * displacement_from_tilt_x
+        + displacement_from_tilt_y * displacement_from_tilt_y
+    )
+    if displacement_from_tilt_x == 0:
+        sign = 1.0
+    else:
+        sign = displacement_from_tilt_x / abs(displacement_from_tilt_x)
+    defocus_measured = -1.0 * sign * displacement / tilt_angle_mrad
+    return defocus_measured, speed_x, speed_y
+
+def measure_defocus():
+    """Measure defocus only (sem.G(-1) equivalent). No focus change."""
+    defocus = np.nan
+    speed_x = speed_y = 0.0
+    for _ in range(measure_cycles):
+        defocus, speed_x, speed_y = beam_tilt_measure_defocus()
+    return float(defocus), np.array([speed_x, speed_y])
+
 def log(text, color=0, style=0):
     if text.startswith("DEBUG:") and not debug:
         return
@@ -886,7 +943,7 @@ def gui(targetFile):
                     sem.AcquireToMatchBuffer(buffer)
                     sem.AlignTo(buffer)
 
-            sem.GoToLowDoseArea("R")
+            #sem.GoToLowDoseArea("R")
             stageX, stageY, stageZ = sem.ReportStageXYZ()
             SSX0, SSY0 = sem.ReportSpecimenShift()
             ISX0, ISY0, *_ = sem.ReportImageShift()
@@ -992,6 +1049,8 @@ def gui(targetFile):
             if viewIndex > 0:                                       # if view map exists already, align to new tracking target
                 realignTrack()
             else:                                                   # if not, make view map
+                sem.GoToLowDoseArea("V")
+                sem.SetImageShift(0, 0)
                 sem.ImageShiftByMicrons(SSXoffset, SSYoffset)       # apply SSoffsets and take temp view map of new tracking target
                 sem.V()
                 sem.OpenNewFile(targets[0]["tgtfile"].rsplit(".mrc", 1)[0] + "_view_temp.mrc")
@@ -1000,12 +1059,14 @@ def gui(targetFile):
                 sem.CloseFile()
                 realignTrack()                                      # move stage and realign to new tracking target
                 sem.DeleteNavigatorItem(tempIndex)
+
                 sem.V()                                             # take view map of new tracking target
                 sem.OpenNewFile(targets[0]["tgtfile"].rsplit(".mrc", 1)[0] + "_view.mrc")
                 sem.S("A")
                 sem.NewMap(0, targets[0]["tgtfile"].rsplit(".mrc", 1)[0] + "_view.mrc")
                 sem.CloseFile()
                 sem.GoToLowDoseArea("R")
+                sem.SetImageShift(0, 0)
 
             if geoPoints != []:                                     # shift geoPoints accordingly
                 for i in range(len(geoPoints)):
@@ -1320,10 +1381,10 @@ def gui(targetFile):
             log("Measuring geometry...")
             geoXYZ = [[], [], []]
             for i in range(len(geoPoints)):
+                sem.GoToLowDoseArea("R")
+                sem.SetImageShift(0, 0)
                 sem.ImageShiftByMicrons(geoPoints[i]["SSX"], geoPoints[i]["SSY"])
-                sem.G(-1)
-                defocus, _ = sem.ReportAutoFocus()
-                drift = sem.ReportFocusDrift()
+                defocus, drift = measure_defocus()
                 log(f"DEBUG:\nAutofocus: {defocus}\nDrift:     {drift}")
                 if abs(defocus) >= 0.01 and np.linalg.norm(drift) >= 0.01:
                     geoXYZ[0].append(geoPoints[i]["SSX"])
