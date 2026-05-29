@@ -72,6 +72,12 @@ from matplotlib.patches import Circle, Ellipse, Rectangle
 from matplotlib.backend_bases import MouseButton
 from matplotlib.backends.backend_tkagg import (FigureCanvasTkAgg, NavigationToolbar2Tk)
 
+try:
+    listToSEMarray = sem.listToSEMarray
+except AttributeError:
+    def listToSEMarray(values):
+        return " ".join(str(v) for v in np.atleast_1d(values))
+
 versionCheck = sem.IsVersionAtLeast("40100", "20230619")
 if not versionCheck and sem.IsVariableDefined("warningVersion") == 0:
     runScript = sem.YesNoBox("\n".join(["WARNING: You are using a version of SerialEM that does not support all PACEtomo features. It is recommended to update to the latest SerialEM beta version!", "", "Do you want to run PACEtomo regardless?"]))
@@ -1697,10 +1703,6 @@ sem.SetNewFileType(0)                                               # set file t
 dummy = False
 if sem.ReportProperty("DummyInstance") == 1:
     dummy = True
-
-if hasattr(sem, "DEBUG"):
-    def listToSEMarray(*args, **kwargs):
-        pass
 
 if not dummy:
     if int(sem.ReportAxisPosition("F")[0]) != 0 and sem.IsVariableDefined("warningFocusArea") == 0:
