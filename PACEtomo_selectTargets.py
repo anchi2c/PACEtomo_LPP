@@ -1250,6 +1250,8 @@ def gui(targetFile):
             viewIndex = int(sem.NavIndexWithNote(viewName))
             if viewIndex == 0:                                      # take view image if it does not exist
                 log("DEBUG: Applying image shift and taking View image...")
+                sem.GoToLowDoseArea("V")
+                sem.SetImageShift(0, 0)
                 sem.ImageShiftByMicrons(targets[i]["SSX"], targets[i]["SSY"])
                 sem.V()
                 log("DEBUG: Saving View image...")
@@ -1959,8 +1961,8 @@ if editTgts == 0:
 
     # make view map tor realign to item
     sem.SetCameraArea("V", "F")
-    sem.SetImageShift(0, 0)
     sem.GoToLowDoseArea("V")
+    sem.SetImageShift(0, 0)
     sem.V()
     sem.OpenNewFile(userName + "_tgt_001_view.mrc")
     sem.S("A")
