@@ -7,7 +7,7 @@
 # Author:       Fabian Eisenstein
 # Created:      2021/04/16
 # Revision:     v1.9.2c
-# Last Change:  2025/04/30: added external sortByTilt
+# Last Change:  2026/05/27: selectable tilt schemes (dose_symmetric, bidirectional, continuous)
 # ===================================================================
 
 ############ SETTINGS ############ 
@@ -16,7 +16,8 @@ startTilt       = 0         # starting tilt angle [degrees] (should be divisible
 minTilt         = -60       # minimum absolute tilt angle [degrees]
 maxTilt         = 60        # maximum absolute tilt angle [degrees]
 step            = 3         # tilt step [degrees]
-groupSize       = 2         # group size for grouped dose-symmetric scheme (number of contiguously acquired images on one side of the tilt series)
+groupSize       = 2         # group size for dose_symmetric scheme (contiguous images per side before switching)
+tiltScheme      = "dose_symmetric"  # dose_symmetric | bidirectional | continuous
 minDefocus      = -5        # minimum defocus [microns] of target range (low defocus)
 maxDefocus      = -5        # maximum defocus [microns] of target range (high defocus)
 stepDefocus     = 0.5       # step [microns] between target defoci (between TS)
@@ -848,6 +849,81 @@ def breakpoint():
             break
         sem.Delay(0.1, "s")
 
+def build_tilt_schedule(scheme, start_tilt, min_tilt, max_tilt, tilt_step, group_size):
+    """Return ordered list of stage tilt angles [degrees] for the full series."""
+    if scheme == "dose_symmetric":
+        tilts = [start_tilt]
+        plustilt = minustilt = start_tilt
+        branchsteps = max(max_tilt - start_tilt, abs(min_tilt - start_tilt)) / group_size / tilt_step
+        for _ in range(int(np.ceil(branchsteps))):
+            for _ in range(group_size):
+                plustilt += tilt_step
+                if plustilt <= max_tilt + 1e-6:
+                    tilts.append(plustilt)
+            for _ in range(group_size):
+                minustilt -= tilt_step
+                if minustilt >= min_tilt - 1e-6:
+                    tilts.append(minustilt)
+        return tilts
+    if scheme == "bidirectional":
+        tilts = [start_tilt]
+        angle = start_tilt + tilt_step
+        while angle <= max_tilt + 1e-6:
+            tilts.append(angle)
+            angle += tilt_step
+        angle = -tilt_step
+        while angle >= min_tilt - 1e-6:
+            tilts.append(angle)
+            angle -= tilt_step
+        return tilts
+    if scheme == "continuous":
+        tilts = []
+        angle = min_tilt
+        while angle <= max_tilt + 1e-6:
+            tilts.append(angle)
+            angle += tilt_step
+        return tilts
+    sem.OKBox(f"ERROR: Unknown tiltScheme '{scheme}'. Use dose_symmetric, bidirectional, or continuous.")
+    sem.Exit()
+
+def refine_geo_after_first_tilt():
+    if len(geo[2]) >= 3:
+        log("Refining geometry...")
+        log(f"{len(geo[2])} usable CtfFind results found.")
+        if len(geo[2]) >= parabolTh:
+            log("Fitting paraboloid...")
+            geoF = geoPara
+        else:
+            log("Fitting plane...")
+            geoF = geoPlane
+        p, cov = optimize.curve_fit(geoF, [geo[0], geo[1]], [z - geo[2][0] for z in geo[2]])
+        ss = 0
+        for i in range(0, len(geo[2])):
+            ss += (geo[2][i] - geo[2][0] - geoF([geo[0][i], geo[1][i]], *p))**2
+        rmse = np.sqrt(ss / len(geo[2]))
+        log("Fit parameters: " + " # ".join(p.astype(str)))
+        log(f"RMSE: {round(rmse, 3)}")
+        for pos in range(0, len(position)):
+            zs = geoF([position[pos][1]["SSX"], position[pos][1]["SSY"]], *p)
+            z0_ref = position[pos][1]["z0"] + zs * np.cos(np.radians(startTilt)) + position[pos][1]["SSY"] * np.sin(np.radians(startTilt))
+            position[pos][1]["z0"] = z0_ref
+            position[pos][2]["z0"] = z0_ref
+    else:
+        log(f"WARNING: Not enough reliable CtfFind results ({len(geo[2])}) to refine geometry. Continuing with initial geometry model.")
+
+def run_tilt_series(start_index):
+    global tiltStepCounter
+    for schedule_idx in range(start_index, total_tilt_steps):
+        tilt = tilt_schedule[schedule_idx]
+        tiltStepCounter = schedule_idx + 1
+        log(f"\nTilt step {tiltStepCounter} out of {total_tilt_steps} ({tilt} deg)...", style=1)
+        sem.SetStatusLine(1, f"Tilt step: {tiltStepCounter} / {total_tilt_steps}")
+        Tilt(tilt)
+        if schedule_idx == 0 and refineGeo and not recover:
+            refine_geo_after_first_tilt()
+        if coldFEG and tiltScheme == "dose_symmetric" and schedule_idx > 0 and schedule_idx % (2 * groupSize) == 0:
+            checkColdFEG()
+
 def Tilt(tilt):
     def calcSSChange(x, z0):                                                                    # x = array(tilt, n0) => needs to be one array for optimize.curve_fit()
         return x[1] * (np.cos(np.radians(x[0])) - np.cos(np.radians(x[0] - increment))) - z0 * (np.sin(np.radians(x[0])) - np.sin(np.radians(x[0] - increment)))
@@ -1010,7 +1086,7 @@ def Tilt(tilt):
 
 ### Autofocus (optional) and tracking TS settings
         if pos == 0:
-            if addAF and (tilt - startTilt) % (groupSize * step) == step and abs(tilt - startTilt) > step:
+            if addAF and tiltScheme == "dose_symmetric" and (tilt - startTilt) % (groupSize * step) == step and abs(tilt - startTilt) > step:
                 defocus, _ = measure_defocus()
                 focuserror = float(defocus) - targetDefocus
                 for i in range(0, len(position)):
@@ -1378,6 +1454,7 @@ if recover:
 else:
     log("##### Starting new PACEtomo with parameters: #####", style=1)
 log(f"Start: {startTilt} deg - Min/Max: {minTilt}/{maxTilt} deg ({step} deg increments)")
+log(f"Tilt scheme: {tiltScheme}" + (f" (groupSize={groupSize})" if tiltScheme == "dose_symmetric" else ""))
 log(f"Data points used: {dataPoints}")
 log(f"Target defocus range (min/max/step): {minDefocus}/{maxDefocus}/{stepDefocus}")
 log(f"Sample pretilt (rotation): {pretilt} ({rotation})")
@@ -1390,8 +1467,6 @@ if trackMag > 0:
 
 if startTilt * pretilt > 0:
     log("WARNING: Start tilt and pretilt have the same sign! If you want to compensate for the pretilt, the start tilt should have the opposite sign!")
-
-branchsteps = max(maxTilt - startTilt, abs(minTilt - startTilt)) / groupSize / step
 
 ### Create run file
 counter = 1
@@ -1582,6 +1657,13 @@ if not recover:
         # Update branch steps
         branchsteps = max(maxTilt - startTilt, abs(minTilt - startTilt)) / groupSize / step
 
+    tilt_schedule = build_tilt_schedule(tiltScheme, startTilt, minTilt, maxTilt, step, groupSize)
+    total_tilt_steps = len(tilt_schedule)
+    if tiltScheme == "continuous" and abs(startTilt - minTilt) > 1e-6:
+        log(f"NOTE: Continuous scheme collects {minTilt} to {maxTilt} deg; startTilt ({startTilt}) is not the first angle.")
+    log(f"Tilt series: {total_tilt_steps} angles ({tilt_schedule[0]} to {tilt_schedule[-1]} deg)")
+
+    first_tilt = tilt_schedule[0]
     log("Tilting to start tilt angle...")
     # backlash correction
     is_x, is_y = sem.ReportImageShift()
@@ -1594,9 +1676,9 @@ if not recover:
     curTilt = int(round(float(sem.ReportTiltAngle())))
 
     # Walk up if necessary
-    while abs(startTilt - curTilt) > 10:
-        log(f"DEBUG: Doing walkup to {curTilt + (10 if startTilt > 0 else -10)}...")
-        sem.TiltTo(curTilt + (10 if startTilt > 0 else -10))
+    while abs(first_tilt - curTilt) > 10:
+        log(f"DEBUG: Doing walkup to {curTilt + (10 if first_tilt > curTilt else -10)}...")
+        sem.TiltTo(curTilt + (10 if first_tilt > curTilt else -10))
         is_x, is_y = sem.ReportImageShift()
         sem.GoToLowDoseArea("V")
         sem.SetImageShift(0, 0)
@@ -1608,8 +1690,8 @@ if not recover:
         sem.Copy("A", "O")
         curTilt = int(round(float(sem.ReportTiltAngle())))
 
-    sem.TiltTo(startTilt - step)
-    sem.TiltTo(startTilt)
+    sem.TiltTo(first_tilt - step)
+    sem.TiltTo(first_tilt)
 
     sem.V()
     alignTo("O", debug)
@@ -1782,55 +1864,20 @@ if not recover:
 
 ### Start tilt
     log("Start tilt series...", style=1)
-    log(f"Tilt step 1 out of {int((maxTilt - minTilt) / step + 1)} ({startTilt} deg)...")
-    sem.SetStatusLine(1, f"Tilt step: 1 / {int((maxTilt - minTilt) / step + 1)}")
 
     dewarFillTime = 0
-    maxProgress = ((maxTilt - minTilt) / step + 1) * (len(position) - skippedTgts)
+    maxProgress = total_tilt_steps * (len(position) - skippedTgts)
     resumePercent = 0
     startTime = sem.ReportClock()
     lastSlitCheck = startTime
 
     geo = [[], [], []]
-
-    plustilt = minustilt = startTilt
-    tiltStepCounter = 1
-    Tilt(startTilt)
-
-    if refineGeo:
-        if len(geo[2]) >= 3:                                                                    # if number of points > 3: fit z = a * x + b * y
-            log("Refining geometry...")
-            log(f"{len(geo[2])} usable CtfFind results found.")
-            if len(geo[2]) >= parabolTh:                                                        # if number of points > 6: fit z = a * x + b * y + c * (x**2) + d * (y**2) + e * x * y
-                log("Fitting paraboloid...")
-                geoF = geoPara
-            else:                            
-                log("Fitting plane...")
-                geoF = geoPlane
-
-            p, cov = optimize.curve_fit(geoF, [geo[0], geo[1]], [z - geo[2][0] for z in geo[2]])
-
-            ss = 0
-            for i in range(0, len(geo[2])):
-                ss += (geo[2][i] - geo[2][0] - geoF([geo[0][i], geo[1][i]], *p))**2
-            rmse = np.sqrt(ss / len(geo[2]))
-
-            log("Fit parameters: " + " # ".join(p.astype(str)))
-            log(f"RMSE: {round(rmse, 3)}")
-
-            for pos in range(0, len(position)):                                                 # calculate and adjust refined z0
-                zs = geoF([position[pos][1]["SSX"], position[pos][1]["SSY"]], *p)
-                z0_ref = position[pos][1]["z0"] + zs * np.cos(np.radians(startTilt)) + position[pos][1]["SSY"] * np.sin(np.radians(startTilt))
-
-                position[pos][1]["z0"] = z0_ref
-                position[pos][2]["z0"] = z0_ref
-        else: 
-            log(f"WARNING: Not enough reliable CtfFind results ({len(geo[2])}) to refine geometry. Continuing with initial geometry model.")
-
-    startstep = 0
-    substep = [0, 0]
-    posResumed = -1
+    tiltStepCounter = 0
+    schedule_start = 0
     resumePN = 0
+    resumePlus = startTilt
+    resumeMinus = startTilt
+    posResumed = -1
 
 ### Recovery attempt
 else:
@@ -1882,39 +1929,30 @@ else:
         if targets[pos]["skip"] == "True":
             skippedTgts += 1
 
-    startstep = (resume["sec"] - 1) // (2 * groupSize)                                          # figure out start values for branch loops
-    substep = [min((resume["sec"] - 1) % (2 * groupSize), groupSize), (resume["sec"] - 1) % (2 * groupSize) // (groupSize + 1)]
-
-    realTilt = float(savedRun[resume["pos"]][0]["angles"].split(",")[-1])
-    if np.floor(realTilt) % step == 0:                                                          # necessary because angles array was switched to realTilt
-        lastTilt = np.floor(realTilt)
-    else:
-        lastTilt = np.ceil(realTilt)
-    plustilt = resumePlus = lastTilt                                                            # obtain last angle from savedRun in case position["angles"] was reset
-    if substep[0] < groupSize:                                                                  # subtract step when stopped during positive branch
-        plustilt -= step
-        resumePN = 1                                                                            # indicator which branch was interrupted
-        sem.TiltTo(plustilt)
-    if savedRun[pos][1]["angles"] != "":
-        realTilt = float(savedRun[resume["pos"]][1]["angles"].split(",")[-1])
-        if np.floor(realTilt) % step == 0:                                                      # necessary because angles array was switched to realTilt
-            lastTilt = np.floor(realTilt)
-        else:
-            lastTilt = np.ceil(realTilt)
-        minustilt = resumeMinus = lastTilt
-        if substep[0] == groupSize:                                                             # add step when stopped during negative branch
-            minustilt += step
-            resumePN = 2
-            sem.TiltTo(minustilt)
-    else:
-        minustilt = resumeMinus = startTilt
-        resumePN = 1
+    tilt_schedule = build_tilt_schedule(tiltScheme, startTilt, minTilt, maxTilt, step, groupSize)
+    total_tilt_steps = len(tilt_schedule)
+    log(f"Tilt series: {total_tilt_steps} angles ({tilt_schedule[0]} to {tilt_schedule[-1]} deg)")
 
     posResumed = resume["pos"] + 1
     tiltStepCounter = resume["sec"]
+    schedule_start = resume["sec"]
+
+    resumePlus = startTilt
+    resumeMinus = startTilt
+    resumePN = 1
+    for idx in range(schedule_start):
+        t = tilt_schedule[idx]
+        if t >= startTilt:
+            resumePlus = t
+        else:
+            resumeMinus = t
+    if schedule_start < total_tilt_steps:
+        resumePN = 1 if tilt_schedule[schedule_start] >= startTilt else 2
+    elif schedule_start > 0:
+        resumePN = 1 if tilt_schedule[schedule_start - 1] >= startTilt else 2
 
     dewarFillTime = 0
-    maxProgress = ((maxTilt - minTilt) / step + 1) * (len(position) - skippedTgts)
+    maxProgress = total_tilt_steps * (len(position) - skippedTgts)
     # progress = collected images * (positions - skipped positions) + current position - skipped positions scaled assuming homogeneous distribution of skipped positions
     progress = resume["sec"] * (len(position) - skippedTgts) + resume["pos"] - skippedTgts * resume["pos"] / len(position)
     resumePercent = round(100 * (progress / maxProgress), 1)
@@ -1940,23 +1978,7 @@ else:
 
 
 ### Tilt series
-for i in range(startstep, int(np.ceil(branchsteps))):
-    for j in range(substep[0], groupSize):
-        plustilt += step
-        if all([pos[1]["skip"] for pos in position]): continue
-        tiltStepCounter += 1
-        log(f"\nTilt step {tiltStepCounter} out of {int((maxTilt - minTilt) / step + 1)} ({plustilt} deg)...", style=1)
-        sem.SetStatusLine(1, f"Tilt step: {tiltStepCounter} / {int((maxTilt - minTilt) / step + 1)}")
-        Tilt(plustilt)
-    for j in range(substep[1], groupSize):
-        minustilt -= step
-        if all([pos[2]["skip"] for pos in position]): continue
-        tiltStepCounter += 1
-        log(f"\nTilt step {tiltStepCounter} out of {int((maxTilt - minTilt) / step + 1)} ({minustilt} deg)...", style=1)
-        sem.SetStatusLine(1, f"Tilt step: {tiltStepCounter} / {int((maxTilt - minTilt) / step + 1)}")
-        Tilt(minustilt)
-    substep = [0, 0]                                                                            # reset sub steps after recovery
-    if coldFEG: checkColdFEG()                                                                  # check for flashing at the end of each step
+run_tilt_series(schedule_start)
 
 ### Finish
 sem.ClearStatusLine(0)
