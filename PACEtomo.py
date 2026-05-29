@@ -188,7 +188,7 @@ def checkValves():
         sem.SetColumnOrGunValve(1)
 
 ##############################################################################
-# Ronchigram — image analysis (numpy / FFT only; no SerialEM calls)
+# Ronchigram - image analysis (numpy / FFT only; no SerialEM calls)
 #
 # Public API: analyze_ronchigram()
 # Internal helpers: _ronchi_bin_image, _ronchi_find_fourier_centered, ...
@@ -268,7 +268,7 @@ def analyze_ronchigram(image, pixel_size_um, binning, target_phase_a, target_pha
 
 
 ##############################################################################
-# Ronchigram — microscope aligner (SerialEM: Trial acquire, apply, Record)
+# Ronchigram - microscope aligner (SerialEM: Trial acquire, apply, Record)
 #
 # Public API: checkRonchigramSetup(), doRonchigramCorrection(), recordWithRonchi()
 ##############################################################################

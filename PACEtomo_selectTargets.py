@@ -83,7 +83,7 @@ if not versionCheck and sem.IsVariableDefined("warningVersion") == 0:
 ########### FUNCTIONS ###########
 
 ##############################################################################
-# Ronchigram — image analysis (numpy / FFT only; no SerialEM calls)
+# Ronchigram - image analysis (numpy / FFT only; no SerialEM calls)
 ##############################################################################
 
 
@@ -159,7 +159,7 @@ def analyze_ronchigram(image, pixel_size_um, binning, target_phase_a, target_pha
 
 
 ##############################################################################
-# Ronchigram — microscope aligner (Trial acquire, then return to Preview)
+# Ronchigram - microscope aligner (Trial acquire, then return to Preview)
 ##############################################################################
 
 
@@ -392,6 +392,7 @@ def drag():
             sem.Delay(0.1, "s")
     if userConfirm == 1:
         ronchiBeforePreview()
+        sem.GoToLowDoseArea("R")
         sem.L()
         userRefine = 1
         while userRefine == 1:
@@ -429,6 +430,7 @@ def loopAddTargets():
             if targetByShift or (pointRefine == 1 and userSkip == 1):
                 if targetByShift:
                     sem.GoToLowDoseArea("R")
+                    sem.SetImageShift(0, 0)
                     shiftx = sem.EnterDefaultedNumber(0, 1, "Enter X shift:")
                     shifty = sem.EnterDefaultedNumber(0, 1, "Enter Y shift:")
                 else:
@@ -438,7 +440,11 @@ def loopAddTargets():
             if useSearch: 
                 sem.Search()
             else:
+                sem.GoToLowDoseArea("V")
+                sem.SetImageShift(0, 0)
                 sem.V()
+            sem.GoToLowDoseArea("R")
+            sem.SetImageShift(0, 0)
             drag()
             if userInput == 0:
                 if pointRefine == 1:
@@ -832,6 +838,7 @@ def gui(targetFile):
         stageX, stageY, stageZ = sem.ReportStageXYZ()
         log(f"DEBUG: Stage: {stageX}, {stageY}")
         if "ISX0" in globals():
+            sem.SetImageShift(0, 0)
             sem.SetImageShift(ISX0, ISY0)
             stageX, stageY = np.array([stageX, stageY]) + ss2sMatrix @ np.array([SSX0, SSY0]) # consider IS in wiggle to avoid unnecessary realigns
         log(f"DEBUG: Stage + IS: {stageX}, {stageY}")
@@ -1144,6 +1151,7 @@ def gui(targetFile):
         userInput = 0
         pointRefine = 0
         loopAddTargets()
+        sem.SetImageShift(0, 0)
         sem.SetImageShift(ISX0, ISY0)
         reopen = True                                               # reopen GUI after finishing
         return
@@ -1189,6 +1197,7 @@ def gui(targetFile):
             sem.SnapshotToFile(0, 0, 0, "JPG", "JPG", viewName.rsplit(".mrc", 1)[0] + ".jpg")
             log("DEBUG: Resetting image shift...")
             sem.GoToLowDoseArea("R")
+            sem.SetImageShift(0, 0)
             sem.SetImageShift(ISX0, ISY0)
             progressBar["value"] = (i + 1) / len(targets)           # update progress bar
             top.update()
@@ -1822,9 +1831,13 @@ if editTgts == 0:
         if useSearch: 
             sem.Search()
         else:
+            sem.GoToLowDoseArea("V")
+            sem.SetImageShift(0, 0)
             sem.V()
             if guidance:
                 sem.OKBox("\n".join(["The first target you select will be the tracking target!","","NOTE: This target will have larger tracking errors than the other targets and should have enough contrast to be tracked confidently."]))
+        sem.GoToLowDoseArea("R")
+        sem.SetImageShift(0, 0)
         drag()
 
     targetNo += 1
@@ -1914,7 +1927,9 @@ if editTgts == 0:
 
         if alignToP:                                                # refine grid vectors by aligning to hole reference in P
             sizeStep = 1
-            for i in range(min(2, size)):                           # run refinement stepwise (1 hole than furthest hole) if size > 1 
+            for i in range(min(2, size)):                           # run refinement stepwise (1 hole than furthest hole) if size > 1
+                sem.GoToLowDoseArea("V")
+                sem.SetImageShift(0, 0)
                 sem.SetImageShift(ISX0, ISY0)                       # reset IS to central hole after dragging
                 log(f"Vector A: {vecA}")
 
@@ -1939,6 +1954,8 @@ if editTgts == 0:
 
                 log(f"Refined vector A: {vecA}")
 
+                sem.GoToLowDoseArea("V")
+                sem.SetImageShift(0, 0)
                 sem.SetImageShift(ISX0, ISY0)                       # reset IS to center position
 
                 log(f"Vector B: {vecB}")
@@ -2012,6 +2029,7 @@ if editTgts == 0:
 
     else:                                                           # loop over other targets
         loopAddTargets()
+        sem.SetImageShift(0, 0)
         sem.SetImageShift(ISX0, ISY0)
 
 if beamR == 0:                                                      # in case beamR was not defined during target selection
