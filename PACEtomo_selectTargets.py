@@ -19,7 +19,7 @@ targetPattern   = False     # regular pattern of targets (holey support film)
 alignToP        = False     # refine vectors by aligning to hole reference in buffer P
 size            = 1         # size of collection pattern (1: 3x3, 2: 5x5, 3: 7x7, ...)
 
-drawBeam        = True      # draws navigator item representing beam diameter
+drawBeam        = False      # draws navigator item representing beam diameter
 beamDiameter    = 0         # beam diameter [microns] (if 0, ReportIlluminatedArea will be used, which is only available on some Thermo Scientific microscopes)
 maxTilt         = 60        # tilt angle [degrees] to calculate stretching of beam perpendicular to tilt axis
 
@@ -57,7 +57,8 @@ ronchiCorrMatrix   = [[0.212, 1.28], [1.22, -0.243]]
 ########## END Ronchigram settings ##########
 
 ########## END SETTINGS ########## 
-
+import sys
+sys.path.insert(0, 'C:\Program Files\SerialEM\PythonModules')
 import serialem as sem
 import os
 import copy
@@ -738,6 +739,7 @@ def measure_defocus():
     speed_x = speed_y = 0.0
     for _ in range(measure_cycles):
         defocus, speed_x, speed_y = beam_tilt_measure_defocus()
+    sem.Echo(f"Defocus: {defocus:.4f} um, drift=({speed_x:.3f}, {speed_y:.3f}) nm/s")
     return float(defocus), np.array([speed_x, speed_y])
 
 def log(text, color=0, style=0):
@@ -1383,6 +1385,7 @@ def gui(targetFile):
             for i in range(len(geoPoints)):
                 sem.GoToLowDoseArea("R")
                 sem.SetImageShift(0, 0)
+                sem.Echo(f"Measuring geo point {i + 1} of {len(geoPoints)}...")
                 sem.ImageShiftByMicrons(geoPoints[i]["SSX"], geoPoints[i]["SSY"])
                 defocus, drift = measure_defocus()
                 log(f"DEBUG:\nAutofocus: {defocus}\nDrift:     {drift}")
