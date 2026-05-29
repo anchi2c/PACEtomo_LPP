@@ -1753,7 +1753,9 @@ if tf != []:
     if editTgts == 1:
         tgtsFilePath = tf[-1]
 
-sem.GoToLowDoseArea("R")                                            # need SS to stage matrix for conversion
+sem.GoToLowDoseArea("R")
+sem.SetImageShift(0, 0)
+# need SS to stage matrix for conversion
 checkRonchigramSetup()
 ss2sMatrix = np.array(sem.SpecimenToStageMatrix(0)).reshape((2, 2))
 s2ssMatrix = np.array(sem.StageToSpecimenMatrix(0)).reshape((2, 2))
@@ -1813,7 +1815,10 @@ if editTgts == 0:
     sem.ResetImageShift()
     if pointRefine == 1:
         sem.MoveStageTo(*groupStage[0], groupStageZ)
-    elif alignToP:                                                  # center hole for center of tgtPattern
+    elif alignToP:     
+        sem.GoToLowDoseArea("V")
+        sem.SetImageShift(0, 0)
+        # center hole for center of tgtPattern
         x, y, binning, exp, *_ = sem.ImageProperties("P")
         sem.SetExposure("V", exp)
         sem.SetBinning("V", int(binning))
@@ -1888,6 +1893,8 @@ if editTgts == 0:
 
     # make view map tor realign to item
     sem.SetCameraArea("V", "F")
+    sem.SetImageShift(0, 0)
+    sem.GoToLowDoseArea("V")
     sem.V()
     sem.OpenNewFile(userName + "_tgt_001_view.mrc")
     sem.S("A")
