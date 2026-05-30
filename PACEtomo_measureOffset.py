@@ -6,7 +6,7 @@
 # Author:       Fabian Eisenstein
 # Created:      2022/05/10
 # Revision:     v1.8
-# Last Change:  2026/05/27: beam-tilt autofocus defocus measurement (1.9)
+# Last Change:  2026/05/27: CTF or beam-tilt measure; beam-tilt autofocus always (1.9)
 # ===================================================================
 
 ############ SETTINGS ############ 
@@ -17,13 +17,22 @@ offset      = 5     # +/- offset for measured positions in microns from tilt axi
 
 plot        = True  # plot measurements
 
-# Beam-tilt autofocus (calibrated correction factor)
+# Defocus measurement in tilt loop (sem.G(-1) replacement)
+defocusMethod = "ctf"       # ctf | beam_tilt
+
+# CTF defocus (Trial shot with fixed X-tilt, then CtfFind)
+ctfXtiltX = 0.002836
+ctfXtiltY = 0.003867
+ctfDefocusLo = -10.0        # CtfFind search range low [microns]
+ctfDefocusHi = -0.2         # CtfFind search range high [microns]
+
+# Beam-tilt (always used for initial autofocus; also for tilt loop if defocusMethod == beam_tilt)
 tilt_angle_mrad = 5.0
 beam_tilt_correction = 3 / 6.7
 autofocus_cycles = 2              # initial autofocus: correct focus to target_defocus (sem.G)
-measure_cycles = 1                # tilt loop: measure only, no focus change (sem.G(-1))
+measure_cycles = 1                # cycles per tilt-loop measurement
 
-target_defocus = -3.0             # defocus target for sem.G equivalent [microns]
+target_defocus = -4.0             # defocus target for initial beam-tilt autofocus [microns]
 target_defocus_tolerance_um = 0.05
 
 ########## END SETTINGS ########## 
@@ -97,15 +106,41 @@ def beam_tilt_measure_defocus():
     return defocus_measured, speed_x, speed_y
 
 
+def ctf_measure_defocus():
+    """CTF defocus: set X-tilt, Record, CtfFind, restore X-tilt."""
+    xtX, xtY = sem.ReportXLensDeflector(2)
+    try:
+        sem.SetXLensDeflector(2, ctfXtiltX, ctfXtiltY)
+        sem.L()
+        sem.NoMessageBoxOnError(1)
+        try:
+            cfind = sem.CtfFind("A", ctfDefocusLo, ctfDefocusHi)
+        finally:
+            sem.NoMessageBoxOnError(0)
+        if len(cfind) == 0:
+            sem.Echo("ERROR: CtfFind failed.")
+            return np.nan
+        defocus = float(cfind[0])
+        sem.Echo(f"CtfFind: {defocus:.4f} microns ({cfind[-1]} A)")
+        return defocus
+    finally:
+        sem.SetXLensDeflector(2, xtX, xtY)
+
+
 def measure_defocus():
     """sem.G(-1): measure defocus only, no focus change."""
-    defocus = np.nan
-    for _ in range(measure_cycles):
-        defocus, speed_x, speed_y = beam_tilt_measure_defocus()
-    sem.Echo(
-        f"Defocus: {defocus:.4f} um, drift=({speed_x:.3f}, {speed_y:.3f}) nm/s"
-    )
-    return float(defocus)
+    if defocusMethod not in ("ctf", "beam_tilt"):
+        sem.OKBox(f"ERROR: Unknown defocusMethod '{defocusMethod}'. Use 'ctf' or 'beam_tilt'.")
+        sem.Exit()
+    if defocusMethod == "beam_tilt":
+        defocus = np.nan
+        for _ in range(measure_cycles):
+            defocus, speed_x, speed_y = beam_tilt_measure_defocus()
+        sem.Echo(
+            f"Defocus: {defocus:.4f} um, drift=({speed_x:.3f}, {speed_y:.3f}) nm/s"
+        )
+        return float(defocus)
+    return float(ctf_measure_defocus())
 
 
 def autofocus_apply():
@@ -149,10 +184,11 @@ oldOffset = sem.ReportTiltAxisOffset()[0]
 sem.Echo("Currently set tilt axis offset: " + str(oldOffset))
 
 sem.Echo("##### Starting tilt axis offset estimation #####")
+sem.Echo(f"Defocus measurement method (tilt loop): {defocusMethod}")
 sem.Echo("Rough eucentricity...")
 sem.Eucentricity(1)
 
-sem.Echo(f"Beam-tilt autofocus to {target_defocus:.3f} microns (sem.G)...")
+sem.Echo(f"Beam-tilt autofocus to {target_defocus:.3f} microns (sem.G, always beam-tilt)...")
 autofocus_apply()
 
 sem.Echo("Start tilt series...")

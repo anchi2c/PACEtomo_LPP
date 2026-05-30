@@ -37,7 +37,16 @@ tgtMntOverlap   = 0.05      # montage tile overlap as fraction of shorter camera
 
 debug           = False     # Enables additional output and plots for a few processes (e.g. measureGeo, vecByXCorr)
 
-# Beam-tilt defocus measurement (sem.G(-1) replacement)
+# Defocus measurement for measure geometry (sem.G(-1) replacement)
+defocusMethod = "ctf"       # ctf | beam_tilt
+
+# CTF defocus (Trial shot with fixed X-tilt, then CtfFind)
+ctfXtiltX = 0.002836
+ctfXtiltY = 0.003867
+ctfDefocusLo = -10.0        # CtfFind search range low [microns]
+ctfDefocusHi = -0.2         # CtfFind search range high [microns]
+
+# Beam-tilt defocus
 tilt_angle_mrad = 5.0
 beam_tilt_correction = 3 / 6.7
 measure_cycles = 1
@@ -733,14 +742,44 @@ def beam_tilt_measure_defocus():
     defocus_measured = -1.0 * sign * displacement / tilt_angle_mrad
     return defocus_measured, speed_x, speed_y
 
+def ctf_measure_defocus():
+    """CTF defocus: set X-tilt, Trial, CtfFind, restore X-tilt."""
+    xtX, xtY = sem.ReportXLensDeflector(2)
+    is_x, is_y = sem.ReportImageShift()
+    sem.GoToLowDoseArea("F")
+    sem.SetImageShift(0, 0)
+    sem.SetImageShift(is_x, is_y)
+    try:
+        sem.SetXLensDeflector(2, ctfXtiltX, ctfXtiltY)
+        sem.F()
+        sem.NoMessageBoxOnError(1)
+        try:
+            cfind = sem.CtfFind("A", ctfDefocusLo, ctfDefocusHi)
+        finally:
+            sem.NoMessageBoxOnError(0)
+        if len(cfind) == 0:
+            sem.Echo("ERROR: CtfFind failed.")
+            return np.nan, np.array([0.0, 0.0])
+        defocus = float(cfind[0])
+        sem.Echo(f"CtfFind: {defocus:.4f} microns ({cfind[-1]} A)")
+        return defocus, np.array([0.0, 0.0])
+    finally:
+        sem.SetXLensDeflector(2, xtX, xtY)
+
+
 def measure_defocus():
     """Measure defocus only (sem.G(-1) equivalent). No focus change."""
-    defocus = np.nan
-    speed_x = speed_y = 0.0
-    for _ in range(measure_cycles):
-        defocus, speed_x, speed_y = beam_tilt_measure_defocus()
-    sem.Echo(f"Defocus: {defocus:.4f} um, drift=({speed_x:.3f}, {speed_y:.3f}) nm/s")
-    return float(defocus), np.array([speed_x, speed_y])
+    if defocusMethod not in ("ctf", "beam_tilt"):
+        sem.OKBox(f"ERROR: Unknown defocusMethod '{defocusMethod}'. Use 'ctf' or 'beam_tilt'.")
+        sem.Exit()
+    if defocusMethod == "beam_tilt":
+        defocus = np.nan
+        speed_x = speed_y = 0.0
+        for _ in range(measure_cycles):
+            defocus, speed_x, speed_y = beam_tilt_measure_defocus()
+        sem.Echo(f"Defocus: {defocus:.4f} um, drift=({speed_x:.3f}, {speed_y:.3f}) nm/s")
+        return float(defocus), np.array([speed_x, speed_y])
+    return ctf_measure_defocus()
 
 def log(text, color=0, style=0):
     if text.startswith("DEBUG:") and not debug:
@@ -1391,7 +1430,8 @@ def gui(targetFile):
                 sem.ImageShiftByMicrons(geoPoints[i]["SSX"], geoPoints[i]["SSY"])
                 defocus, drift = measure_defocus()
                 log(f"DEBUG:\nAutofocus: {defocus}\nDrift:     {drift}")
-                if abs(defocus) >= 0.01 and np.linalg.norm(drift) >= 0.01:
+                drift_ok = defocusMethod == "ctf" or np.linalg.norm(drift) >= 0.01
+                if abs(defocus) >= 0.01 and drift_ok:
                     geoXYZ[0].append(geoPoints[i]["SSX"])
                     geoXYZ[1].append(geoPoints[i]["SSY"])
                     geoXYZ[2].append(defocus)
