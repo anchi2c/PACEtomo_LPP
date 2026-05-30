@@ -45,6 +45,9 @@ ctfXtiltX = 0.002836
 ctfXtiltY = 0.003867
 ctfDefocusLo = -10.0        # CtfFind search range low [microns]
 ctfDefocusHi = -0.2         # CtfFind search range high [microns]
+ctf_resolution_max_A = 10.0 # retry CtfFind if resolution [A] is above this
+ctf_max_attempts = 3        # max CtfFind attempts per measurement
+ctf_retry_delay_s = 5       # delay before refocus shot on retry [s]
 
 # Beam-tilt defocus
 tilt_angle_mrad = 5.0
@@ -754,7 +757,7 @@ def beam_tilt_measure_defocus():
 
 
 def ctf_measure_defocus():
-    """CTF defocus: set X-tilt, Trial, CtfFind, restore X-tilt."""
+    """CTF defocus: set X-tilt, Focus, CtfFind (with retries), restore X-tilt."""
     xtX, xtY = sem.ReportXLensDeflector(2)
     is_x, is_y = sem.ReportImageShift()
     sem.GoToLowDoseArea("F")
@@ -762,15 +765,33 @@ def ctf_measure_defocus():
     sem.SetImageShift(is_x, is_y)
     try:
         sem.SetXLensDeflector(2, ctfXtiltX, ctfXtiltY)
-        sem.F()
+        cfind = []
         sem.NoMessageBoxOnError(1)
         try:
-            cfind = sem.CtfFind("A", ctfDefocusLo, ctfDefocusHi)
+            for attempt in range(1, ctf_max_attempts + 1):
+                if attempt > 1:
+                    sem.Delay(ctf_retry_delay_s, "s")
+                sem.F()
+                cfind = sem.CtfFind("A", ctfDefocusLo, ctfDefocusHi)
+                if len(cfind) == 0:
+                    sem.Echo(f"ERROR: CtfFind failed on attempt {attempt}/{ctf_max_attempts}.")
+                    if attempt < ctf_max_attempts:
+                        continue
+                    return np.nan, np.array([0.0, 0.0])
+                resolution = float(cfind[-1])
+                if resolution <= ctf_resolution_max_A:
+                    break
+                sem.Echo(
+                    f"WARNING: CtfFind resolution {resolution:.2f} A > {ctf_resolution_max_A} A "
+                    f"(attempt {attempt}/{ctf_max_attempts})"
+                )
+            else:
+                sem.Echo(
+                    f"WARNING: CtfFind resolution still > {ctf_resolution_max_A} A after "
+                    f"{ctf_max_attempts} attempts; using last result."
+                )
         finally:
             sem.NoMessageBoxOnError(0)
-        if len(cfind) == 0:
-            sem.Echo("ERROR: CtfFind failed.")
-            return np.nan, np.array([0.0, 0.0])
         defocus = float(cfind[0])
         sem.Echo(f"CtfFind: {defocus:.4f} microns ({cfind[-1]} A)")
         return defocus, np.array([0.0, 0.0])
