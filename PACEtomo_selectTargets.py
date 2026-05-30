@@ -40,7 +40,7 @@ debug           = False     # Enables additional output and plots for a few proc
 # Defocus measurement for measure geometry (sem.G(-1) replacement)
 defocusMethod = "ctf"       # ctf | beam_tilt
 
-# CTF defocus (Trial shot with fixed X-tilt, then CtfFind)
+# X-tilt for defocus measurement (CTF and beam-tilt)
 ctfXtiltX = 0.002836
 ctfXtiltY = 0.003867
 ctfDefocusLo = -10.0        # CtfFind search range low [microns]
@@ -698,7 +698,7 @@ def vecByXcorr(diameter):
     else:
         return success, vecA, vecB
 
-def beam_tilt_measure_defocus():
+def _beam_tilt_measure_defocus_core():
     beam_tilt = sem.ReportBeamTilt()
     tilt_x_orig = float(beam_tilt[0])
     tilt_y_orig = float(beam_tilt[1])
@@ -741,6 +741,17 @@ def beam_tilt_measure_defocus():
         sign = displacement_from_tilt_x / abs(displacement_from_tilt_x)
     defocus_measured = -1.0 * sign * displacement / tilt_angle_mrad
     return defocus_measured, speed_x, speed_y
+
+
+def beam_tilt_measure_defocus():
+    """Beam-tilt defocus: set X-tilt, measure, restore X-tilt."""
+    xtX, xtY = sem.ReportXLensDeflector(2)
+    try:
+        sem.SetXLensDeflector(2, ctfXtiltX, ctfXtiltY)
+        return _beam_tilt_measure_defocus_core()
+    finally:
+        sem.SetXLensDeflector(2, xtX, xtY)
+
 
 def ctf_measure_defocus():
     """CTF defocus: set X-tilt, Trial, CtfFind, restore X-tilt."""
