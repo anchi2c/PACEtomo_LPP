@@ -759,7 +759,7 @@ def beam_tilt_measure_defocus():
 def ctf_measure_defocus():
     """CTF defocus: set X-tilt, Focus, CtfFind (with retries), restore X-tilt."""
     xtX, xtY = sem.ReportXLensDeflector(2)
-    is_x, is_y = sem.ReportImageShift()
+    is_x, is_y, *_ = sem.ReportImageShift()
     sem.GoToLowDoseArea("F")
     sem.SetImageShift(0, 0)
     sem.SetImageShift(is_x, is_y)
