@@ -110,15 +110,15 @@ autofocus_tolerance_um = 0.05
 ########## Ronchigram / laser alignment ##########
 # Trial LD area must match Record position; only exposure should differ.
 # Overridable from target file via _bset (e.g. _bset doRonchigram true).
-doRonchigram       = False
+doRonchigram       = True
 fileBaseName       = "PACEtomo_setup"  # SetFrameBaseName root at script start; Trial ronchi uses root + ronchiBaseSuffix
 ronchiBaseSuffix   = "_ronchi"         # appended to frame base name only for Trial saves
 ronchiC3Offset     = -20          # added to ReportImageDistanceOffset before Trial shot
 ronchiDelay        = 2.0          # seconds after C3 offset change
 ronchiBinning      = 32
 ronchiPixelSize    = 0.973e-4 * 2 # um (unbinned; multiplied by binning in analysis)
-ronchiTargetPhaseA = 2.7          # vertical laser (rad)
-ronchiTargetPhaseB = 1.7          # horizontal laser (rad)
+ronchiTargetPhaseA = 2.40223          # vertical laser (rad)
+ronchiTargetPhaseB = 0.31999          # horizontal laser (rad)
 ronchiCorrectKs    = [[6.74334974, -0.50967178], [0.62728835, 6.78255526]]
 ronchiPeakRadius   = 100
 ronchiMontage      = True         # also run before montage tile Record shots
@@ -488,6 +488,7 @@ def checkRonchigramSetup():
         pass
     log("NOTE: Ronchigram uses Trial at Record beam position. Set Trial LD offsets identical to Record; only exposure should differ.")
     log(f"NOTE: Ronchigram Trial frames save as <active base name>{ronchiBaseSuffix} (fallback fileBaseName={fileBaseName!r}).")
+    log("NOTE: Ronchigram runs before startup preview alignment images when previewAli or viewAli is enabled.")
 
 
 def doRonchigramCorrection(set_track_fn=None):
@@ -546,6 +547,18 @@ def doRonchigramCorrection(set_track_fn=None):
         set_track_fn()
     if beamTiltComp: # This is unreachable for now as beamTiltComp is not implemented with ronchi
         sem.RestoreBeamTilt()
+
+
+def ronchi_before_preview_align(acquire_label="preview alignment"):
+    """Ronchigram laser correction at Record before Preview (L) alignment images."""
+    if not doRonchigram:
+        return
+    log(f"NOTE: {acquire_label} - ronchigram before preview alignment image.")
+    is_x, is_y, *_ = sem.ReportImageShift()
+    sem.GoToLowDoseArea("R")
+    sem.SetImageShift(0, 0)
+    sem.SetImageShift(is_x, is_y)
+    doRonchigramCorrection(set_track_fn=None)
 
 
 def recordWithRonchi(set_track_fn=None, run_ronchi=True, acquire_label="Record"):
@@ -925,6 +938,7 @@ def realignTo(nav_id=None, target=None):
             sem.GoToLowDoseArea("R")
             sem.SetImageShift(0, 0)
             sem.SetImageShift(is_x, is_y)
+            ronchi_before_preview_align("initial realign preview (tgtfile)")
             sem.L()
             alignTo("O", debug)
             AISX, AISY, ASX, ASY = sem.ReportAlignShift()[2:6]
@@ -946,6 +960,7 @@ def realignTo(nav_id=None, target=None):
             defocus_offset = max(-10, sem.ReportLDDefocusOffset("V"))
             if defocus_offset != 0:
                 sem.ChangeFocus(defocus_offset) # Higher defocus for better correlation, but max at 10 to avoid major distortions
+            ronchi_before_preview_align("initial realign preview (view to Record)")
             sem.L()
             sem.AlignBetweenMags("O", -1, -1, -1)
             AISX, AISY, ASX, ASY = sem.ReportAlignShift()[2:6]
@@ -1154,6 +1169,7 @@ def Tilt(tilt):
         sem.GoToLowDoseArea("R")
         sem.SetImageShift(0, 0)
         sem.SetImageShift(is_x, is_y)
+        ronchi_before_preview_align("recovery preview alignment to tracking TS")
         sem.L()
         alignTo("O", debug)
         bufISX, bufISY = sem.ReportISforBufferShift()
@@ -1857,6 +1873,7 @@ if not recover:
     sem.SetImageShift(is_x, is_y)
 
     if not tgtPattern and previewAli:
+        ronchi_before_preview_align("tracking target map preview alignment")
         sem.LoadOtherMap(navID, "O")                                                            # preview ali before first tilt image is taken
         sem.AcquireToMatchBuffer("O")                                                           # in case view image was saved for tracking target
         alignTo("O", debug)
@@ -1925,6 +1942,7 @@ if not recover:
         sem.ImageShiftByMicrons(float(tgt["SSX"]), float(tgt["SSY"]) * tiltScaling)             # apply relative shifts to find out absolute IS after realign to item
         if (previewAli or viewAli):                                                             # adds initial dose, but makes sure start tilt image is on target
             if alignToP:
+                ronchi_before_preview_align(f"target {i + 1} preview alignment (alignToP)")
                 x, y, binning, exp, *_ = sem.ImageProperties("P")
                 sem.SetExposure("V", exp)
                 sem.SetBinning("V", int(binning))
@@ -1953,6 +1971,7 @@ if not recover:
                     sem.GoToLowDoseArea("R")
                     sem.SetImageShift(0, 0)
                     sem.SetImageShift(is_x, is_y)
+                    ronchi_before_preview_align(f"target {i + 1} preview alignment (tgtfile)")
                     sem.L()
                     alignTo("O", debug)
                     AISX, AISY, ASX, ASY = sem.ReportAlignShift()[2:6]
@@ -1978,6 +1997,7 @@ if not recover:
                     defocus_offset = max(-10, sem.ReportLDDefocusOffset("V"))
                     if defocus_offset != 0:
                         sem.ChangeFocus(defocus_offset)                                             # Higher defocus for better correlation, but max at 10 to avoid major distortions
+                    ronchi_before_preview_align(f"target {i + 1} preview alignment (view to Record)")
                     sem.L()
                     sem.AlignBetweenMags("O", -1, -1, -1)
                     AISX, AISY, ASX, ASY = sem.ReportAlignShift()[2:6]
