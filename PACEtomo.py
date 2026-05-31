@@ -13,8 +13,8 @@
 ############ SETTINGS ############ 
 
 startTilt       = 0         # starting tilt angle [degrees] (should be divisible by step)
-minTilt         = -60       # minimum absolute tilt angle [degrees]
-maxTilt         = 60        # maximum absolute tilt angle [degrees]
+minTilt         = -15       # minimum absolute tilt angle [degrees]
+maxTilt         = 15        # maximum absolute tilt angle [degrees]
 step            = 3         # tilt step [degrees]
 groupSize       = 2         # group size for dose_symmetric scheme (contiguous images per side before switching)
 tiltScheme      = "dose_symmetric"  # dose_symmetric | bidirectional | continuous
@@ -46,7 +46,7 @@ refineVec       = False     # refine tgt pattern for local stage position by ali
 refineGeo       = False     # uses on-the-fly CtfFind results of first image to refine geometry before tilting (only use when CTF fits on your sample seem reliable)
 
 # Session settings
-beamTiltComp    = True      # use beam tilt compensation (uses coma vs image shift calibrations)
+beamTiltComp    = False      # use beam tilt compensation (uses coma vs image shift calibrations)
 addAF           = False     # does autofocus at the start of every tilt group, increases exposure on tracking TS drastically
 previewAli      = True      # adds initial dose, but makes sure start tilt image is on target (uses view image and aligns to buffer P if alignToP == True)
 viewAli         = False     # adds an alignment step with a View image if it was saved during the target selection (only if previewAli is activated)
@@ -111,6 +111,8 @@ autofocus_tolerance_um = 0.05
 # Trial LD area must match Record position; only exposure should differ.
 # Overridable from target file via _bset (e.g. _bset doRonchigram true).
 doRonchigram       = False
+fileBaseName       = "PACEtomo_setup"  # SetFrameBaseName root at script start; Trial ronchi uses root + ronchiBaseSuffix
+ronchiBaseSuffix   = "_ronchi"         # appended to frame base name only for Trial saves
 ronchiC3Offset     = -20          # added to ReportImageDistanceOffset before Trial shot
 ronchiDelay        = 2.0          # seconds after C3 offset change
 ronchiBinning      = 32
@@ -429,6 +431,41 @@ def applyRonchigramXtiltCorrection(correction_x, correction_y, lens_index=2):
     sem.SetXLensDeflector(lens_index, xtX + correction_x, xtY + correction_y)
 
 
+def _report_frame_basename():
+    """ReportFrameBaseName -> (use_in_frame, name, use_in_folder)."""
+    r = sem.ReportFrameBaseName()
+    use_in_frame = int(r[0])
+    name = r[1] if len(r) > 1 else ""
+    use_in_folder = int(r[2]) if len(r) > 2 else 0
+    if isinstance(name, str) and name.lower() == "none":
+        name = ""
+    return use_in_frame, name, use_in_folder
+
+
+def _ronchi_trial_basename(use_in_frame, current_name, use_in_folder):
+    """Frame base name for Trial ronchigram image (current SetFrameBaseName + suffix, else fileBaseName)."""
+    root = (current_name or "").strip() or (fileBaseName or "").strip()
+    return root + ronchiBaseSuffix, root
+
+
+def _set_ronchi_trial_frame_basename():
+    """SetFrameBaseName with _ronchi suffix for Trial; return saved state for restore."""
+    use_in_frame, name, use_in_folder = _report_frame_basename()
+    ronchi_name, root = _ronchi_trial_basename(use_in_frame, name, use_in_folder)
+    if not root:
+        log("WARNING: Ronchigram Trial: no frame base name; set fileBaseName or SetFrameBaseName before acquire.")
+    else:
+        sem.SetFrameBaseName(0, use_in_frame, use_in_folder, ronchi_name)
+        log(f"Ronchigram Trial: SetFrameBaseName -> {ronchi_name}")
+    return use_in_frame, name, use_in_folder
+
+
+def _restore_frame_basename(saved):
+    use_in_frame, name, use_in_folder = saved
+    sem.SetFrameBaseName(0, use_in_frame, use_in_folder, name)
+    log(f"Ronchigram Trial: restored frame base name -> {name or '(none)'}")
+
+
 def checkRonchigramSetup():
     """Startup checks when doRonchigram is enabled (called after parseTargets)."""
     if doRonchigram and beamTiltComp:
@@ -450,6 +487,7 @@ def checkRonchigramSetup():
     except (AttributeError, TypeError, ValueError):
         pass
     log("NOTE: Ronchigram uses Trial at Record beam position. Set Trial LD offsets identical to Record; only exposure should differ.")
+    log(f"NOTE: Ronchigram Trial frames save as <active base name>{ronchiBaseSuffix} (fallback fileBaseName={fileBaseName!r}).")
 
 
 def doRonchigramCorrection(set_track_fn=None):
@@ -460,27 +498,47 @@ def doRonchigramCorrection(set_track_fn=None):
         sem.UpdateLowDoseParams("T")
     except AttributeError:
         pass
+    tilt = float(sem.ReportTiltAngle())
+    trial_exp, *_ = sem.ReportExposure("T")
+    log(
+        f"Ronchigram: Trial acquire at tilt {tilt:.1f} deg | "
+        f"C3 offset {ronchiC3Offset} um | binning {ronchiBinning} | Trial exposure {trial_exp:.4g} s"
+    )
     start_offset = sem.ReportImageDistanceOffset()
     is_x, is_y, *_ = sem.ReportImageShift()
     sem.GoToLowDoseArea("T")
     sem.SetImageShift(0, 0)
     sem.SetImageShift(is_x, is_y)
     sem.SetImageDistanceOffset(start_offset + ronchiC3Offset)
+    saved_basename = _set_ronchi_trial_frame_basename()
     try:
         sem.Delay(ronchiDelay, "s")
         sem.T()
     finally:
         sem.SetImageDistanceOffset(start_offset)
+        _restore_frame_basename(saved_basename)
     try:
         image = np.asarray(sem.bufferImage("A"))
         result = analyze_ronchigram(
             image, ronchiPixelSize, ronchiBinning, ronchiTargetPhaseA, ronchiTargetPhaseB,
             ronchiCorrectKs, peak_radius=ronchiPeakRadius, corr_matrix=ronchiCorrMatrix)
         applyRonchigramXtiltCorrection(result["correction_x"], result["correction_y"])
-        log(f"Ronchigram: phase err V={round(result['phase_err_a'], 3)} rad | H={round(result['phase_err_b'], 3)} rad | "
-            f"dX={result['correction_x']:.3e} dY={result['correction_y']:.3e}")
+        phases = result["phases"]
+        log(
+            f"Ronchigram phases (rad): measured vertical={phases[0]:.3f} horizontal={phases[1]:.3f} | "
+            f"targets vertical={ronchiTargetPhaseA:.3f} horizontal={ronchiTargetPhaseB:.3f}"
+        )
+        log(
+            f"Ronchigram phase error (rad): vertical={result['phase_err_a']:.3f} "
+            f"horizontal={result['phase_err_b']:.3f} | "
+            f"deflector dX={result['correction_x']:.3e} dY={result['correction_y']:.3e}"
+        )
+        log(
+            f"Ronchigram ks (1/um): {np.array2string(result['ks'], precision=4)} | "
+            f"ks error: {np.array2string(result['ks_error'], precision=4)}"
+        )
         if debug:
-            log(f"DEBUG: Ronchigram ks={np.array2string(result['ks'])} ks err={np.array2string(result['ks_error'])}")
+            log(f"DEBUG: Ronchigram pixel size {ronchiPixelSize} um, peak radius {ronchiPeakRadius} px")
     except Exception as e:
         log(f"WARNING: Ronchigram analysis failed: {e}. Continuing without laser correction.")
     sem.GoToLowDoseArea("R")
@@ -490,10 +548,15 @@ def doRonchigramCorrection(set_track_fn=None):
         sem.RestoreBeamTilt()
 
 
-def recordWithRonchi(set_track_fn=None, run_ronchi=True):
+def recordWithRonchi(set_track_fn=None, run_ronchi=True, acquire_label="Record"):
     """Optional ronchigram correction, then standard Record acquire (sem.R / sem.S)."""
     if run_ronchi and doRonchigram:
+        log(f"NOTE: {acquire_label} — ronchigram Trial then Record stack frame.")
         doRonchigramCorrection(set_track_fn=set_track_fn)
+    elif doRonchigram and not run_ronchi:
+        log(f"NOTE: {acquire_label} — Record only (ronchigram skipped for this shot).")
+    else:
+        log(f"NOTE: {acquire_label} — Record acquire.")
     if beamTiltComp:
         sem.AdjustBeamTiltforIS()
     sem.Delay(delayIS, "s")
@@ -1178,7 +1241,10 @@ def Tilt(tilt):
         sem.SetFrameNameFormat(0, 0, 0x40)                                                      # turn off Sequential number
         sem.SetFrameNameFormat(0, 1, 0x400)                                                     # turn on tilt angle
         sem.SetFrameBaseName(0, 1, 0, os.path.splitext(targets[pos]["tsfile"])[0] + f"_tilt_{str(tiltStepCounter).zfill(3)}_angle")  # include collection order and tilt angle in frame name
-        recordWithRonchi(set_track_fn=setTrack if pos == 0 else None)
+        recordWithRonchi(
+            set_track_fn=setTrack if pos == 0 else None,
+            acquire_label=f"Tilt {tilt:.1f} deg step {tiltStepCounter} target {pos + 1}/{len(targets)}",
+        )
 
         bufISXpre = 0                                                                           # only non 0 if two tracking images are taken
         bufISYpre = 0
@@ -1190,7 +1256,10 @@ def Tilt(tilt):
                 ASX, ASY = sem.ReportAlignShift()[4:6]
                 if abs(ASX) > alignLimit * 1000 or abs(ASY) > alignLimit * 1000:
                     bufISXpre, bufISYpre = sem.ReportISforBufferShift()                         # have to be added only to ISset but not ISali (since ali only considers the IS chain of ali images)
-                    recordWithRonchi(set_track_fn=setTrack if pos == 0 else None)
+                    recordWithRonchi(
+                        set_track_fn=setTrack if pos == 0 else None,
+                        acquire_label=f"Tilt {tilt:.1f} deg step {tiltStepCounter} target 0 (re-track)",
+                    )
                     alignTo("O", debug)
 
         bufISX, bufISY = sem.ReportISforBufferShift()
@@ -1236,7 +1305,11 @@ def Tilt(tilt):
                         #correctedFocus = position[pos][pn]["focus"] - np.tan(np.radians(realTilt)) * montSSY
 
                         sem.SetDefocus(correctedFocus)
-                    recordWithRonchi(set_track_fn=setTrack if pos == 0 else None, run_ronchi=ronchiMontage)
+                    recordWithRonchi(
+                        set_track_fn=setTrack if pos == 0 else None,
+                        run_ronchi=ronchiMontage,
+                        acquire_label=f"Montage tile ({i},{j}) tilt {tilt:.1f} deg target {pos + 1}/{len(targets)}",
+                    )
 
                     mont_SSX, mont_SSY = sem.ReportSpecimenShift()
 
@@ -1415,7 +1488,7 @@ tiltLimit = sem.ReportProperty("MaximumTiltAngle")
 sem.SetUserSetting("DriftProtection", 1)
 sem.SetUserSetting("ShiftToTiltAxis", 1)
 sem.SetNewFileType(0)                                                                           # set file type to mrc in case user changed default file type
-sem.SetFrameBaseName(0, 1, 0, "PACEtomo_setup")                                                 # change frame name at start to avoid overwriting in case sets other than Record save frames
+sem.SetFrameBaseName(0, 1, 0, fileBaseName)                                                      # change frame name at start to avoid overwriting in case sets other than Record save frames
 
 # Warnings
 log(f"DEBUG: Tilt limit is: {tiltLimit}")
