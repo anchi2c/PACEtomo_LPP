@@ -95,7 +95,7 @@ debug           = False     # Enables additional output for a few processes (e.g
 breakpoints     = False     # Waits at every debug output for user to press B key.
 
 # Defocus measure / autofocus (replaces sem.G / sem.G(-1))
-defocusMethod = "beam_tilt"     # ctf | beam_tilt — measure_defocus and autofocus_apply
+defocusMethod = "beam_tilt"     # ctf | beam_tilt - measure_defocus and autofocus_apply
 ctfXtiltX = 0.002836
 ctfXtiltY = 0.003867
 ctf_resolution_max_A = 10.0     # retry CtfFind if resolution [A] is above this
@@ -126,10 +126,10 @@ ronchiCorrMatrix   = [[0.212, 1.28], [1.22, -0.243]]  # phase-to-deflector coupl
 ########## END SETTINGS ########## 
 
 versionPACE = "1.9.2c"
-
+import sys
+sys.path.insert(0, 'C:\Program Files\SerialEM\PythonModules')
 import serialem as sem
 import os
-import sys
 import copy
 import time
 import struct
@@ -461,7 +461,7 @@ def doRonchigramCorrection(set_track_fn=None):
     except AttributeError:
         pass
     start_offset = sem.ReportImageDistanceOffset()
-    is_x, is_y = sem.ReportImageShift()
+    is_x, is_y, *_ = sem.ReportImageShift()
     sem.GoToLowDoseArea("T")
     sem.SetImageShift(0, 0)
     sem.SetImageShift(is_x, is_y)
@@ -848,7 +848,7 @@ def realignTo(nav_id=None, target=None):
         sem.MoveStageTo(float(target["stageX"]), float(target["stageY"]))
         if "viewfile" in target.keys():
             sem.ReadOtherFile(0, "O", target["viewfile"]) # reads view file for first AlignTo instead
-            is_x, is_y = sem.ReportImageShift()
+            is_x, is_y, *_ = sem.ReportImageShift()
             sem.GoToLowDoseArea("V")
             sem.SetImageShift(0, 0)
             sem.SetImageShift(is_x, is_y)
@@ -858,7 +858,7 @@ def realignTo(nav_id=None, target=None):
             log(f"Alignment (View) error in X | Y: {round(ASX, 0)} nm | {round(ASY, 0)} nm")    
         if "tgtfile" in target.keys():                
             sem.ReadOtherFile(0, "O", target["tgtfile"]) # reads tgt file for first AlignTo instead
-            is_x, is_y = sem.ReportImageShift()
+            is_x, is_y, *_ = sem.ReportImageShift()
             sem.GoToLowDoseArea("R")
             sem.SetImageShift(0, 0)
             sem.SetImageShift(is_x, is_y)
@@ -869,14 +869,14 @@ def realignTo(nav_id=None, target=None):
         elif "viewfile" in target.keys():
             # Use align between mags to align preview image to view image
             # If View image was already aligned, take new centered View image at startTilt and use as reference instead
-            is_x, is_y = sem.ReportImageShift()
+            is_x, is_y, *_ = sem.ReportImageShift()
             sem.GoToLowDoseArea("V")
             sem.SetImageShift(0, 0)
             sem.SetImageShift(is_x, is_y)
             sem.V()
             sem.Copy("A", "O")
             # Check defocus offset
-            is_x, is_y = sem.ReportImageShift()
+            is_x, is_y, *_ = sem.ReportImageShift()
             sem.GoToLowDoseArea("R") # Switch to R before applying defocus offset to not mess with potential mP/nP offsets between View and Rec
             sem.SetImageShift(0, 0)
             sem.SetImageShift(is_x, is_y)
@@ -1087,7 +1087,7 @@ def Tilt(tilt):
         SSchange = 0                                                                            # needs to be defined for setTrack
         setTrack()
         if checkDewar: checkFilling()
-        is_x, is_y = sem.ReportImageShift()
+        is_x, is_y, *_ = sem.ReportImageShift()
         sem.GoToLowDoseArea("R")
         sem.SetImageShift(0, 0)
         sem.SetImageShift(is_x, is_y)
@@ -1559,7 +1559,11 @@ if not recover:
     sem.SetCameraArea("V", "F")                                                                 # set View to Full for Eucentricity
     sem.MoveToNavItem(navID)
     log("Refining eucentricity...")
+    sem.GoToLowDoseArea("V")
+    is_x, is_y, *_ = sem.ReportImageShift()
+    sem.SetImageShift(0, 0)
     sem.Eucentricity(1)
+    sem.SetImageShift(is_x, is_y)
     sem.UpdateItemZ()
     sem.RestoreCameraSet("V")
 
@@ -1568,7 +1572,7 @@ if not recover:
         x, y, binning, exp, *_ = sem.ImageProperties("P")
         sem.SetExposure("V", exp)
         sem.SetBinning("V", int(binning))
-        is_x, is_y = sem.ReportImageShift()
+        is_x, is_y, *_ = sem.ReportImageShift()
         sem.GoToLowDoseArea("V")
         sem.SetImageShift(0, 0)
         sem.SetImageShift(is_x, is_y)
@@ -1581,7 +1585,7 @@ if not recover:
                 log("WARNING: Large defocus offsets for View can cause additional offsets in image shift upon mag change.")
             size = int(size)
             log("Refining target pattern...")
-            is_x, is_y = sem.ReportImageShift()
+            is_x, is_y, *_ = sem.ReportImageShift()
             sem.GoToLowDoseArea("R")
             sem.SetImageShift(0, 0)
             sem.SetImageShift(is_x, is_y)
@@ -1590,14 +1594,14 @@ if not recover:
             log(f"Vector A: ({vecA0}, {vecA1})")
             shiftx = size * vecA0
             shifty = size * vecA1
-            is_x, is_y = sem.ReportImageShift()
+            is_x, is_y, *_ = sem.ReportImageShift()
             sem.GoToLowDoseArea("V")
             sem.SetImageShift(0, 0)
             sem.SetImageShift(is_x, is_y)
             sem.ImageShiftByMicrons(shiftx, shifty)
             sem.V()
             alignTo("P", debug)
-            is_x, is_y = sem.ReportImageShift()
+            is_x, is_y, *_ = sem.ReportImageShift()
             sem.GoToLowDoseArea("R")
             sem.SetImageShift(0, 0)
             sem.SetImageShift(is_x, is_y)
@@ -1617,13 +1621,13 @@ if not recover:
                 shifty = size * vecB1
                 sem.ImageShiftByMicrons(shiftx, shifty)
 
-                is_x, is_y = sem.ReportImageShift()
+                is_x, is_y, *_ = sem.ReportImageShift()
                 sem.GoToLowDoseArea("V")
                 sem.SetImageShift(0, 0)
                 sem.SetImageShift(is_x, is_y)
                 sem.V()
                 alignTo("P", debug)
-                is_x, is_y = sem.ReportImageShift()
+                is_x, is_y, *_ = sem.ReportImageShift()
                 sem.GoToLowDoseArea("R")
                 sem.SetImageShift(0, 0)
                 sem.SetImageShift(is_x, is_y)
@@ -1745,7 +1749,7 @@ if not recover:
     first_tilt = tilt_schedule[0]
     log("Tilting to start tilt angle...")
     # backlash correction
-    is_x, is_y = sem.ReportImageShift()
+    is_x, is_y, *_ = sem.ReportImageShift()
     sem.GoToLowDoseArea("V")
     sem.SetImageShift(0, 0)
     sem.SetImageShift(is_x, is_y)
@@ -1758,7 +1762,7 @@ if not recover:
     while abs(first_tilt - curTilt) > 10:
         log(f"DEBUG: Doing walkup to {curTilt + (10 if first_tilt > curTilt else -10)}...")
         sem.TiltTo(curTilt + (10 if first_tilt > curTilt else -10))
-        is_x, is_y = sem.ReportImageShift()
+        is_x, is_y, *_ = sem.ReportImageShift()
         sem.GoToLowDoseArea("V")
         sem.SetImageShift(0, 0)
         sem.SetImageShift(is_x, is_y)
@@ -1774,7 +1778,7 @@ if not recover:
 
     sem.V()
     alignTo("O", debug)
-    is_x, is_y = sem.ReportImageShift()
+    is_x, is_y, *_ = sem.ReportImageShift()
     sem.GoToLowDoseArea("R")
     sem.SetImageShift(0, 0)
     sem.SetImageShift(is_x, is_y)
@@ -1792,7 +1796,7 @@ if not recover:
     positionFocus = focus0                                                                      # set maxDefocus as focus0 and add focus steps in loop
     minFocus0 = focus0 - maxDefocus + minDefocus
 
-    is_x, is_y = sem.ReportImageShift()
+    is_x, is_y, *_ = sem.ReportImageShift()
     sem.GoToLowDoseArea("R")
     sem.SetImageShift(0, 0)
     sem.SetImageShift(is_x, is_y)
@@ -1851,7 +1855,7 @@ if not recover:
                 x, y, binning, exp, *_ = sem.ImageProperties("P")
                 sem.SetExposure("V", exp)
                 sem.SetBinning("V", int(binning))
-                is_x, is_y = sem.ReportImageShift()
+                is_x, is_y, *_ = sem.ReportImageShift()
                 sem.GoToLowDoseArea("V")
                 sem.SetImageShift(0, 0)
                 sem.SetImageShift(is_x, is_y)
@@ -1862,7 +1866,7 @@ if not recover:
             else:
                 if "viewfile" in tgt.keys() and viewAli and i != 0:                             # skip for tracking target since it was already aligned after tilt to startTilt   
                     sem.ReadOtherFile(0, "O", tgt["viewfile"])                                  # reads view file for first AlignTo instead
-                    is_x, is_y = sem.ReportImageShift()
+                    is_x, is_y, *_ = sem.ReportImageShift()
                     sem.GoToLowDoseArea("V")
                     sem.SetImageShift(0, 0)
                     sem.SetImageShift(is_x, is_y)
@@ -1872,7 +1876,7 @@ if not recover:
                     log(f"Target alignment (View) error in X | Y: {round(ASX, 0)} nm | {round(ASY, 0)} nm")    
                 if "tgtfile" in tgt.keys() and previewAli:                
                     sem.ReadOtherFile(0, "O", tgt["tgtfile"])                                   # reads tgt file for first AlignTo instead
-                    is_x, is_y = sem.ReportImageShift()
+                    is_x, is_y, *_ = sem.ReportImageShift()
                     sem.GoToLowDoseArea("R")
                     sem.SetImageShift(0, 0)
                     sem.SetImageShift(is_x, is_y)
@@ -1887,14 +1891,14 @@ if not recover:
                         sem.ReadOtherFile(0, "O", tgt["viewfile"])                              # reads view file for first AlignTo instead
                     else:
                         # If View image was already aligned, take new centered View image at startTilt and use as reference instead
-                        is_x, is_y = sem.ReportImageShift()
+                        is_x, is_y, *_ = sem.ReportImageShift()
                         sem.GoToLowDoseArea("V")
                         sem.SetImageShift(0, 0)
                         sem.SetImageShift(is_x, is_y)
                         sem.V()
                         sem.Copy("A", "O")
                     # Check defocus offset
-                    is_x, is_y = sem.ReportImageShift()
+                    is_x, is_y, *_ = sem.ReportImageShift()
                     sem.GoToLowDoseArea("R")                                                    # Switch to R before applying defocus offset to not mess with potential mP/nP offsets between View and Rec
                     sem.SetImageShift(0, 0)
                     sem.SetImageShift(is_x, is_y)
@@ -1966,7 +1970,7 @@ else:
             x, y, binning, exp, *_ = sem.ImageProperties("P")
             sem.SetExposure("V", exp)
             sem.SetBinning("V", int(binning))
-            is_x, is_y = sem.ReportImageShift()
+            is_x, is_y, *_ = sem.ReportImageShift()
             sem.GoToLowDoseArea("V")
             sem.SetImageShift(0, 0)
             sem.SetImageShift(is_x, is_y)
