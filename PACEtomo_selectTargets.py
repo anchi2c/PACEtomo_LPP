@@ -45,7 +45,7 @@ ctfXtiltX = 0.002836
 ctfXtiltY = 0.003867
 ctfDefocusLo = -10.0        # CtfFind search range low [microns]
 ctfDefocusHi = -0.2         # CtfFind search range high [microns]
-ctf_resolution_max_A = 10.0 # retry CtfFind if resolution [A] is above this
+ctf_resolution_max_A = 20.0 # retry CtfFind if resolution [A] is above this
 ctf_max_attempts = 3        # max CtfFind attempts per measurement
 ctf_retry_delay_s = 5       # delay before refocus shot on retry [s]
 

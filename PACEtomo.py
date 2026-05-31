@@ -94,7 +94,13 @@ tgtTrackMnt     = False     # set to True if you also want the tracking target t
 debug           = False     # Enables additional output for a few processes (e.g. cross-correlation for all image alignments)
 breakpoints     = False     # Waits at every debug output for user to press B key.
 
-# Beam-tilt autofocus (replaces sem.G / sem.G(-1))
+# Defocus measure / autofocus (replaces sem.G / sem.G(-1))
+defocusMethod = "beam_tilt"     # ctf | beam_tilt — measure_defocus and autofocus_apply
+ctfXtiltX = 0.002836
+ctfXtiltY = 0.003867
+ctf_resolution_max_A = 10.0     # retry CtfFind if resolution [A] is above this
+ctf_max_attempts = 3
+ctf_retry_delay_s = 5
 tilt_angle_mrad = 5.0
 beam_tilt_correction = 3 / 6.7
 autofocus_cycles = 2
@@ -195,7 +201,12 @@ def checkValves():
     if not int(sem.ReportColumnOrGunValve()):
         sem.SetColumnOrGunValve(1)
 
-def beam_tilt_measure_defocus():
+def _ctf_defocus_range():
+    track_d = trackDefocus if trackDefocus != 0 else maxDefocus
+    return min(maxDefocus, track_d) - 2, min(-0.2, minDefocus + 2)
+
+
+def _beam_tilt_measure_defocus_core():
     beam_tilt = sem.ReportBeamTilt()
     tilt_x_orig = float(beam_tilt[0])
     tilt_y_orig = float(beam_tilt[1])
@@ -239,19 +250,85 @@ def beam_tilt_measure_defocus():
     defocus_measured = -1.0 * sign * displacement / tilt_angle_mrad
     return defocus_measured, speed_x, speed_y
 
+
+def beam_tilt_measure_defocus():
+    """Beam-tilt defocus: set X-tilt, measure, restore X-tilt."""
+    xtX, xtY = sem.ReportXLensDeflector(2)
+    try:
+        sem.SetXLensDeflector(2, ctfXtiltX, ctfXtiltY)
+        return _beam_tilt_measure_defocus_core()
+    finally:
+        sem.SetXLensDeflector(2, xtX, xtY)
+
+
+def ctf_measure_defocus():
+    """CTF defocus: set X-tilt, Focus, CtfFind (with retries), restore X-tilt."""
+    ctf_lo, ctf_hi = _ctf_defocus_range()
+    xtX, xtY = sem.ReportXLensDeflector(2)
+    try:
+        sem.SetXLensDeflector(2, ctfXtiltX, ctfXtiltY)
+        cfind = []
+        sem.NoMessageBoxOnError(1)
+        try:
+            for attempt in range(1, ctf_max_attempts + 1):
+                if attempt > 1:
+                    sem.Delay(ctf_retry_delay_s, "s")
+                sem.F()
+                cfind = sem.CtfFind("A", ctf_lo, ctf_hi)
+                if len(cfind) == 0:
+                    log(f"ERROR: CtfFind failed on attempt {attempt}/{ctf_max_attempts}.")
+                    if attempt < ctf_max_attempts:
+                        continue
+                    return np.nan
+                resolution = float(cfind[-1])
+                if resolution <= ctf_resolution_max_A:
+                    break
+                log(
+                    f"WARNING: CtfFind resolution {resolution:.2f} A > {ctf_resolution_max_A} A "
+                    f"(attempt {attempt}/{ctf_max_attempts})"
+                )
+            else:
+                log(
+                    f"WARNING: CtfFind resolution still > {ctf_resolution_max_A} A after "
+                    f"{ctf_max_attempts} attempts; using last result."
+                )
+        finally:
+            sem.NoMessageBoxOnError(0)
+        if len(cfind) == 0:
+            return np.nan
+        defocus = float(cfind[0])
+        log(f"CtfFind: {defocus:.4f} microns ({float(cfind[-1]):.2f} A)")
+        return defocus
+    finally:
+        sem.SetXLensDeflector(2, xtX, xtY)
+
+
 def measure_defocus():
     """sem.G(-1): measure defocus only, no focus change."""
-    defocus = np.nan
-    speed_x = speed_y = 0.0
-    for _ in range(measure_cycles):
-        defocus, speed_x, speed_y = beam_tilt_measure_defocus()
-    return float(defocus), np.array([speed_x, speed_y])
+    if defocusMethod not in ("ctf", "beam_tilt"):
+        sem.OKBox(f"ERROR: Unknown defocusMethod '{defocusMethod}'. Use 'ctf' or 'beam_tilt'.")
+        sem.Exit()
+    if defocusMethod == "beam_tilt":
+        defocus = np.nan
+        speed_x = speed_y = 0.0
+        for _ in range(measure_cycles):
+            defocus, speed_x, speed_y = beam_tilt_measure_defocus()
+        return float(defocus), np.array([speed_x, speed_y])
+    defocus = ctf_measure_defocus()
+    return float(defocus), np.array([0.0, 0.0])
+
 
 def autofocus_apply(target):
     """sem.G: measure defocus and correct to target."""
     defocus = np.nan
     for cycle in range(1, autofocus_cycles + 1):
-        defocus, speed_x, speed_y = beam_tilt_measure_defocus()
+        if defocusMethod == "beam_tilt":
+            defocus, speed_x, speed_y = beam_tilt_measure_defocus()
+        else:
+            defocus = ctf_measure_defocus()
+        if not np.isfinite(defocus):
+            log(f"WARNING: Autofocus measurement failed on cycle {cycle}/{autofocus_cycles}.")
+            return defocus
         error = target - defocus
         log(f"Autofocus {cycle}/{autofocus_cycles}: measured={defocus:.4f} um, target={target:.3f} um, error={error:.3f} um")
         if abs(error) <= autofocus_tolerance_um:
@@ -1457,6 +1534,7 @@ log(f"Start: {startTilt} deg - Min/Max: {minTilt}/{maxTilt} deg ({step} deg incr
 log(f"Tilt scheme: {tiltScheme}" + (f" (groupSize={groupSize})" if tiltScheme == "dose_symmetric" else ""))
 log(f"Data points used: {dataPoints}")
 log(f"Target defocus range (min/max/step): {minDefocus}/{maxDefocus}/{stepDefocus}")
+log(f"Defocus method (measure / autofocus): {defocusMethod}")
 log(f"Sample pretilt (rotation): {pretilt} ({rotation})")
 log(f"Tilt axis offset: {round(tiltAxisOffset, 3)}")
 log(f"Focus correction slope: {focusSlope}")
@@ -1597,7 +1675,8 @@ if not recover:
             for i in range(len(geoPoints)):
                 sem.ImageShiftByMicrons(geoPoints[i][0], geoPoints[i][1])
                 defocus, drift = measure_defocus()
-                if abs(defocus) >= 0.01 and np.linalg.norm(drift) >= 0.01:
+                drift_ok = defocusMethod == "ctf" or np.linalg.norm(drift) >= 0.01
+                if abs(defocus) >= 0.01 and drift_ok:
                     geoXYZ[0].append(geoPoints[i][0])
                     geoXYZ[1].append(geoPoints[i][1])
                     geoXYZ[2].append(defocus)
