@@ -551,12 +551,12 @@ def doRonchigramCorrection(set_track_fn=None):
 def recordWithRonchi(set_track_fn=None, run_ronchi=True, acquire_label="Record"):
     """Optional ronchigram correction, then standard Record acquire (sem.R / sem.S)."""
     if run_ronchi and doRonchigram:
-        log(f"NOTE: {acquire_label} — ronchigram Trial then Record stack frame.")
+        log(f"NOTE: {acquire_label} - ronchigram Trial then Record stack frame.")
         doRonchigramCorrection(set_track_fn=set_track_fn)
     elif doRonchigram and not run_ronchi:
-        log(f"NOTE: {acquire_label} — Record only (ronchigram skipped for this shot).")
+        log(f"NOTE: {acquire_label} - Record only (ronchigram skipped for this shot).")
     else:
-        log(f"NOTE: {acquire_label} — Record acquire.")
+        log(f"NOTE: {acquire_label} - Record acquire.")
     if beamTiltComp:
         sem.AdjustBeamTiltforIS()
     sem.Delay(delayIS, "s")
