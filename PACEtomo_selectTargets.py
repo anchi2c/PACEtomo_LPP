@@ -1460,6 +1460,7 @@ def gui(targetFile):
                 sem.SetImageShift(0, 0)
                 sem.Echo(f"Measuring geo point {i + 1} of {len(geoPoints)}...")
                 sem.ImageShiftByMicrons(geoPoints[i]["SSX"], geoPoints[i]["SSY"])
+                sem.Delay(2, "s")
                 defocus, drift = measure_defocus()
                 log(f"DEBUG:\nAutofocus: {defocus}\nDrift:     {drift}")
                 drift_ok = defocusMethod == "ctf" or np.linalg.norm(drift) >= 0.01
