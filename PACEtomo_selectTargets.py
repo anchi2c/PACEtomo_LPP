@@ -777,7 +777,7 @@ def ctf_measure_defocus():
                     sem.Echo(f"ERROR: CtfFind failed on attempt {attempt}/{ctf_max_attempts}.")
                     if attempt < ctf_max_attempts:
                         continue
-                    return np.nan, np.array([0.0, 0.0])
+                    return np.nan, np.array([0.0, 0.0]), np.nan
                 resolution = float(cfind[-1])
                 if resolution <= ctf_resolution_max_A:
                     break
@@ -792,9 +792,12 @@ def ctf_measure_defocus():
                 )
         finally:
             sem.NoMessageBoxOnError(0)
+        if len(cfind) == 0:
+            return np.nan, np.array([0.0, 0.0]), np.nan
         defocus = float(cfind[0])
-        sem.Echo(f"CtfFind: {defocus:.4f} microns ({cfind[-1]} A)")
-        return defocus, np.array([0.0, 0.0])
+        resolution = float(cfind[-1])
+        sem.Echo(f"CtfFind: {defocus:.4f} microns ({resolution:.2f} A)")
+        return defocus, np.array([0.0, 0.0]), resolution
     finally:
         sem.SetXLensDeflector(2, xtX, xtY)
 
@@ -810,7 +813,7 @@ def measure_defocus():
         for _ in range(measure_cycles):
             defocus, speed_x, speed_y = beam_tilt_measure_defocus()
         sem.Echo(f"Defocus: {defocus:.4f} um, drift=({speed_x:.3f}, {speed_y:.3f}) nm/s")
-        return float(defocus), np.array([speed_x, speed_y])
+        return float(defocus), np.array([speed_x, speed_y]), np.nan
     return ctf_measure_defocus()
 
 def log(text, color=0, style=0):
@@ -1460,9 +1463,33 @@ def gui(targetFile):
                 sem.SetImageShift(0, 0)
                 sem.Echo(f"Measuring geo point {i + 1} of {len(geoPoints)}...")
                 sem.ImageShiftByMicrons(geoPoints[i]["SSX"], geoPoints[i]["SSY"])
-                sem.Delay(2, "s")
-                defocus, drift = measure_defocus()
-                log(f"DEBUG:\nAutofocus: {defocus}\nDrift:     {drift}")
+                sem.Delay(5, "s")
+                while True:
+                    defocus, drift, resolution = measure_defocus()
+                    log(f"DEBUG:\nAutofocus: {defocus}\nDrift:     {drift}\nResolution: {resolution}")
+                    if defocusMethod == "ctf":
+                        if np.isfinite(defocus) and np.isfinite(resolution):
+                            fit_msg = (
+                                f"defocus = {defocus:.3f} um\n"
+                                f"CTF resolution = {resolution:.2f} A"
+                            )
+                        elif np.isfinite(defocus):
+                            fit_msg = f"defocus = {defocus:.3f} um\nCTF resolution: unavailable"
+                        else:
+                            fit_msg = "CtfFind failed (no defocus value)."
+                        happy = sem.YesNoBox(
+                            "\n".join([
+                                f"Geo point {i + 1} of {len(geoPoints)}",
+                                fit_msg,
+                                "",
+                                "Are you happy with this CTF fit?",
+                            ])
+                        )
+                        if happy == 1:
+                            break
+                        log("User requested redo of CTF measurement for this geo point.")
+                    else:
+                        break
                 drift_ok = defocusMethod == "ctf" or np.linalg.norm(drift) >= 0.01
                 if abs(defocus) >= 0.01 and drift_ok:
                     geoXYZ[0].append(geoPoints[i]["SSX"])
