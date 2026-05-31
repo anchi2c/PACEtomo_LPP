@@ -115,7 +115,7 @@ ronchiBaseSuffix   = "_ronchi"         # appended to active frame base name for 
 ronchiC3Offset     = -20          # added to ReportImageDistanceOffset before Trial shot
 ronchiDelay        = 2.0          # seconds after C3 offset change
 ronchiBinning      = 32
-ronchiPixelSize    = 0.973e-4 * 2 # um (unbinned; multiplied by binning in analysis)
+ronchiPixelSize    = 0.98e-4 * 2 # um (unbinned; multiplied by binning in analysis)
 ronchiTargetPhaseA = 2.40223          # vertical laser (rad)
 ronchiTargetPhaseB = 0.31999          # horizontal laser (rad)
 ronchiCorrectKs    = [[11.056, -0.470], [1.333, 10.389]]
@@ -124,8 +124,9 @@ ronchiMontage      = True         # also run before montage tile Record shots
 ronchiCorrMatrix   = [[0.212, 1.28], [1.22, -0.243]]  # phase-to-deflector coupling, scaled by 1e-5
 ronchiCorrectC3    = True         # apply C3 correction from mean ks error (diagonal fringe spacing)
 ronchiC3CorrectionFactor = 20 / 6.85  # um offset per um^-1 mean ks error
-ronchiC3KsErrMax   = 0.3          # apply C3 only if ||ks - correct_ks|| is below this (1/um)
+ronchiC3KsErrMax   = 0.5          # apply C3 only if ||ks - correct_ks|| is below this (1/um)
 redo_ronchi_after_C3 = True       # second Trial after C3 change; phase correction only on redo
+ronchiPerPositionC3 = True        # remember ImageDistanceOffset per target; False = global C3 for all
 ########## END Ronchigram settings ##########
 
 ########## END SETTINGS ########## 
@@ -513,6 +514,32 @@ def checkRonchigramSetup():
         )
     if redo_ronchi_after_C3:
         log("NOTE: Ronchigram will repeat Trial for phase-only correction after a C3 change.")
+    if ronchiPerPositionC3:
+        log("NOTE: Ronchigram C3 offset is stored and restored per target across tilts.")
+
+
+def _apply_stored_c3_offset(pos, pn):
+    """Restore per-target C3 offset, or initialize from current scope value."""
+    global position
+    stored = position[pos][pn].get("c3_offset")
+    if stored is not None:
+        sem.SetImageDistanceOffset(stored)
+        log(f"Ronchigram: target {pos + 1} using stored C3 offset {stored:.2f} um")
+        return float(stored)
+    current = float(sem.ReportImageDistanceOffset())
+    for b in range(len(position[pos])):
+        position[pos][b]["c3_offset"] = current
+    log(f"Ronchigram: target {pos + 1} initializing C3 offset {current:.2f} um")
+    return current
+
+
+def _save_c3_offset_for_target(pos, pn):
+    """Save current ImageDistanceOffset for this target (all branches)."""
+    global position
+    current = float(sem.ReportImageDistanceOffset())
+    for b in range(len(position[pos])):
+        position[pos][b]["c3_offset"] = current
+    log(f"Ronchigram: target {pos + 1} saved C3 offset {current:.2f} um")
 
 
 def _log_ronchi_ks(result, pass_label=""):
@@ -589,7 +616,7 @@ def _try_apply_ronchi_c3(result, c3_baseline_offset, pass_label=""):
     return True
 
 
-def doRonchigramCorrection(set_track_fn=None):
+def doRonchigramCorrection(set_track_fn=None, pos=None, pn=None):
     """Trial shot + analyze_ronchigram + C3 and/or laser correction; return to Record area."""
     if not doRonchigram:
         return
@@ -603,7 +630,10 @@ def doRonchigramCorrection(set_track_fn=None):
         f"Ronchigram: Trial acquire at tilt {tilt:.1f} deg | "
         f"C3 offset {ronchiC3Offset} um | binning {ronchiBinning} | Trial exposure {trial_exp:.4g} s"
     )
-    c3_baseline_offset = sem.ReportImageDistanceOffset()
+    if ronchiPerPositionC3 and pos is not None and pn is not None:
+        c3_baseline_offset = _apply_stored_c3_offset(pos, pn)
+    else:
+        c3_baseline_offset = float(sem.ReportImageDistanceOffset())
     try:
         image = _acquire_ronchi_trial(c3_baseline_offset)
         result = _analyze_ronchi_image(image)
@@ -627,8 +657,12 @@ def doRonchigramCorrection(set_track_fn=None):
 
         if debug:
             log(f"DEBUG: Ronchigram pixel size {ronchiPixelSize} um, peak radius {ronchiPeakRadius} px")
+        if ronchiPerPositionC3 and pos is not None and pn is not None:
+            _save_c3_offset_for_target(pos, pn)
     except Exception as e:
         log(f"WARNING: Ronchigram analysis failed: {e}. Continuing without laser correction.")
+        if ronchiPerPositionC3 and pos is not None and pn is not None:
+            _save_c3_offset_for_target(pos, pn)
     sem.GoToLowDoseArea("R")
     if set_track_fn is not None:
         set_track_fn()
@@ -636,7 +670,7 @@ def doRonchigramCorrection(set_track_fn=None):
         sem.RestoreBeamTilt()
 
 
-def ronchi_before_preview_align(acquire_label="preview alignment"):
+def ronchi_before_preview_align(acquire_label="preview alignment", pos=None, pn=None):
     """Ronchigram laser correction at Record before Preview (L) alignment images."""
     if not doRonchigram:
         return
@@ -645,14 +679,16 @@ def ronchi_before_preview_align(acquire_label="preview alignment"):
     sem.GoToLowDoseArea("R")
     sem.SetImageShift(0, 0)
     sem.SetImageShift(is_x, is_y)
-    doRonchigramCorrection(set_track_fn=None)
+    doRonchigramCorrection(set_track_fn=None, pos=pos, pn=pn)
 
 
-def recordWithRonchi(set_track_fn=None, run_ronchi=True, acquire_label="Record"):
+def recordWithRonchi(set_track_fn=None, run_ronchi=True, acquire_label="Record", pos=None, pn=None):
     """Optional ronchigram correction, then standard Record acquire (sem.R / sem.S)."""
+    if ronchiPerPositionC3 and pos is not None and pn is not None and not (run_ronchi and doRonchigram):
+        _apply_stored_c3_offset(pos, pn)
     if run_ronchi and doRonchigram:
         log(f"NOTE: {acquire_label} - ronchigram Trial then Record stack frame.")
-        doRonchigramCorrection(set_track_fn=set_track_fn)
+        doRonchigramCorrection(set_track_fn=set_track_fn, pos=pos, pn=pn)
     elif doRonchigram and not run_ronchi:
         log(f"NOTE: {acquire_label} - Record only (ronchigram skipped for this shot).")
     else:
@@ -1256,7 +1292,7 @@ def Tilt(tilt):
         sem.GoToLowDoseArea("R")
         sem.SetImageShift(0, 0)
         sem.SetImageShift(is_x, is_y)
-        ronchi_before_preview_align("recovery preview alignment to tracking TS")
+        ronchi_before_preview_align("recovery preview alignment to tracking TS", pos=0, pn=pn)
         sem.L()
         alignTo("O", debug)
         bufISX, bufISY = sem.ReportISforBufferShift()
@@ -1347,6 +1383,8 @@ def Tilt(tilt):
         recordWithRonchi(
             set_track_fn=setTrack if pos == 0 else None,
             acquire_label=f"Tilt {tilt:.1f} deg step {tiltStepCounter} target {pos + 1}/{len(targets)}",
+            pos=pos,
+            pn=pn,
         )
 
         bufISXpre = 0                                                                           # only non 0 if two tracking images are taken
@@ -1362,6 +1400,8 @@ def Tilt(tilt):
                     recordWithRonchi(
                         set_track_fn=setTrack if pos == 0 else None,
                         acquire_label=f"Tilt {tilt:.1f} deg step {tiltStepCounter} target 0 (re-track)",
+                        pos=pos,
+                        pn=pn,
                     )
                     alignTo("O", debug)
 
@@ -1412,6 +1452,8 @@ def Tilt(tilt):
                         set_track_fn=setTrack if pos == 0 else None,
                         run_ronchi=ronchiMontage,
                         acquire_label=f"Montage tile ({i},{j}) tilt {tilt:.1f} deg target {pos + 1}/{len(targets)}",
+                        pos=pos,
+                        pn=pn,
                     )
 
                     mont_SSX, mont_SSY = sem.ReportSpecimenShift()
@@ -1995,7 +2037,7 @@ if not recover:
 ### Target setup
     log(f"Setting up {len(targets)} targets...")
 
-    posTemplate = {"SSX": 0, "SSY": 0, "focus": 0, "z0": 0, "n0": 0, "shifts": [], "angles": [], "ISXset": 0, "ISYset": 0, "ISXali": 0, "ISYali": 0, "dose": 0, "sec": 0, "skip": False}
+    posTemplate = {"SSX": 0, "SSY": 0, "focus": 0, "z0": 0, "n0": 0, "shifts": [], "angles": [], "ISXset": 0, "ISYset": 0, "ISXali": 0, "ISYali": 0, "dose": 0, "sec": 0, "skip": False, "c3_offset": None}
     position = []
     skippedTgts = 0
     for i, tgt in enumerate(targets):
@@ -2029,7 +2071,7 @@ if not recover:
         sem.ImageShiftByMicrons(float(tgt["SSX"]), float(tgt["SSY"]) * tiltScaling)             # apply relative shifts to find out absolute IS after realign to item
         if (previewAli or viewAli):                                                             # adds initial dose, but makes sure start tilt image is on target
             if alignToP:
-                ronchi_before_preview_align(f"target {i + 1} preview alignment (alignToP)")
+                ronchi_before_preview_align(f"target {i + 1} preview alignment (alignToP)", pos=i, pn=0)
                 x, y, binning, exp, *_ = sem.ImageProperties("P")
                 sem.SetExposure("V", exp)
                 sem.SetBinning("V", int(binning))
@@ -2058,7 +2100,7 @@ if not recover:
                     sem.GoToLowDoseArea("R")
                     sem.SetImageShift(0, 0)
                     sem.SetImageShift(is_x, is_y)
-                    ronchi_before_preview_align(f"target {i + 1} preview alignment (tgtfile)")
+                    ronchi_before_preview_align(f"target {i + 1} preview alignment (tgtfile)", pos=i, pn=0)
                     sem.L()
                     alignTo("O", debug)
                     AISX, AISY, ASX, ASY = sem.ReportAlignShift()[2:6]
@@ -2084,7 +2126,7 @@ if not recover:
                     defocus_offset = max(-10, sem.ReportLDDefocusOffset("V"))
                     if defocus_offset != 0:
                         sem.ChangeFocus(defocus_offset)                                             # Higher defocus for better correlation, but max at 10 to avoid major distortions
-                    ronchi_before_preview_align(f"target {i + 1} preview alignment (view to Record)")
+                    ronchi_before_preview_align(f"target {i + 1} preview alignment (view to Record)", pos=i, pn=0)
                     sem.L()
                     sem.AlignBetweenMags("O", -1, -1, -1)
                     AISX, AISY, ASX, ASY = sem.ReportAlignShift()[2:6]
