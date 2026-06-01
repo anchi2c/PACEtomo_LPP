@@ -127,6 +127,9 @@ ronchiC3CorrectionFactor = 20 / 6.85  # um offset per um^-1 mean ks error
 ronchiC3KsErrMax   = 0.5          # apply C3 only if ||ks - correct_ks|| is below this (1/um)
 redo_ronchi_after_C3 = True       # second Trial after C3 change; phase correction only on redo
 ronchiPerPositionC3 = True        # remember ImageDistanceOffset per target; False = global C3 for all
+ronchiXLensTolerance = 0.0005     # reset XLensDeflector(2) to start if |x-x0| or |y-y0| exceeds this
+ronchiStartXLensX = None          # set from ReportXLensDeflector(2) at startup when doRonchigram
+ronchiStartXLensY = None
 ########## END Ronchigram settings ##########
 
 ########## END SETTINGS ########## 
@@ -442,6 +445,22 @@ def applyRonchigramXtiltCorrection(correction_x, correction_y, lens_index=2):
     sem.SetXLensDeflector(lens_index, xtX + correction_x, xtY + correction_y)
 
 
+def _reset_ronchi_xlens_if_out_of_tolerance(lens_index=2):
+    """Reset XLensDeflector to session start if phase corrections have walked it too far."""
+    global ronchiStartXLensX, ronchiStartXLensY
+    if ronchiStartXLensX is None or ronchiStartXLensY is None:
+        return
+    xtX, xtY = sem.ReportXLensDeflector(lens_index)
+    xtX, xtY = float(xtX), float(xtY)
+    if (abs(xtX - ronchiStartXLensX) > ronchiXLensTolerance
+            or abs(xtY - ronchiStartXLensY) > ronchiXLensTolerance):
+        log(
+            f"WARNING: Ronchigram X lens deflector ({xtX:.6f}, {xtY:.6f}) beyond tolerance "
+            f"{ronchiXLensTolerance} from start ({ronchiStartXLensX:.6f}, {ronchiStartXLensY:.6f}); resetting."
+        )
+        sem.SetXLensDeflector(lens_index, ronchiStartXLensX, ronchiStartXLensY)
+
+
 def applyRonchigramC3Correction(c3_correction, baseline_offset):
     """Apply C3 correction to ImageDistanceOffset relative to pre-ronchigram offset."""
     new_offset = baseline_offset + c3_correction
@@ -486,11 +505,17 @@ def _restore_frame_basename(saved):
 
 def checkRonchigramSetup():
     """Startup checks when doRonchigram is enabled (called after parseTargets)."""
+    global ronchiStartXLensX, ronchiStartXLensY
     if doRonchigram and beamTiltComp:
         sem.OKBox("ERROR: doRonchigram and beamTiltComp together is not implemented. Set doRonchigram = False or beamTiltComp = False.")
         sem.Exit()
     if not doRonchigram:
         return
+    ronchiStartXLensX, ronchiStartXLensY = [float(v) for v in sem.ReportXLensDeflector(2)[:2]]
+    log(
+        f"NOTE: Ronchigram X lens deflector start ({ronchiStartXLensX:.6f}, {ronchiStartXLensY:.6f}), "
+        f"reset tolerance {ronchiXLensTolerance}"
+    )
     trial_exp, *_ = sem.ReportExposure("T")
     record_exp, *_ = sem.ReportExposure("R")
     if trial_exp <= 0 and sem.IsVariableDefined("warningRonchiTrial") == 0:
@@ -579,6 +604,7 @@ def _analyze_ronchi_image(image):
 
 def _acquire_ronchi_trial(trial_offset_baseline, pass_label=""):
     """Trial ronchigram at C3 imaging offset; restore baseline offset after shot."""
+    _reset_ronchi_xlens_if_out_of_tolerance()
     is_x, is_y, *_ = sem.ReportImageShift()
     sem.GoToLowDoseArea("T")
     sem.SetImageShift(0, 0)

@@ -238,7 +238,7 @@ def doRonchigramCorrection():
             log(f"DEBUG: Ronchigram ks={np.array2string(result['ks'])} ks err={np.array2string(result['ks_error'])}")
     except Exception as e:
         log(f"WARNING: Ronchigram analysis failed: {e}. Continuing without laser correction.")
-    sem.GoToLowDoseArea("P")
+    sem.GoToLowDoseArea("R")
 
 
 def ronchiBeforePreview():
@@ -464,8 +464,10 @@ def loopAddTargets():
             if useSearch: 
                 sem.Search()
             else:
+                is_x, is_y, *_ = sem.ReportImageShift()
                 sem.GoToLowDoseArea("V")
                 sem.SetImageShift(0, 0)
+                sem.SetImageShift(is_x, is_y)
                 sem.V()
             sem.GoToLowDoseArea("R")
             sem.SetImageShift(0, 0)
@@ -1983,9 +1985,11 @@ if editTgts == 0:
     sem.ResetImageShift()
     if pointRefine == 1:
         sem.MoveStageTo(*groupStage[0], groupStageZ)
-    elif alignToP:     
+    elif alignToP:    
+        is_x, is_y, *_ = sem.ReportImageShift()
         sem.GoToLowDoseArea("V")
         sem.SetImageShift(0, 0)
+        sem.SetImageShift(is_x, is_y)
         # center hole for center of tgtPattern
         x, y, binning, exp, *_ = sem.ImageProperties("P")
         sem.SetExposure("V", exp)
@@ -2004,8 +2008,10 @@ if editTgts == 0:
         if useSearch: 
             sem.Search()
         else:
+            is_x, is_y, *_ = sem.ReportImageShift()
             sem.GoToLowDoseArea("V")
             sem.SetImageShift(0, 0)
+            sem.SetImageShift(is_x, is_y)
             sem.V()
             if guidance:
                 sem.OKBox("\n".join(["The first target you select will be the tracking target!","","NOTE: This target will have larger tracking errors than the other targets and should have enough contrast to be tracked confidently."]))
@@ -2061,8 +2067,10 @@ if editTgts == 0:
 
     # make view map tor realign to item
     sem.SetCameraArea("V", "F")
+    is_x, is_y, *_ = sem.ReportImageShift()
     sem.GoToLowDoseArea("V")
     sem.SetImageShift(0, 0)
+    sem.SetImageShift(is_x, is_y)
     sem.V()
     sem.OpenNewFile(userName + "_tgt_001_view.mrc")
     sem.S("A")
