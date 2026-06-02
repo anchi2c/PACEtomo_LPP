@@ -130,7 +130,7 @@ ronchiMontage      = True         # also run before montage tile Record shots
 ronchiCorrMatrix   = [[0.212, 1.28], [1.22, -0.243]]  # phase-to-deflector coupling, scaled by 1e-5
 ronchiCorrectC3    = True         # apply C3 correction from mean ks error (diagonal fringe spacing)
 ronchiC3CorrectionFactor = 20 / 6.85  # um offset per um^-1 mean ks error
-ronchiC3KsErrMax   = 0.5          # apply C3 only if ||ks - correct_ks|| is below this (1/um)
+ronchiMinErrForC3Correction   = 0.5          # apply C3 only if |c3 correction| exceeds this minimum (um)
 redo_ronchi_after_C3 = True       # second Trial after C3 change; phase correction only on redo
 ronchiPerPositionC3 = True        # remember ImageDistanceOffset per target; False = global C3 for all
 ronchiXLensTolerance = 0.0005     # reset XLensDeflector(2) to start if |x-x0| or |y-y0| exceeds this
@@ -542,7 +542,7 @@ def checkRonchigramSetup():
     if ronchiCorrectC3:
         log(
             f"NOTE: Ronchigram C3 correction enabled (factor {ronchiC3CorrectionFactor:.4f}, "
-            f"only if ||ks error|| < {ronchiC3KsErrMax} 1/um)."
+            f"only if |C3 correction| > {ronchiMinErrForC3Correction} um)."
         )
     if redo_ronchi_after_C3:
         log("NOTE: Ronchigram will repeat Trial for phase-only correction after a C3 change.")
@@ -630,15 +630,15 @@ def _acquire_ronchi_trial(trial_offset_baseline, pass_label=""):
 
 
 def _try_apply_ronchi_c3(result, c3_baseline_offset, pass_label=""):
-    """Apply C3 if enabled and ks error is below threshold. Returns True if C3 was changed."""
+    """Apply C3 if enabled and correction magnitude exceeds minimum. Returns True if C3 was changed."""
     prefix = f"Ronchigram{pass_label}"
     if not ronchiCorrectC3:
         log(f"{prefix} C3: correction {result['c3_correction']:.2f} um not applied (ronchiCorrectC3=False)")
         return False
-    if result["ks_total_err"] >= ronchiC3KsErrMax:
+    if abs(result["c3_correction"]) <= ronchiMinErrForC3Correction:
         log(
-            f"{prefix} C3: skipped (||ks error|| {result['ks_total_err']:.4f} >= "
-            f"limit {ronchiC3KsErrMax} 1/um)"
+            f"{prefix} C3: skipped (|correction| {abs(result['c3_correction']):.2f} um <= "
+            f"minimum {ronchiMinErrForC3Correction} um)"
         )
         return False
     new_offset = applyRonchigramC3Correction(result["c3_correction"], c3_baseline_offset)
