@@ -165,6 +165,21 @@ if sortByTilt:
     import mrcfile
     from pathlib import Path
 
+# Per-run session state (initialized in run_one_nav_item; module defaults for helpers/linter)
+geo = [[], [], []]
+posResumed = -1
+resumePN = 0
+resumePlus = 0
+resumeMinus = 0
+resumePercent = 0
+maxProgress = 1
+startTime = 0
+tiltStepCounter = 0
+schedule_start = 0
+is2ssMatrix = ss2isMatrix = s2ssMatrix = c2ssMatrix = ss2cMatrix = None
+camX = camY = 0
+origMag = 0
+
 versionCheck = sem.IsVersionAtLeast("40200", "20240814")
 if not versionCheck and sem.IsVariableDefined("warningVersion") == 0:
     runScript = sem.YesNoBox("\n".join(["WARNING: You are using a version of SerialEM that does not support all PACEtomo features. It is recommended to update to the latest SerialEM beta version!", "", "Do you want to run PACEtomo regardless?"]))
@@ -1198,6 +1213,7 @@ def build_tilt_schedule(scheme, start_tilt, min_tilt, max_tilt, tilt_step, group
     sem.Exit()
 
 def refine_geo_after_first_tilt():
+    global geo, position, startTilt
     if len(geo[2]) >= 3:
         log("Refining geometry...")
         log(f"{len(geo[2])} usable CtfFind results found.")
@@ -1276,7 +1292,9 @@ def Tilt(tilt):
                 sem.SetMag(origMag)
                 sem.GoToLowDoseArea("R")
 
-    global recover
+    global recover, posResumed, resumePN, resumePlus, resumeMinus
+    global is2ssMatrix, ss2isMatrix, camX, camY, c2ssMatrix, ss2cMatrix, geo
+    global maxProgress, resumePercent, startTime
 
     # Tilt if within tilt range, skip branch if not
     if -tiltLimit <= tilt <= tiltLimit:
@@ -1745,6 +1763,10 @@ def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_acc
     global targets, savedRun, resume, geoPoints, position, navID, navNote, fileStem, curDir
     global runFileName, targetDefocus, tf, skippedTgts, focus0, tiltLimit, vecA0, vecA1, vecB0, vecB1, size
     global minDefocus, maxDefocus, branchsteps, tilt_schedule, total_tilt_steps, schedule_start
+    global geo, posResumed, resumePN, resumePlus, resumeMinus, resumePercent, maxProgress, startTime
+    global tiltStepCounter, dewarFillTime, lastSlitCheck
+    global is2ssMatrix, ss2isMatrix, s2ssMatrix, camX, camY, c2ssMatrix, ss2cMatrix, origMag
+    global positionFocus, minFocus0, ISX0, ISY0, SSX0, SSY0
 
     startTilt = default_startTilt
     minTilt = default_minTilt
@@ -2364,6 +2386,7 @@ def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_acc
         origMag, *_ = sem.ReportMag()
         s2ssMatrix = np.array(sem.StageToSpecimenMatrix(0)).reshape((2, 2))
         is2ssMatrix = np.array(sem.ISToSpecimenMatrix(0)).reshape((2, 2))
+        ss2isMatrix = np.array(sem.SpecimenToISMatrix(0)).reshape((2, 2))
         camX, camY, *_ = sem.CameraProperties()
         c2ssMatrix = np.array(sem.CameraToSpecimenMatrix(0)).reshape((2, 2))
         ss2cMatrix = np.array(sem.SpecimenToCameraMatrix(0)).reshape((2, 2))
