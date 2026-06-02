@@ -133,9 +133,10 @@ ronchiC3CorrectionFactor = 20 / 6.85  # um offset per um^-1 mean ks error
 ronchiMinErrForC3Correction   = 0.5          # apply C3 only if |c3 correction| exceeds this minimum (um)
 redo_ronchi_after_C3 = True       # second Trial after C3 change; phase correction only on redo
 ronchiPerPositionC3 = True        # remember ImageDistanceOffset per target; False = global C3 for all
-ronchiXLensTolerance = 0.0005     # reset XLensDeflector(2) to start if |x-x0| or |y-y0| exceeds this
+ronchiXLensTolerance = 0.000125     # reset XLensDeflector(2) to start if |x-x0| or |y-y0| exceeds this
 ronchiStartXLensX = None          # set from ReportXLensDeflector(2) at startup when doRonchigram
 ronchiStartXLensY = None
+ronchiStartC3Offset = None      # set from ReportImageDistanceOffset at startup when doRonchigram
 ########## END Ronchigram settings ##########
 
 ########## END SETTINGS ########## 
@@ -526,7 +527,7 @@ def _restore_frame_basename(saved):
 
 def checkRonchigramSetup():
     """Startup checks when doRonchigram is enabled (called after parseTargets)."""
-    global ronchiStartXLensX, ronchiStartXLensY
+    global ronchiStartXLensX, ronchiStartXLensY, ronchiStartC3Offset
     if doRonchigram and beamTiltComp:
         sem.OKBox("ERROR: doRonchigram and beamTiltComp together is not implemented. Set doRonchigram = False or beamTiltComp = False.")
         sem.Exit()
@@ -534,10 +535,13 @@ def checkRonchigramSetup():
         return
     if ronchiStartXLensX is None:
         ronchiStartXLensX, ronchiStartXLensY = [float(v) for v in sem.ReportXLensDeflector(2)[:2]]
+    if ronchiStartC3Offset is None:
+        ronchiStartC3Offset = float(sem.ReportImageDistanceOffset())
     log(
         f"NOTE: Ronchigram X lens deflector start ({ronchiStartXLensX:.6f}, {ronchiStartXLensY:.6f}), "
         f"reset tolerance {ronchiXLensTolerance}"
     )
+    log(f"NOTE: Ronchigram C3 (ImageDistanceOffset) session start {ronchiStartC3Offset:.2f} um")
     trial_exp, *_ = sem.ReportExposure("T")
     record_exp, *_ = sem.ReportExposure("R")
     if trial_exp <= 0 and sem.IsVariableDefined("warningRonchiTrial") == 0:
@@ -1745,7 +1749,24 @@ def batch_resume_start_index(items_to_run):
     return len(items_to_run)
 
 
+def _reset_ronchi_to_session_start(when=""):
+    """Restore XLens(2) and C3 to values captured at batch start in checkRonchigramSetup."""
+    if not doRonchigram:
+        return
+    suffix = f" {when}" if when else ""
+    if ronchiStartXLensX is not None and ronchiStartXLensY is not None:
+        sem.SetXLensDeflector(2, ronchiStartXLensX, ronchiStartXLensY)
+        log(
+            f"NOTE: Reset XLensDeflector(2) to session start "
+            f"({ronchiStartXLensX:.6f}, {ronchiStartXLensY:.6f}){suffix}."
+        )
+    if ronchiStartC3Offset is not None:
+        sem.SetImageDistanceOffset(ronchiStartC3Offset)
+        log(f"NOTE: Reset ImageDistanceOffset to session start {ronchiStartC3Offset:.2f} um{suffix}.")
+
+
 def reset_scope_between_nav_items():
+    """Reset scope state between multi-nav items so a bad area does not carry over."""
     while sem.ReportFileNumber() > 0:
         sem.CloseFile()
     sem.TiltTo(0)
@@ -1755,6 +1776,7 @@ def reset_scope_between_nav_items():
             sem.RestoreLowDoseParams("R")
         except (AttributeError, TypeError):
             pass
+    _reset_ronchi_to_session_start("between nav items")
 
 
 def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_accepted=False):
@@ -2414,6 +2436,7 @@ def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_acc
     sem.SetDefocus(focus0)
     sem.SetImageShift(0, 0)
     sem.CloseFile()
+    _reset_ronchi_to_session_start("after nav item acquisition")
     updateTargets(runFileName, targets)
 
     # Format final tilt stacks
