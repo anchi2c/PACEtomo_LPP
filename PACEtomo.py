@@ -13,8 +13,8 @@
 ############ SETTINGS ############ 
 
 startTilt       = 0         # starting tilt angle [degrees] (should be divisible by step)
-minTilt         = -15       # minimum absolute tilt angle [degrees]
-maxTilt         = 15        # maximum absolute tilt angle [degrees]
+minTilt         = -45       # minimum absolute tilt angle [degrees]
+maxTilt         = 45        # maximum absolute tilt angle [degrees]
 step            = 3         # tilt step [degrees]
 groupSize       = 2         # group size for dose_symmetric scheme (contiguous images per side before switching)
 tiltScheme      = "dose_symmetric"  # dose_symmetric | bidirectional | continuous
@@ -23,10 +23,14 @@ maxDefocus      = -5        # maximum defocus [microns] of target range (high de
 stepDefocus     = 0.5       # step [microns] between target defoci (between TS)
 
 focusSlope      = 0.0       # [DEPRECATED] empirical linear focus correction [microns per degree] (obtained by linear regression of CTF fitted defoci over tilt series; microscope stage dependent)
-delayIS         = 0.3       # delay [s] between applying image shift and Record
-delayTilt       = 0.3       # delay [s] after stage tilt
+delayIS         = 2.0      # delay [s] between applying image shift and Record
+delayTilt       = 2.0       # delay [s] after stage tilt
 zeroExpTime     = 0         # set to exposure time [s] used for start tilt image, if 0: use same exposure time for all tilt images
 zeroDefocus	    = 0 		# set to defocus [microns] used for start tilt image, if 0: use same defocus for all tilt images
+
+nav_item_list   = []        # e.g. [5, 10, 15]; empty = current nav item only (SetSelectedNavItem, SerialEM 4.2+)
+nav_pretilt_list = []       # parallel to nav_item_list; fall back to global pretilt when empty
+nav_rotation_list = []      # parallel to nav_item_list; fall back to global rotation when empty
 
 # Track settings
 trackExpTime    = 0         # set to exposure time [s] used for tracking tilt series, if 0: use same exposure time for all tilt series
@@ -115,7 +119,7 @@ autofocus_tolerance_um = 0.05
 doRonchigram       = True
 ronchiBaseSuffix   = "_ronchi"         # appended to active frame base name for Trial saves only, then restored
 ronchiC3Offset     = -20          # added to ReportImageDistanceOffset before Trial shot
-ronchiDelay        = 2.0          # seconds after C3 offset change
+ronchiDelay        = 1.0          # seconds after C3 offset change
 ronchiBinning      = 32
 ronchiPixelSize    = 0.98e-4 * 2 # um (unbinned; multiplied by binning in analysis)
 ronchiTargetPhaseA = 2.40223          # vertical laser (rad)
@@ -135,6 +139,12 @@ ronchiStartXLensY = None
 ########## END Ronchigram settings ##########
 
 ########## END SETTINGS ########## 
+
+default_startTilt = startTilt
+default_minTilt = minTilt
+default_maxTilt = maxTilt
+default_pretilt = pretilt
+default_rotation = rotation
 
 versionPACE = "1.9.2c"
 import sys
@@ -507,7 +517,8 @@ def checkRonchigramSetup():
         sem.Exit()
     if not doRonchigram:
         return
-    ronchiStartXLensX, ronchiStartXLensY = [float(v) for v in sem.ReportXLensDeflector(2)[:2]]
+    if ronchiStartXLensX is None:
+        ronchiStartXLensX, ronchiStartXLensY = [float(v) for v in sem.ReportXLensDeflector(2)[:2]]
     log(
         f"NOTE: Ronchigram X lens deflector start ({ronchiStartXLensX:.6f}, {ronchiStartXLensY:.6f}), "
         f"reset tolerance {ronchiXLensTolerance}"
@@ -1633,6 +1644,778 @@ def Tilt(tilt):
     if recover:
         recover = False    
 
+
+
+def find_tgts_files(fileStem, curDir):
+    tf = sorted(glob.glob(os.path.join(curDir, fileStem + ".txt")))
+    tfr = sorted(glob.glob(os.path.join(curDir, fileStem + "_run??.txt")))
+    tf.extend(tfr)
+    return tf
+
+
+def resolve_nav_items():
+    if nav_item_list:
+        return [int(x) for x in nav_item_list]
+    sem.ReportNavItem()
+    return [int(sem.GetVariable("navIndex"))]
+
+
+def validate_nav_lists():
+    if not nav_item_list:
+        return
+    n = len(nav_item_list)
+    if nav_pretilt_list and len(nav_pretilt_list) != n:
+        sem.OKBox(f"ERROR: nav_pretilt_list length ({len(nav_pretilt_list)}) must match nav_item_list ({n}).")
+        sem.Exit()
+    if nav_rotation_list and len(nav_rotation_list) != n:
+        sem.OKBox(f"ERROR: nav_rotation_list length ({len(nav_rotation_list)}) must match nav_item_list ({n}).")
+        sem.Exit()
+
+
+def get_nav_geometry(item_index):
+    if nav_item_list:
+        pt = nav_pretilt_list[item_index] if item_index < len(nav_pretilt_list) else default_pretilt
+        rot = nav_rotation_list[item_index] if item_index < len(nav_rotation_list) else default_rotation
+        return float(pt), float(rot)
+    return default_pretilt, default_rotation
+
+
+def nav_run_status(tf_path):
+    if tf_path is None:
+        return "fresh"
+    basename = os.path.basename(tf_path)
+    if "_run" not in basename:
+        return "fresh"
+    resume_sec, resume_pos = 0, 0
+    with open(tf_path) as f:
+        for ln in f:
+            if ln.startswith("_spos"):
+                col = ln.strip().split(" ")
+                parts = col[2].split(",")
+                resume_sec = int(parts[0])
+                resume_pos = int(parts[1])
+                break
+    if resume_sec > 0 or resume_pos > 0:
+        return "incomplete"
+    return "complete"
+
+
+def get_nav_tgts_path(nav_idx, curDir=None):
+    sem.SetSelectedNavItem(nav_idx)
+    sem.ReportNavItem()
+    navNote = sem.GetVariable("navNote")
+    fileStem, fileExt = os.path.splitext(navNote)
+    if fileStem == "" or fileExt != ".txt":
+        return None
+    if curDir is None:
+        curDir = sem.ReportDirectory()
+    tf = find_tgts_files(fileStem, curDir)
+    if not tf:
+        return None
+    return tf[-1]
+
+
+def batch_resume_start_index(items_to_run):
+    curDir = sem.ReportDirectory()
+    for i, nav_idx in enumerate(items_to_run):
+        tf_path = get_nav_tgts_path(nav_idx, curDir)
+        if tf_path is None:
+            return i
+        status = nav_run_status(tf_path)
+        if status in ("incomplete", "fresh"):
+            return i
+    return len(items_to_run)
+
+
+def reset_scope_between_nav_items():
+    while sem.ReportFileNumber() > 0:
+        sem.CloseFile()
+    sem.TiltTo(0)
+    sem.SetImageShift(0, 0)
+    if trackMag > 0:
+        try:
+            sem.RestoreLowDoseParams("R")
+        except (AttributeError, TypeError):
+            pass
+
+
+def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_accepted=False):
+    """Run full PACEtomo acquisition for one Navigator item."""
+    global startTilt, minTilt, maxTilt, pretilt, rotation, recover, recoverInput, realign
+    global targets, savedRun, resume, geoPoints, position, navID, navNote, fileStem, curDir
+    global runFileName, targetDefocus, tf, skippedTgts, focus0, tiltLimit, vecA0, vecA1, vecB0, vecB1, size
+    global minDefocus, maxDefocus, branchsteps, tilt_schedule, total_tilt_steps, schedule_start
+
+    startTilt = default_startTilt
+    minTilt = default_minTilt
+    maxTilt = default_maxTilt
+    pretilt = default_pretilt
+    rotation = default_rotation
+    recover = False
+    recoverInput = 0
+    realign = False
+
+    ### Find target file
+    sem.SetSelectedNavItem(nav_idx)
+    sem.ReportNavItem()
+    navID = int(sem.GetVariable("navIndex"))
+    navNote = sem.GetVariable("navNote")
+    fileStem, fileExt = os.path.splitext(navNote)
+    curDir = sem.ReportDirectory()
+
+    if fileStem != "" and fileExt == ".txt":
+        tf = find_tgts_files(fileStem, curDir)
+        while tf == []:
+            searchInput = sem.YesNoBox("\n".join(["Target file not found! Please choose the directory containing the target file!", "WARNING: All future target files will be searched here!"]))
+            if searchInput == 0:
+                return False
+            sem.UserSetDirectory("Please choose the directory containing the target file!")
+            curDir = sem.ReportDirectory()
+            tf = find_tgts_files(fileStem, curDir)
+    else:
+        log(f"ERROR: Nav item {nav_idx} note does not contain a target file.")
+        return False
+
+    # Check if frame folder is set reasonably
+    if sem.ReportCameraProperty(0, "K2Type") > 0:
+        framePath = sem.ReportFrameSavingPath()
+        framePar = os.path.abspath(os.path.join(framePath, os.pardir))
+        curPar = os.path.abspath(os.path.join(curDir, os.pardir))
+        if (framePath == "NONE" or (framePath not in curDir and curDir not in framePath and framePar not in curDir and curPar not in framePath)) and sem.IsVariableDefined("warningFramePath") == 0:
+            sem.Pause("WARNING: Current frame path (" + framePath + ") does not seem plausible or camera does not save frames.")
+            sem.SetPersistentVar("warningFramePath", "")
+    else:
+        log("WARNING: Camera frame path could not be obtained for your camera.")
+
+    sem.SaveLogOpenNew(navNote.split("_tgts")[0])
+
+    log(f"PACEtomo Version {versionPACE}", color=5, style=1)
+    sem.ProgramTimeStamps()
+
+    # Open last tgts or tgts_run file and read contents
+    targets, savedRun, resume, geoPoints = parseTargets(tf[-1])
+    pretilt, rotation = get_nav_geometry(item_index)
+
+
+    # Sanity check of settings
+    if maxDefocus > minDefocus:
+        minDefocus, maxDefocus = maxDefocus, minDefocus
+    if maxTilt < minTilt:
+        minTilt, maxTilt = maxTilt, minTilt
+    if (maxTilt - startTilt) % step != 0 or (startTilt - minTilt) % step != 0:
+        maxTilt = round(int((maxTilt - startTilt) / step) * step + startTilt, 1)
+        minTilt = round(int((minTilt - startTilt) / step) * step + startTilt, 1)
+        print(f"WARNING: Tilt increment does not divide evenly into tilt range. Tilt range will be adjusted to: {minTilt}, {maxTilt}")
+
+    ### Recovery data
+    recoverInput = 0
+    recover = False
+    realign = False
+    if savedRun != False and (resume["sec"] > 0 or resume["pos"] > 0):
+        if batch_recover:
+            recoverInput = 1 if batch_recover_accepted else 0
+        elif nav_item_list:
+            recoverInput = 0
+            sem.AllowFileOverwrite(1)
+        else:
+            recoverInput = sem.YesNoBox("The target file contains recovery data. Do you want to attempt to continue the acquisition? Tracking accuracy might be impacted.")
+        if recoverInput == 1:
+            recover = True
+            while sem.ReportFileNumber() > 0:
+                sem.CloseFile()
+
+            stageX, stageY, stageZ = sem.ReportStageXYZ()
+            if abs(stageX - float(targets[0]["stageX"])) > 1.0 or abs(stageY - float(targets[0]["stageY"])) > 1.0: # test if stage was moved (with 1 micron wiggle room)
+                userRealign = sem.YesNoBox("It seems that the stage was moved since stopping acquisition. Do you want to realign to the tracking target before resuming? This will also reset prediction parameters reducing tracking accuracy.")    
+                realign = True if userRealign == 1 else False
+        else:
+            sem.AllowFileOverwrite(1)
+
+    ### Start setup
+    dumpVars(os.path.splitext(os.path.basename(tf[-1]))[0])                                         # write settings vars to text file
+
+    sem.ResetClock()
+
+    targetDefocus = maxDefocus                                                                      # use highest defocus for tracking TS
+    sem.SetTargetDefocus(targetDefocus)
+
+    # Collect exposure settings
+    expTime = sem.ReportExposure("R")[0]
+
+    if recover:
+        log("##### Recovery attempt of PACEtomo with parameters: #####", style=1)
+    else:
+        log("##### Starting new PACEtomo with parameters: #####", style=1)
+    log(f"Start: {startTilt} deg - Min/Max: {minTilt}/{maxTilt} deg ({step} deg increments)")
+    log(f"Tilt scheme: {tiltScheme}" + (f" (groupSize={groupSize})" if tiltScheme == "dose_symmetric" else ""))
+    log(f"Data points used: {dataPoints}")
+    log(f"Target defocus range (min/max/step): {minDefocus}/{maxDefocus}/{stepDefocus}")
+    log(f"Defocus method (measure / autofocus): {defocusMethod}")
+    log(f"Sample pretilt (rotation): {pretilt} ({rotation})")
+    log(f"Tilt axis offset: {round(tiltAxisOffset, 3)}")
+    log(f"Focus correction slope: {focusSlope}")
+    log(f"Exposure time per tilt: {round(expTime, 3)} s (total: {round(expTime * int((maxTilt - minTilt) / step), 3)} s)")
+
+    if trackMag > 0:
+        log("WARNING: A magnification offset for the tracking target changes the Low Dose Record mode temporarily. Please double-check your Record mode in case the script is stopped prematurely or crashes!")
+
+    if startTilt * pretilt > 0:
+        log("WARNING: Start tilt and pretilt have the same sign! If you want to compensate for the pretilt, the start tilt should have the opposite sign!")
+
+    ### Create run file
+    counter = 1
+    while os.path.exists(os.path.join(curDir, fileStem + "_run" + str(counter).zfill(2) + ".txt")):
+        counter += 1
+    runFileName = os.path.join(curDir, fileStem + "_run" + str(counter).zfill(2) + ".txt")
+
+    ### Initial actions
+    if not recover:
+        log("Moving to target area...")
+
+        sem.SetCameraArea("V", "F")                                                                 # set View to Full for Eucentricity
+        sem.MoveToNavItem(navID)
+        log("Refining eucentricity...")
+        sem.GoToLowDoseArea("V")
+        is_x, is_y, *_ = sem.ReportImageShift()
+        sem.SetImageShift(0, 0)
+        sem.Eucentricity(1)
+        sem.SetImageShift(is_x, is_y)
+        sem.UpdateItemZ()
+        sem.RestoreCameraSet("V")
+
+        log("Realigning to target 1...")
+        if alignToP:
+            x, y, binning, exp, *_ = sem.ImageProperties("P")
+            sem.SetExposure("V", exp)
+            sem.SetBinning("V", int(binning))
+            is_x, is_y, *_ = sem.ReportImageShift()
+            sem.GoToLowDoseArea("V")
+            sem.SetImageShift(0, 0)
+            sem.SetImageShift(is_x, is_y)
+            sem.V()
+            sem.CropCenterToSize("A", int(x), int(y))
+            alignTo("P", debug)
+            sem.RestoreCameraSet("V")
+            if refineVec and tgtPattern and size is not None:
+                if float(sem.ReportDefocus()) < -50:
+                    log("WARNING: Large defocus offsets for View can cause additional offsets in image shift upon mag change.")
+                size = int(size)
+                log("Refining target pattern...")
+                is_x, is_y, *_ = sem.ReportImageShift()
+                sem.GoToLowDoseArea("R")
+                sem.SetImageShift(0, 0)
+                sem.SetImageShift(is_x, is_y)
+                ISX0, ISY0, *_ = sem.ReportImageShift()
+                SSX0, SSY0 = sem.ReportSpecimenShift()
+                log(f"Vector A: ({vecA0}, {vecA1})")
+                shiftx = size * vecA0
+                shifty = size * vecA1
+                is_x, is_y, *_ = sem.ReportImageShift()
+                sem.GoToLowDoseArea("V")
+                sem.SetImageShift(0, 0)
+                sem.SetImageShift(is_x, is_y)
+                sem.ImageShiftByMicrons(shiftx, shifty)
+                sem.V()
+                alignTo("P", debug)
+                is_x, is_y, *_ = sem.ReportImageShift()
+                sem.GoToLowDoseArea("R")
+                sem.SetImageShift(0, 0)
+                sem.SetImageShift(is_x, is_y)
+
+                SSX, SSY = sem.ReportSpecimenShift()
+                SSX -= SSX0
+                SSY -= SSY0        
+                if np.linalg.norm([shiftx - SSX, shifty - SSY]) > 0.5:
+                    log("WARNING: Refined vector differs by more than 0.5 microns! Original vectors will be used.")
+                else:
+                    vecA0, vecA1 = (round(SSX / size, 4), round(SSY / size, 4))
+                    log(f"Refined vector A: ({vecA0}, {vecA1})")
+
+                    sem.SetImageShift(ISX0, ISY0)                                                   # reset IS to center position
+                    log(f"Vector B: ({vecB0}, {vecB1})")
+                    shiftx = size * vecB0
+                    shifty = size * vecB1
+                    sem.ImageShiftByMicrons(shiftx, shifty)
+
+                    is_x, is_y, *_ = sem.ReportImageShift()
+                    sem.GoToLowDoseArea("V")
+                    sem.SetImageShift(0, 0)
+                    sem.SetImageShift(is_x, is_y)
+                    sem.V()
+                    alignTo("P", debug)
+                    is_x, is_y, *_ = sem.ReportImageShift()
+                    sem.GoToLowDoseArea("R")
+                    sem.SetImageShift(0, 0)
+                    sem.SetImageShift(is_x, is_y)
+                    SSX, SSY = sem.ReportSpecimenShift()
+                    SSX -= SSX0
+                    SSY -= SSY0
+                    if np.linalg.norm([shiftx - SSX, shifty - SSY]) > 0.5:
+                        log("WARNING: Refined vector differs by more than 0.5 microns! Original vectors will be used.")
+                    else:
+                        vecB0, vecB1 = (round(SSX / size, 4), round(SSY / size, 4))
+                        log(f"Refined vector B: ({vecB0}, {vecB1})")
+
+                        targetNo = 0
+                        for i in range(-size,size+1):
+                            for j in range(-size,size+1):
+                                if i == j == 0: continue
+                                targetNo += 1
+                                SSX = i * vecA0 + j * vecB0
+                                SSY = i * vecA1 + j * vecB1
+                                targets[targetNo]["SSX"] = str(SSX)
+                                targets[targetNo]["SSY"] = str(SSY)
+                        log("NOTE: Target pattern was overwritten using refined vectors.")
+                sem.SetImageShift(ISX0, ISY0)                                                       # reset IS to center position
+        else:
+            #sem.RealignToOtherItem(navID, 1) # <= sometimes unreliable
+            realignTo(nav_id=navID, target=targets[0])
+
+        if measureGeo:
+            log("Measuring geometry...")
+            if int(round(float(sem.ReportTiltAngle()))) != 0:
+                sem.TiltTo(0)
+            if len(geoPoints) > 0 and "SSX" in geoPoints[0].keys():                                 # if there are geo points in tgts file, adjust format from dict to list
+                geoPoints = [[point["SSX"], point["SSY"]] for point in geoPoints]
+            if len(geoPoints) < 3 and tgtPattern and size is not None:
+                if size > 1:
+                    geoPoints.append([0.5 * (vecA0 + vecB0), 0.5 * (vecA1 + vecB1)])
+                geoPoints.append([(size - 0.5) * (vecA0 + vecB0), (size - 0.5) * (vecA1 + vecB1)])
+                geoPoints.append([(size - 0.5) * (vecA0 - vecB0), (size - 0.5) * (vecA1 - vecB1)])
+                geoPoints.append([(size - 0.5) * (-vecA0 + vecB0), (size - 0.5) * (-vecA1 + vecB1)])
+                geoPoints.append([(size - 0.5) * (-vecA0 - vecB0), (size - 0.5) * (-vecA1 - vecB1)])
+
+            # Clean geo_points beyond image shift limit
+            geoPoints = [point for point in geoPoints if np.linalg.norm(np.array([point[0], point[1]], dtype=float)) < imageShiftLimit]
+
+            if len(geoPoints) >= 3:
+                geoXYZ = [[], [], []]
+                sem.GoToLowDoseArea("R")
+                ISX0, ISY0, *_ = sem.ReportImageShift()
+                for i in range(len(geoPoints)):
+                    sem.ImageShiftByMicrons(geoPoints[i][0], geoPoints[i][1])
+                    defocus, drift = measure_defocus()
+                    drift_ok = defocusMethod == "ctf" or np.linalg.norm(drift) >= 0.01
+                    if abs(defocus) >= 0.01 and drift_ok:
+                        geoXYZ[0].append(geoPoints[i][0])
+                        geoXYZ[1].append(geoPoints[i][1])
+                        geoXYZ[2].append(defocus)
+                    else:
+                        log("WARNING: Measured defocus is 0. This geo point will not be considered.")
+                    sem.SetImageShift(ISX0, ISY0)                                                   # reset IS to center position
+                if len(geoXYZ[0]) >= 3:
+                    ##########
+                    # Source: https://math.stackexchange.com/q/99317
+                    # subtract out the centroid and take the SVD, extract the left singular vectors, the corresponding left singular vector is the normal vector of the best-fitting plane
+                    svd = np.linalg.svd(geoXYZ - np.mean(geoXYZ, axis=1, keepdims=True))
+                    left = svd[0]
+                    norm = left[:, -1]
+                    ##########        
+                    log(f"Fitted plane into cloud of {len(geoXYZ[0])} points ({len(geoPoints) - len(geoXYZ[0])} discarded).")
+                    log(f"Normal vector: {norm}")
+
+                    # Errors
+                    errors = []
+                    for point in zip(*geoXYZ):
+                        errors.append(np.dot(norm, point - np.mean(geoXYZ, axis=1)) ** 2)
+                    log(f"Fitting error: {np.mean(errors)}")
+
+                    if debug:
+                        log("DEBUG:\nGeo points [x, y, z, err]:")
+                        for point in zip(*geoXYZ, errors):
+                            log(f"# {point}", color=1)
+
+                    # Calculate pretilt and rotation
+                    sign = 1 if norm[1] <= 0 else -1
+                    pretilt = round(sign * np.degrees(np.arccos(norm[2])), 1)
+                    log(f"Estimated pretilt: {pretilt} degrees", style=1)
+                    rotation = round(-np.degrees(np.arctan(norm[0]/norm[1])), 1)
+                    log(f"Estimated rotation: {rotation} degrees", style=1)
+
+                    if startTilt * pretilt > 0:
+                        log("WARNING: Start tilt and pretilt have the same sign! If you want to compensate for the pretilt, the start tilt should have the opposite sign!")
+                else:
+                    log("WARNING: Not enough geo points could be checked successfully. Geometry could not be measured.")
+            else:
+                log("WARNING: Not enough geo points were defined. Geometry could not be measured.")
+
+        if autoStartTilt or tiltTargets != 0:
+            startTiltOri = startTilt
+            if tiltTargets != 0:
+                # Use tilt at which targets were selected as startTilt
+                startTilt = tiltTargets
+            elif autoStartTilt:
+                # Adjust start tilt to compensate for measured pretilt
+                startTilt = -int(round(np.degrees(np.arctan(np.sin(np.radians(pretilt)) * np.cos(np.radians(rotation)) / np.cos(np.radians(pretilt))))))
+            maxTilt = np.clip(maxTilt - startTiltOri + startTilt, -int(tiltLimit), int(tiltLimit))
+            minTilt = np.clip(minTilt - startTiltOri + startTilt, -int(tiltLimit), int(tiltLimit))
+
+            log("WARNING: Automatically adjusted tilt series parameters!")
+            log(f"Start: {startTilt} deg - Min/Max: {minTilt}/{maxTilt} deg ({step} deg increments)", style=1)
+
+            # Update branch steps
+            branchsteps = max(maxTilt - startTilt, abs(minTilt - startTilt)) / groupSize / step
+
+        tilt_schedule = build_tilt_schedule(tiltScheme, startTilt, minTilt, maxTilt, step, groupSize)
+        total_tilt_steps = len(tilt_schedule)
+        if tiltScheme == "continuous" and abs(startTilt - minTilt) > 1e-6:
+            log(f"NOTE: Continuous scheme collects {minTilt} to {maxTilt} deg; startTilt ({startTilt}) is not the first angle.")
+        log(f"Tilt series: {total_tilt_steps} angles ({tilt_schedule[0]} to {tilt_schedule[-1]} deg)")
+
+        first_tilt = tilt_schedule[0]
+        log("Tilting to start tilt angle...")
+        # backlash correction
+        is_x, is_y, *_ = sem.ReportImageShift()
+        sem.GoToLowDoseArea("V")
+        sem.SetImageShift(0, 0)
+        sem.SetImageShift(is_x, is_y)
+        sem.V()
+        sem.Copy("A", "O")
+
+        curTilt = int(round(float(sem.ReportTiltAngle())))
+
+        # Walk up if necessary
+        while abs(first_tilt - curTilt) > 10:
+            log(f"DEBUG: Doing walkup to {curTilt + (10 if first_tilt > curTilt else -10)}...")
+            sem.TiltTo(curTilt + (10 if first_tilt > curTilt else -10))
+            is_x, is_y, *_ = sem.ReportImageShift()
+            sem.GoToLowDoseArea("V")
+            sem.SetImageShift(0, 0)
+            sem.SetImageShift(is_x, is_y)
+            sem.V()
+            alignTo("O", debug)
+
+            sem.V()
+            sem.Copy("A", "O")
+            curTilt = int(round(float(sem.ReportTiltAngle())))
+
+        sem.TiltTo(first_tilt - step)
+        sem.TiltTo(first_tilt)
+
+        sem.V()
+        alignTo("O", debug)
+        is_x, is_y, *_ = sem.ReportImageShift()
+        sem.GoToLowDoseArea("R")
+        sem.SetImageShift(0, 0)
+        sem.SetImageShift(is_x, is_y)
+
+        if not tgtPattern and previewAli:
+            ronchi_before_preview_align("tracking target map preview alignment")
+            sem.LoadOtherMap(navID, "O")                                                            # preview ali before first tilt image is taken
+            sem.AcquireToMatchBuffer("O")                                                           # in case view image was saved for tracking target
+            alignTo("O", debug)
+
+        ISX0, ISY0, *_ = sem.ReportImageShift()
+        SSX0, SSY0 = sem.ReportSpecimenShift()
+
+        autofocus_apply(targetDefocus)
+        focus0 = float(sem.ReportDefocus())
+        positionFocus = focus0                                                                      # set maxDefocus as focus0 and add focus steps in loop
+        minFocus0 = focus0 - maxDefocus + minDefocus
+
+        is_x, is_y, *_ = sem.ReportImageShift()
+        sem.GoToLowDoseArea("R")
+        sem.SetImageShift(0, 0)
+        sem.SetImageShift(is_x, is_y)
+        s2ssMatrix = np.array(sem.StageToSpecimenMatrix(0)).reshape((2, 2))
+        is2ssMatrix = np.array(sem.ISToSpecimenMatrix(0)).reshape((2, 2))
+        ss2isMatrix = np.array(sem.SpecimenToISMatrix(0)).reshape((2, 2))
+        camX, camY, *_ = sem.CameraProperties()
+        c2ssMatrix = np.array(sem.CameraToSpecimenMatrix(0)).reshape((2, 2))
+        ss2cMatrix = np.array(sem.SpecimenToCameraMatrix(0)).reshape((2, 2))
+        if debug:
+            log("DEBUG: Conversion matrices:")
+            log(f"    Stage to Specimen: {s2ssMatrix}", color=1)
+            log(f"    IS to Specimen: {is2ssMatrix}", color=1)
+            log(f"    Image to Specimen: {c2ssMatrix}", color=1)
+            log(f"    Specimen to Camera: {ss2cMatrix}", color=1)
+
+        if previewAli:
+            sem.SetDefocus(min(focus0, focus0 - 5 - targetDefocus))                                 # set defocus for Preview to at least -5 micron
+    ### Target setup
+        log(f"Setting up {len(targets)} targets...")
+
+        posTemplate = {"SSX": 0, "SSY": 0, "focus": 0, "z0": 0, "n0": 0, "shifts": [], "angles": [], "ISXset": 0, "ISYset": 0, "ISXali": 0, "ISYali": 0, "dose": 0, "sec": 0, "skip": False, "c3_offset": None}
+        position = []
+        skippedTgts = 0
+        for i, tgt in enumerate(targets):
+            position.append([])
+            position[-1].append(copy.deepcopy(posTemplate))
+
+            log(f"Target {i + 1}...")
+            skip = False
+            if "skip" in tgt.keys() and tgt["skip"] == "True":
+                log(f"WARNING: Target [{str(i + 1).zfill(3)}] was set to be skipped.")
+                skip = True
+            if "SSX" not in tgt.keys() and "stageX" in tgt.keys():                                  # if SS coords are missing but stage coords are present, calc SS coords
+                tgt["SSX"], tgt["SSY"] = s2ssMatrix @ np.array([float(tgt["stageX"]) - float(targets[0]["stageX"]), float(tgt["stageY"]) - float(targets[0]["stageY"])])
+            if np.linalg.norm(np.array([tgt["SSX"], tgt["SSY"]], dtype=float)) > imageShiftLimit - alignLimit:
+                log(f"WARNING: Target [{str(i + 1).zfill(3)}] is too close to the image shift limit. This target will we skipped.")
+                skip = True
+
+            if skip: 
+                position[-1][0]["skip"] = True
+                position[-1].append(copy.deepcopy(position[-1][0]))
+                position[-1].append(copy.deepcopy(position[-1][0]))
+                skippedTgts += 1
+                continue
+
+            if tiltTargets == 0:
+                tiltScaling = np.cos(np.radians(pretilt * np.cos(np.radians(rotation)) + startTilt)) / np.cos(np.radians(pretilt * np.cos(np.radians(rotation)))) # stretch shifts from 0 tilt to startTilt
+            else:
+                tiltScaling = 1
+            log(f"DEBUG: Tilt scaling to start tilt [{startTilt}]: {tiltScaling}")
+
+            sem.ImageShiftByMicrons(float(tgt["SSX"]), float(tgt["SSY"]) * tiltScaling)             # apply relative shifts to find out absolute IS after realign to item
+            if (previewAli or viewAli):                                                             # adds initial dose, but makes sure start tilt image is on target
+                if alignToP:
+                    ronchi_before_preview_align(f"target {i + 1} preview alignment (alignToP)", pos=i, pn=0)
+                    x, y, binning, exp, *_ = sem.ImageProperties("P")
+                    sem.SetExposure("V", exp)
+                    sem.SetBinning("V", int(binning))
+                    is_x, is_y, *_ = sem.ReportImageShift()
+                    sem.GoToLowDoseArea("V")
+                    sem.SetImageShift(0, 0)
+                    sem.SetImageShift(is_x, is_y)
+                    sem.V()
+                    sem.CropCenterToSize("A", int(x), int(y))
+                    alignTo("P", debug)
+                    sem.RestoreCameraSet("V")
+                else:
+                    if "viewfile" in tgt.keys() and viewAli and i != 0:                             # skip for tracking target since it was already aligned after tilt to startTilt   
+                        sem.ReadOtherFile(0, "O", tgt["viewfile"])                                  # reads view file for first AlignTo instead
+                        is_x, is_y, *_ = sem.ReportImageShift()
+                        sem.GoToLowDoseArea("V")
+                        sem.SetImageShift(0, 0)
+                        sem.SetImageShift(is_x, is_y)
+                        sem.V()
+                        alignTo("O", debug)
+                        ASX, ASY = sem.ReportAlignShift()[4:6]
+                        log(f"Target alignment (View) error in X | Y: {round(ASX, 0)} nm | {round(ASY, 0)} nm")    
+                    if "tgtfile" in tgt.keys() and previewAli:                
+                        sem.ReadOtherFile(0, "O", tgt["tgtfile"])                                   # reads tgt file for first AlignTo instead
+                        is_x, is_y, *_ = sem.ReportImageShift()
+                        sem.GoToLowDoseArea("R")
+                        sem.SetImageShift(0, 0)
+                        sem.SetImageShift(is_x, is_y)
+                        ronchi_before_preview_align(f"target {i + 1} preview alignment (tgtfile)", pos=i, pn=0)
+                        sem.L()
+                        alignTo("O", debug)
+                        AISX, AISY, ASX, ASY = sem.ReportAlignShift()[2:6]
+                        log(f"Target alignment (Prev) error in X | Y: {round(ASX, 0)} nm | {round(ASY, 0)} nm")
+                    elif "viewfile" in tgt.keys() and previewAli:
+                        # Use align between mags to align preview image to view image
+                        if not viewAli:
+                            #sem.GoToLowDoseArea("V")                                                # If ReadOtherFile while in Record, pixel size of Record is used and AlignBetweenMags fails (seems to be fixed in 4.2beta from 14.08.2024)
+                            sem.ReadOtherFile(0, "O", tgt["viewfile"])                              # reads view file for first AlignTo instead
+                        else:
+                            # If View image was already aligned, take new centered View image at startTilt and use as reference instead
+                            is_x, is_y, *_ = sem.ReportImageShift()
+                            sem.GoToLowDoseArea("V")
+                            sem.SetImageShift(0, 0)
+                            sem.SetImageShift(is_x, is_y)
+                            sem.V()
+                            sem.Copy("A", "O")
+                        # Check defocus offset
+                        is_x, is_y, *_ = sem.ReportImageShift()
+                        sem.GoToLowDoseArea("R")                                                    # Switch to R before applying defocus offset to not mess with potential mP/nP offsets between View and Rec
+                        sem.SetImageShift(0, 0)
+                        sem.SetImageShift(is_x, is_y)
+                        defocus_offset = max(-10, sem.ReportLDDefocusOffset("V"))
+                        if defocus_offset != 0:
+                            sem.ChangeFocus(defocus_offset)                                             # Higher defocus for better correlation, but max at 10 to avoid major distortions
+                        ronchi_before_preview_align(f"target {i + 1} preview alignment (view to Record)", pos=i, pn=0)
+                        sem.L()
+                        sem.AlignBetweenMags("O", -1, -1, -1)
+                        AISX, AISY, ASX, ASY = sem.ReportAlignShift()[2:6]
+                        if defocus_offset != 0:
+                            sem.ChangeFocus(-defocus_offset)                                            # Reset focus
+                        log(f"Target alignment (Pv2V) error in X | Y: {round(ASX, 0)} nm | {round(ASY, 0)} nm")           
+
+                    # Save preview image as new reference
+                    if refFromPreview:
+                        sem.OpenNewFile(os.path.splitext(tgt["tgtfile"])[0] + "_tempref.mrc")
+                        sem.S()
+                        sem.CloseFile()
+                        position[-1][0]["ISXali"] = AISX                                            # Save shifts to real reference
+                        position[-1][0]["ISYali"] = AISY 
+
+                sem.GoToLowDoseArea("R")
+            ISXset, ISYset, *_ = sem.ReportImageShift()
+            SSX, SSY = sem.ReportSpecimenShift()
+            sem.SetImageShift(ISX0, ISY0)                                                           # reset IS to center position    
+
+            z0_ini = np.tan(np.radians(pretilt)) * (np.cos(np.radians(rotation)) * float(tgt["SSY"]) - np.sin(np.radians(rotation)) * float(tgt["SSX"]))
+            correctedFocus = positionFocus - z0_ini * np.cos(np.radians(startTilt)) - float(tgt["SSY"]) * np.sin(np.radians(startTilt))
+
+            position[-1][0]["SSX"] = float(SSX)
+            position[-1][0]["SSY"] = float(SSY)
+            position[-1][0]["focus"] = correctedFocus
+            position[-1][0]["z0"] = z0_ini                                                          # offset from eucentric height (will be refined during collection)
+            position[-1][0]["n0"] = float(tgt["SSY"])                                               # offset from tilt axis
+            position[-1][0]["ISXset"] = float(ISXset)
+            position[-1][0]["ISYset"] = float(ISYset)
+
+            position[-1].append(copy.deepcopy(position[-1][0]))                                     # plus and minus branch start with same values
+            position[-1].append(copy.deepcopy(position[-1][0]))
+
+            position[-1][1]["n0"] -= taOffsetPos
+            position[-1][2]["n0"] -= taOffsetNeg
+
+            positionFocus += stepDefocus                                                            # adds defocus step between targets and resets to initial defocus if minDefocus is surpassed
+            if positionFocus > minFocus0: positionFocus = focus0
+
+    ### Start tilt
+        log("Start tilt series...", style=1)
+
+        dewarFillTime = 0
+        maxProgress = total_tilt_steps * (len(position) - skippedTgts)
+        resumePercent = 0
+        startTime = sem.ReportClock()
+        lastSlitCheck = startTime
+
+        geo = [[], [], []]
+        tiltStepCounter = 0
+        schedule_start = 0
+        resumePN = 0
+        resumePlus = startTilt
+        resumeMinus = startTilt
+        posResumed = -1
+
+    ### Recovery attempt
+    else:
+        if realign:
+            sem.MoveToNavItem(navID)
+            if alignToP:
+                x, y, binning, exp, *_ = sem.ImageProperties("P")
+                sem.SetExposure("V", exp)
+                sem.SetBinning("V", int(binning))
+                is_x, is_y, *_ = sem.ReportImageShift()
+                sem.GoToLowDoseArea("V")
+                sem.SetImageShift(0, 0)
+                sem.SetImageShift(is_x, is_y)
+                sem.V()
+                sem.CropCenterToSize("A", int(x), int(y))
+                alignTo("P", debug)
+                sem.RestoreCameraSet("V")
+            else:
+                sem.RealignToOtherItem(navID, 1)
+        position = []
+        skippedTgts = 0
+        for pos in range(len(targets)):
+            position.append([{},{},{}])
+            for i in range(2):
+                position[-1][i+1]["SSX"] = float(savedRun[pos][i]["SSX"])
+                position[-1][i+1]["SSY"] = float(savedRun[pos][i]["SSY"])
+                position[-1][i+1]["focus"] = float(savedRun[pos][i]["focus"])
+                position[-1][i+1]["z0"] = float(savedRun[pos][i]["z0"])
+                position[-1][i+1]["n0"] = float(savedRun[pos][i]["n0"])
+                if savedRun[pos][i]["shifts"] != "" and not realign:
+                    position[-1][i+1]["shifts"] = [float(shift) for shift in savedRun[pos][i]["shifts"].split(",")]
+                else:
+                    position[-1][i+1]["shifts"] = []
+                if savedRun[pos][i]["angles"] != "" and not realign:
+                    position[-1][i+1]["angles"] = [float(angle) for angle in savedRun[pos][i]["angles"].split(",")]
+                else:
+                    position[-1][i+1]["angles"] = []
+                position[-1][i+1]["ISXset"] = float(savedRun[pos][i]["ISXset"])
+                position[-1][i+1]["ISYset"] = float(savedRun[pos][i]["ISYset"])
+                position[-1][i+1]["ISXali"] = float(savedRun[pos][i]["ISXali"])
+                position[-1][i+1]["ISYali"] = float(savedRun[pos][i]["ISYali"])
+                position[-1][i+1]["dose"] = float(savedRun[pos][i]["dose"])
+                position[-1][i+1]["sec"] = int(savedRun[pos][i]["sec"])
+                position[-1][i+1]["skip"] = True if savedRun[pos][i]["skip"] == "True" or targets[pos]["skip"] == "True" else False
+
+            sem.AreaForCumulRecordDose(pos + 1)                                                     # set dose accumulator to highest recorded prior dose
+            sem.AccumulateRecordDose(max(position[-1][1]["dose"], position[-1][2]["dose"]))
+
+            if targets[pos]["skip"] == "True":
+                skippedTgts += 1
+
+        tilt_schedule = build_tilt_schedule(tiltScheme, startTilt, minTilt, maxTilt, step, groupSize)
+        total_tilt_steps = len(tilt_schedule)
+        log(f"Tilt series: {total_tilt_steps} angles ({tilt_schedule[0]} to {tilt_schedule[-1]} deg)")
+
+        posResumed = resume["pos"] + 1
+        tiltStepCounter = resume["sec"]
+        schedule_start = resume["sec"]
+
+        resumePlus = startTilt
+        resumeMinus = startTilt
+        resumePN = 1
+        for idx in range(schedule_start):
+            t = tilt_schedule[idx]
+            if t >= startTilt:
+                resumePlus = t
+            else:
+                resumeMinus = t
+        if schedule_start < total_tilt_steps:
+            resumePN = 1 if tilt_schedule[schedule_start] >= startTilt else 2
+        elif schedule_start > 0:
+            resumePN = 1 if tilt_schedule[schedule_start - 1] >= startTilt else 2
+
+        dewarFillTime = 0
+        maxProgress = total_tilt_steps * (len(position) - skippedTgts)
+        # progress = collected images * (positions - skipped positions) + current position - skipped positions scaled assuming homogeneous distribution of skipped positions
+        progress = resume["sec"] * (len(position) - skippedTgts) + resume["pos"] - skippedTgts * resume["pos"] / len(position)
+        resumePercent = round(100 * (progress / maxProgress), 1)
+
+        sem.GoToLowDoseArea("R")
+        origMag, *_ = sem.ReportMag()
+        s2ssMatrix = np.array(sem.StageToSpecimenMatrix(0)).reshape((2, 2))
+        is2ssMatrix = np.array(sem.ISToSpecimenMatrix(0)).reshape((2, 2))
+        camX, camY, *_ = sem.CameraProperties()
+        c2ssMatrix = np.array(sem.CameraToSpecimenMatrix(0)).reshape((2, 2))
+        ss2cMatrix = np.array(sem.SpecimenToCameraMatrix(0)).reshape((2, 2))
+        if debug:
+            log("DEBUG: Conversion matrices:")
+            log(f"    Stage to Specimen: {s2ssMatrix}", color=1)
+            log(f"    IS to Specimen: {is2ssMatrix}", color=1)
+            log(f"    Image to Specimen: {c2ssMatrix}", color=1)
+            log(f"    Specimen to Camera: {ss2cMatrix}", color=1)
+
+        focus0 = (position[0][1]["focus"] + position[0][2]["focus"]) / 2                            # get estimate for original microscope focus value by taking average of both branches of tracking target
+
+        startTime = sem.ReportClock()
+        lastSlitCheck = startTime
+
+
+    ### Tilt series
+    run_tilt_series(schedule_start)
+
+    ### Finish
+    sem.ClearStatusLine(0)
+    if trackMag > 0:
+        sem.RestoreLowDoseParams("R")                                                               # restore record mag before script just in case
+    sem.TiltTo(0)
+    sem.SetDefocus(focus0)
+    sem.SetImageShift(0, 0)
+    sem.CloseFile()
+    updateTargets(runFileName, targets)
+
+    # Format final tilt stacks
+    if delFinalStack:
+        for target in targets:
+            if checkFrames(target["tsfile"]):
+                os.remove(target["tsfile"])
+                log(f"NOTE: {target['tsfile']} was deleted. Please use saved frames to generate the tilt series.")
+    else:
+        if sortByTilt or binFinalStack > 1:
+            for target in targets:
+                if sortByTilt:
+                    sortTS(target["tsfile"])
+                if binFinalStack > 1:
+                    binStack(target["tsfile"], binFinalStack)
+
+    totalTime = round(sem.ReportClock() / 60, 1)
+    perTime = round(totalTime / len(position), 1)
+    if recoverInput == 1:
+        perTime = f"since recovery: {perTime}"
+    log(datetime.now().strftime("%d.%m.%Y %H:%M:%S"))
+    log(f"##### All tilt series completed in {totalTime} min ({perTime} min per tilt series) #####", color=3, style=1)
+    sem.SaveLog()
+    return True
+
 def dumpVars(filename):
     output = "# PACEtomo settings from " + datetime.now().strftime("%d.%m.%Y %H:%M:%S") + "\n"
     save = False
@@ -1682,660 +2465,46 @@ if beamTiltComp:                                                                
 if tgtPattern:                                                                                  # initialize in case tgts file contains values
     vecA0 = vecA1 = vecB0 = vecB1 = size = None
 
-### Find target file
-sem.ReportNavItem()
-navID = int(sem.GetVariable("navIndex"))
-navNote = sem.GetVariable("navNote")
-fileStem, fileExt = os.path.splitext(navNote)
-curDir = sem.ReportDirectory()
 
-if fileStem != "" and fileExt == ".txt":
-    tf = sorted(glob.glob(os.path.join(curDir, fileStem + ".txt")))                             # find  tgts file
-    tfr = sorted(glob.glob(os.path.join(curDir, fileStem + "_run??.txt")))                      # find run files but not copied tgts file
-    tf.extend(tfr)                                                                              # only add run files to list of considered files
-    while tf == []:
-        searchInput = sem.YesNoBox("\n".join(["Target file not found! Please choose the directory containing the target file!", "WARNING: All future target files will be searched here!"]))
-        if searchInput == 0:
-            sem.Exit()
-        sem.UserSetDirectory("Please choose the directory containing the target file!")
-        curDir = sem.ReportDirectory()
-        tf = sorted(glob.glob(os.path.join(curDir, fileStem + ".txt")))                         # find  tgts file
-        tfr = sorted(glob.glob(os.path.join(curDir, fileStem + "_run??.txt")))                  # find run files but not copied tgts file
-        tf.extend(tfr)                                                                          # only add run files to list of considered files
-else:
-    sem.OKBox("The navigator item note does not contain a target file. Make sure to setup PACEtomo targets using the selectTargets script and select the Navigator item marked to be acquired!")
-    sem.Exit()
 
-# Check if frame folder is set reasonably
-if sem.ReportCameraProperty(0, "K2Type") > 0:
-    framePath = sem.ReportFrameSavingPath()
-    framePar = os.path.abspath(os.path.join(framePath, os.pardir))
-    curPar = os.path.abspath(os.path.join(curDir, os.pardir))
-    if (framePath == "NONE" or (framePath not in curDir and curDir not in framePath and framePar not in curDir and curPar not in framePath)) and sem.IsVariableDefined("warningFramePath") == 0:
-        sem.Pause("WARNING: Current frame path (" + framePath + ") does not seem plausible or camera does not save frames.")
-        sem.SetPersistentVar("warningFramePath", "")
-else:
-    log("WARNING: Camera frame path could not be obtained for your camera.")
-
-sem.SaveLogOpenNew(navNote.split("_tgts")[0])
-
+### Multi-nav batch entry
 log(f"PACEtomo Version {versionPACE}", color=5, style=1)
 sem.ProgramTimeStamps()
 
-# Open last tgts or tgts_run file and read contents
-targets, savedRun, resume, geoPoints = parseTargets(tf[-1])
-
+items_to_run = resolve_nav_items()
+validate_nav_lists()
 checkRonchigramSetup()
 
-# Sanity check of settings
-if maxDefocus > minDefocus:
-    minDefocus, maxDefocus = maxDefocus, minDefocus
-if maxTilt < minTilt:
-    minTilt, maxTilt = maxTilt, minTilt
-if (maxTilt - startTilt) % step != 0 or (startTilt - minTilt) % step != 0:
-    maxTilt = round(int((maxTilt - startTilt) / step) * step + startTilt, 1)
-    minTilt = round(int((minTilt - startTilt) / step) * step + startTilt, 1)
-    print(f"WARNING: Tilt increment does not divide evenly into tilt range. Tilt range will be adjusted to: {minTilt}, {maxTilt}")
+start_idx = batch_resume_start_index(items_to_run)
+if start_idx >= len(items_to_run):
+    log("NOTE: All nav items in list appear complete.")
+    sem.Exit()
+
+batch_recover_accepted = False
+if start_idx < len(items_to_run):
+    curDir_batch = sem.ReportDirectory()
+    tf_path = get_nav_tgts_path(items_to_run[start_idx], curDir_batch)
+    if tf_path and nav_run_status(tf_path) == "incomplete":
+        nav_idx_resume = items_to_run[start_idx]
+        batch_recover_accepted = sem.YesNoBox(
+            f"The target file for nav item {nav_idx_resume} contains recovery data. "
+            "Do you want to attempt to continue the acquisition? Tracking accuracy might be impacted."
+        ) == 1
+        if not batch_recover_accepted:
+            sem.AllowFileOverwrite(1)
+
+for item_index in range(start_idx, len(items_to_run)):
+    nav_idx = items_to_run[item_index]
+    log(f"===== Nav item {nav_idx} ({item_index + 1}/{len(items_to_run)}) =====", style=1)
+    ok = run_one_nav_item(
+        nav_idx,
+        item_index,
+        batch_recover=(item_index == start_idx),
+        batch_recover_accepted=batch_recover_accepted,
+    )
+    if not ok:
+        log(f"WARNING: Nav item {nav_idx} was skipped due to an error.")
+    if item_index < len(items_to_run) - 1:
+        reset_scope_between_nav_items()
 
-### Recovery data
-recoverInput = 0
-recover = False
-realign = False
-if savedRun != False and (resume["sec"] > 0 or resume["pos"] > 0):
-    recoverInput = sem.YesNoBox("The target file contains recovery data. Do you want to attempt to continue the acquisition? Tracking accuracy might be impacted.")
-    if recoverInput == 1:
-        recover = True
-        while sem.ReportFileNumber() > 0:
-            sem.CloseFile()
-
-        stageX, stageY, stageZ = sem.ReportStageXYZ()
-        if abs(stageX - float(targets[0]["stageX"])) > 1.0 or abs(stageY - float(targets[0]["stageY"])) > 1.0: # test if stage was moved (with 1 micron wiggle room)
-            userRealign = sem.YesNoBox("It seems that the stage was moved since stopping acquisition. Do you want to realign to the tracking target before resuming? This will also reset prediction parameters reducing tracking accuracy.")    
-            realign = True if userRealign == 1 else False
-    else:
-        sem.AllowFileOverwrite(1)
-
-### Start setup
-dumpVars(os.path.splitext(os.path.basename(tf[-1]))[0])                                         # write settings vars to text file
-
-sem.ResetClock()
-
-targetDefocus = maxDefocus                                                                      # use highest defocus for tracking TS
-sem.SetTargetDefocus(targetDefocus)
-
-# Collect exposure settings
-expTime = sem.ReportExposure("R")[0]
-
-if recover:
-    log("##### Recovery attempt of PACEtomo with parameters: #####", style=1)
-else:
-    log("##### Starting new PACEtomo with parameters: #####", style=1)
-log(f"Start: {startTilt} deg - Min/Max: {minTilt}/{maxTilt} deg ({step} deg increments)")
-log(f"Tilt scheme: {tiltScheme}" + (f" (groupSize={groupSize})" if tiltScheme == "dose_symmetric" else ""))
-log(f"Data points used: {dataPoints}")
-log(f"Target defocus range (min/max/step): {minDefocus}/{maxDefocus}/{stepDefocus}")
-log(f"Defocus method (measure / autofocus): {defocusMethod}")
-log(f"Sample pretilt (rotation): {pretilt} ({rotation})")
-log(f"Tilt axis offset: {round(tiltAxisOffset, 3)}")
-log(f"Focus correction slope: {focusSlope}")
-log(f"Exposure time per tilt: {round(expTime, 3)} s (total: {round(expTime * int((maxTilt - minTilt) / step), 3)} s)")
-
-if trackMag > 0:
-    log("WARNING: A magnification offset for the tracking target changes the Low Dose Record mode temporarily. Please double-check your Record mode in case the script is stopped prematurely or crashes!")
-
-if startTilt * pretilt > 0:
-    log("WARNING: Start tilt and pretilt have the same sign! If you want to compensate for the pretilt, the start tilt should have the opposite sign!")
-
-### Create run file
-counter = 1
-while os.path.exists(os.path.join(curDir, fileStem + "_run" + str(counter).zfill(2) + ".txt")):
-    counter += 1
-runFileName = os.path.join(curDir, fileStem + "_run" + str(counter).zfill(2) + ".txt")
-
-### Initial actions
-if not recover:
-    log("Moving to target area...")
-
-    sem.SetCameraArea("V", "F")                                                                 # set View to Full for Eucentricity
-    sem.MoveToNavItem(navID)
-    log("Refining eucentricity...")
-    sem.GoToLowDoseArea("V")
-    is_x, is_y, *_ = sem.ReportImageShift()
-    sem.SetImageShift(0, 0)
-    sem.Eucentricity(1)
-    sem.SetImageShift(is_x, is_y)
-    sem.UpdateItemZ()
-    sem.RestoreCameraSet("V")
-
-    log("Realigning to target 1...")
-    if alignToP:
-        x, y, binning, exp, *_ = sem.ImageProperties("P")
-        sem.SetExposure("V", exp)
-        sem.SetBinning("V", int(binning))
-        is_x, is_y, *_ = sem.ReportImageShift()
-        sem.GoToLowDoseArea("V")
-        sem.SetImageShift(0, 0)
-        sem.SetImageShift(is_x, is_y)
-        sem.V()
-        sem.CropCenterToSize("A", int(x), int(y))
-        alignTo("P", debug)
-        sem.RestoreCameraSet("V")
-        if refineVec and tgtPattern and size is not None:
-            if float(sem.ReportDefocus()) < -50:
-                log("WARNING: Large defocus offsets for View can cause additional offsets in image shift upon mag change.")
-            size = int(size)
-            log("Refining target pattern...")
-            is_x, is_y, *_ = sem.ReportImageShift()
-            sem.GoToLowDoseArea("R")
-            sem.SetImageShift(0, 0)
-            sem.SetImageShift(is_x, is_y)
-            ISX0, ISY0, *_ = sem.ReportImageShift()
-            SSX0, SSY0 = sem.ReportSpecimenShift()
-            log(f"Vector A: ({vecA0}, {vecA1})")
-            shiftx = size * vecA0
-            shifty = size * vecA1
-            is_x, is_y, *_ = sem.ReportImageShift()
-            sem.GoToLowDoseArea("V")
-            sem.SetImageShift(0, 0)
-            sem.SetImageShift(is_x, is_y)
-            sem.ImageShiftByMicrons(shiftx, shifty)
-            sem.V()
-            alignTo("P", debug)
-            is_x, is_y, *_ = sem.ReportImageShift()
-            sem.GoToLowDoseArea("R")
-            sem.SetImageShift(0, 0)
-            sem.SetImageShift(is_x, is_y)
-
-            SSX, SSY = sem.ReportSpecimenShift()
-            SSX -= SSX0
-            SSY -= SSY0        
-            if np.linalg.norm([shiftx - SSX, shifty - SSY]) > 0.5:
-                log("WARNING: Refined vector differs by more than 0.5 microns! Original vectors will be used.")
-            else:
-                vecA0, vecA1 = (round(SSX / size, 4), round(SSY / size, 4))
-                log(f"Refined vector A: ({vecA0}, {vecA1})")
-
-                sem.SetImageShift(ISX0, ISY0)                                                   # reset IS to center position
-                log(f"Vector B: ({vecB0}, {vecB1})")
-                shiftx = size * vecB0
-                shifty = size * vecB1
-                sem.ImageShiftByMicrons(shiftx, shifty)
-
-                is_x, is_y, *_ = sem.ReportImageShift()
-                sem.GoToLowDoseArea("V")
-                sem.SetImageShift(0, 0)
-                sem.SetImageShift(is_x, is_y)
-                sem.V()
-                alignTo("P", debug)
-                is_x, is_y, *_ = sem.ReportImageShift()
-                sem.GoToLowDoseArea("R")
-                sem.SetImageShift(0, 0)
-                sem.SetImageShift(is_x, is_y)
-                SSX, SSY = sem.ReportSpecimenShift()
-                SSX -= SSX0
-                SSY -= SSY0
-                if np.linalg.norm([shiftx - SSX, shifty - SSY]) > 0.5:
-                    log("WARNING: Refined vector differs by more than 0.5 microns! Original vectors will be used.")
-                else:
-                    vecB0, vecB1 = (round(SSX / size, 4), round(SSY / size, 4))
-                    log(f"Refined vector B: ({vecB0}, {vecB1})")
-
-                    targetNo = 0
-                    for i in range(-size,size+1):
-                        for j in range(-size,size+1):
-                            if i == j == 0: continue
-                            targetNo += 1
-                            SSX = i * vecA0 + j * vecB0
-                            SSY = i * vecA1 + j * vecB1
-                            targets[targetNo]["SSX"] = str(SSX)
-                            targets[targetNo]["SSY"] = str(SSY)
-                    log("NOTE: Target pattern was overwritten using refined vectors.")
-            sem.SetImageShift(ISX0, ISY0)                                                       # reset IS to center position
-    else:
-        #sem.RealignToOtherItem(navID, 1) # <= sometimes unreliable
-        realignTo(nav_id=navID, target=targets[0])
-
-    if measureGeo:
-        log("Measuring geometry...")
-        if int(round(float(sem.ReportTiltAngle()))) != 0:
-            sem.TiltTo(0)
-        if len(geoPoints) > 0 and "SSX" in geoPoints[0].keys():                                 # if there are geo points in tgts file, adjust format from dict to list
-            geoPoints = [[point["SSX"], point["SSY"]] for point in geoPoints]
-        if len(geoPoints) < 3 and tgtPattern and size is not None:
-            if size > 1:
-                geoPoints.append([0.5 * (vecA0 + vecB0), 0.5 * (vecA1 + vecB1)])
-            geoPoints.append([(size - 0.5) * (vecA0 + vecB0), (size - 0.5) * (vecA1 + vecB1)])
-            geoPoints.append([(size - 0.5) * (vecA0 - vecB0), (size - 0.5) * (vecA1 - vecB1)])
-            geoPoints.append([(size - 0.5) * (-vecA0 + vecB0), (size - 0.5) * (-vecA1 + vecB1)])
-            geoPoints.append([(size - 0.5) * (-vecA0 - vecB0), (size - 0.5) * (-vecA1 - vecB1)])
-
-        # Clean geo_points beyond image shift limit
-        geoPoints = [point for point in geoPoints if np.linalg.norm(np.array([point[0], point[1]], dtype=float)) < imageShiftLimit]
-
-        if len(geoPoints) >= 3:
-            geoXYZ = [[], [], []]
-            sem.GoToLowDoseArea("R")
-            ISX0, ISY0, *_ = sem.ReportImageShift()
-            for i in range(len(geoPoints)):
-                sem.ImageShiftByMicrons(geoPoints[i][0], geoPoints[i][1])
-                defocus, drift = measure_defocus()
-                drift_ok = defocusMethod == "ctf" or np.linalg.norm(drift) >= 0.01
-                if abs(defocus) >= 0.01 and drift_ok:
-                    geoXYZ[0].append(geoPoints[i][0])
-                    geoXYZ[1].append(geoPoints[i][1])
-                    geoXYZ[2].append(defocus)
-                else:
-                    log("WARNING: Measured defocus is 0. This geo point will not be considered.")
-                sem.SetImageShift(ISX0, ISY0)                                                   # reset IS to center position
-            if len(geoXYZ[0]) >= 3:
-                ##########
-                # Source: https://math.stackexchange.com/q/99317
-                # subtract out the centroid and take the SVD, extract the left singular vectors, the corresponding left singular vector is the normal vector of the best-fitting plane
-                svd = np.linalg.svd(geoXYZ - np.mean(geoXYZ, axis=1, keepdims=True))
-                left = svd[0]
-                norm = left[:, -1]
-                ##########        
-                log(f"Fitted plane into cloud of {len(geoXYZ[0])} points ({len(geoPoints) - len(geoXYZ[0])} discarded).")
-                log(f"Normal vector: {norm}")
-
-                # Errors
-                errors = []
-                for point in zip(*geoXYZ):
-                    errors.append(np.dot(norm, point - np.mean(geoXYZ, axis=1)) ** 2)
-                log(f"Fitting error: {np.mean(errors)}")
-
-                if debug:
-                    log("DEBUG:\nGeo points [x, y, z, err]:")
-                    for point in zip(*geoXYZ, errors):
-                        log(f"# {point}", color=1)
-
-                # Calculate pretilt and rotation
-                sign = 1 if norm[1] <= 0 else -1
-                pretilt = round(sign * np.degrees(np.arccos(norm[2])), 1)
-                log(f"Estimated pretilt: {pretilt} degrees", style=1)
-                rotation = round(-np.degrees(np.arctan(norm[0]/norm[1])), 1)
-                log(f"Estimated rotation: {rotation} degrees", style=1)
-
-                if startTilt * pretilt > 0:
-                    log("WARNING: Start tilt and pretilt have the same sign! If you want to compensate for the pretilt, the start tilt should have the opposite sign!")
-            else:
-                log("WARNING: Not enough geo points could be checked successfully. Geometry could not be measured.")
-        else:
-            log("WARNING: Not enough geo points were defined. Geometry could not be measured.")
-
-    if autoStartTilt or tiltTargets != 0:
-        startTiltOri = startTilt
-        if tiltTargets != 0:
-            # Use tilt at which targets were selected as startTilt
-            startTilt = tiltTargets
-        elif autoStartTilt:
-            # Adjust start tilt to compensate for measured pretilt
-            startTilt = -int(round(np.degrees(np.arctan(np.sin(np.radians(pretilt)) * np.cos(np.radians(rotation)) / np.cos(np.radians(pretilt))))))
-        maxTilt = np.clip(maxTilt - startTiltOri + startTilt, -int(tiltLimit), int(tiltLimit))
-        minTilt = np.clip(minTilt - startTiltOri + startTilt, -int(tiltLimit), int(tiltLimit))
-
-        log("WARNING: Automatically adjusted tilt series parameters!")
-        log(f"Start: {startTilt} deg - Min/Max: {minTilt}/{maxTilt} deg ({step} deg increments)", style=1)
-
-        # Update branch steps
-        branchsteps = max(maxTilt - startTilt, abs(minTilt - startTilt)) / groupSize / step
-
-    tilt_schedule = build_tilt_schedule(tiltScheme, startTilt, minTilt, maxTilt, step, groupSize)
-    total_tilt_steps = len(tilt_schedule)
-    if tiltScheme == "continuous" and abs(startTilt - minTilt) > 1e-6:
-        log(f"NOTE: Continuous scheme collects {minTilt} to {maxTilt} deg; startTilt ({startTilt}) is not the first angle.")
-    log(f"Tilt series: {total_tilt_steps} angles ({tilt_schedule[0]} to {tilt_schedule[-1]} deg)")
-
-    first_tilt = tilt_schedule[0]
-    log("Tilting to start tilt angle...")
-    # backlash correction
-    is_x, is_y, *_ = sem.ReportImageShift()
-    sem.GoToLowDoseArea("V")
-    sem.SetImageShift(0, 0)
-    sem.SetImageShift(is_x, is_y)
-    sem.V()
-    sem.Copy("A", "O")
-
-    curTilt = int(round(float(sem.ReportTiltAngle())))
-
-    # Walk up if necessary
-    while abs(first_tilt - curTilt) > 10:
-        log(f"DEBUG: Doing walkup to {curTilt + (10 if first_tilt > curTilt else -10)}...")
-        sem.TiltTo(curTilt + (10 if first_tilt > curTilt else -10))
-        is_x, is_y, *_ = sem.ReportImageShift()
-        sem.GoToLowDoseArea("V")
-        sem.SetImageShift(0, 0)
-        sem.SetImageShift(is_x, is_y)
-        sem.V()
-        alignTo("O", debug)
-
-        sem.V()
-        sem.Copy("A", "O")
-        curTilt = int(round(float(sem.ReportTiltAngle())))
-
-    sem.TiltTo(first_tilt - step)
-    sem.TiltTo(first_tilt)
-
-    sem.V()
-    alignTo("O", debug)
-    is_x, is_y, *_ = sem.ReportImageShift()
-    sem.GoToLowDoseArea("R")
-    sem.SetImageShift(0, 0)
-    sem.SetImageShift(is_x, is_y)
-
-    if not tgtPattern and previewAli:
-        ronchi_before_preview_align("tracking target map preview alignment")
-        sem.LoadOtherMap(navID, "O")                                                            # preview ali before first tilt image is taken
-        sem.AcquireToMatchBuffer("O")                                                           # in case view image was saved for tracking target
-        alignTo("O", debug)
-
-    ISX0, ISY0, *_ = sem.ReportImageShift()
-    SSX0, SSY0 = sem.ReportSpecimenShift()
-
-    autofocus_apply(targetDefocus)
-    focus0 = float(sem.ReportDefocus())
-    positionFocus = focus0                                                                      # set maxDefocus as focus0 and add focus steps in loop
-    minFocus0 = focus0 - maxDefocus + minDefocus
-
-    is_x, is_y, *_ = sem.ReportImageShift()
-    sem.GoToLowDoseArea("R")
-    sem.SetImageShift(0, 0)
-    sem.SetImageShift(is_x, is_y)
-    s2ssMatrix = np.array(sem.StageToSpecimenMatrix(0)).reshape((2, 2))
-    is2ssMatrix = np.array(sem.ISToSpecimenMatrix(0)).reshape((2, 2))
-    ss2isMatrix = np.array(sem.SpecimenToISMatrix(0)).reshape((2, 2))
-    camX, camY, *_ = sem.CameraProperties()
-    c2ssMatrix = np.array(sem.CameraToSpecimenMatrix(0)).reshape((2, 2))
-    ss2cMatrix = np.array(sem.SpecimenToCameraMatrix(0)).reshape((2, 2))
-    if debug:
-        log("DEBUG: Conversion matrices:")
-        log(f"    Stage to Specimen: {s2ssMatrix}", color=1)
-        log(f"    IS to Specimen: {is2ssMatrix}", color=1)
-        log(f"    Image to Specimen: {c2ssMatrix}", color=1)
-        log(f"    Specimen to Camera: {ss2cMatrix}", color=1)
-
-    if previewAli:
-        sem.SetDefocus(min(focus0, focus0 - 5 - targetDefocus))                                 # set defocus for Preview to at least -5 micron
-### Target setup
-    log(f"Setting up {len(targets)} targets...")
-
-    posTemplate = {"SSX": 0, "SSY": 0, "focus": 0, "z0": 0, "n0": 0, "shifts": [], "angles": [], "ISXset": 0, "ISYset": 0, "ISXali": 0, "ISYali": 0, "dose": 0, "sec": 0, "skip": False, "c3_offset": None}
-    position = []
-    skippedTgts = 0
-    for i, tgt in enumerate(targets):
-        position.append([])
-        position[-1].append(copy.deepcopy(posTemplate))
-
-        log(f"Target {i + 1}...")
-        skip = False
-        if "skip" in tgt.keys() and tgt["skip"] == "True":
-            log(f"WARNING: Target [{str(i + 1).zfill(3)}] was set to be skipped.")
-            skip = True
-        if "SSX" not in tgt.keys() and "stageX" in tgt.keys():                                  # if SS coords are missing but stage coords are present, calc SS coords
-            tgt["SSX"], tgt["SSY"] = s2ssMatrix @ np.array([float(tgt["stageX"]) - float(targets[0]["stageX"]), float(tgt["stageY"]) - float(targets[0]["stageY"])])
-        if np.linalg.norm(np.array([tgt["SSX"], tgt["SSY"]], dtype=float)) > imageShiftLimit - alignLimit:
-            log(f"WARNING: Target [{str(i + 1).zfill(3)}] is too close to the image shift limit. This target will we skipped.")
-            skip = True
-
-        if skip: 
-            position[-1][0]["skip"] = True
-            position[-1].append(copy.deepcopy(position[-1][0]))
-            position[-1].append(copy.deepcopy(position[-1][0]))
-            skippedTgts += 1
-            continue
-
-        if tiltTargets == 0:
-            tiltScaling = np.cos(np.radians(pretilt * np.cos(np.radians(rotation)) + startTilt)) / np.cos(np.radians(pretilt * np.cos(np.radians(rotation)))) # stretch shifts from 0 tilt to startTilt
-        else:
-            tiltScaling = 1
-        log(f"DEBUG: Tilt scaling to start tilt [{startTilt}]: {tiltScaling}")
-
-        sem.ImageShiftByMicrons(float(tgt["SSX"]), float(tgt["SSY"]) * tiltScaling)             # apply relative shifts to find out absolute IS after realign to item
-        if (previewAli or viewAli):                                                             # adds initial dose, but makes sure start tilt image is on target
-            if alignToP:
-                ronchi_before_preview_align(f"target {i + 1} preview alignment (alignToP)", pos=i, pn=0)
-                x, y, binning, exp, *_ = sem.ImageProperties("P")
-                sem.SetExposure("V", exp)
-                sem.SetBinning("V", int(binning))
-                is_x, is_y, *_ = sem.ReportImageShift()
-                sem.GoToLowDoseArea("V")
-                sem.SetImageShift(0, 0)
-                sem.SetImageShift(is_x, is_y)
-                sem.V()
-                sem.CropCenterToSize("A", int(x), int(y))
-                alignTo("P", debug)
-                sem.RestoreCameraSet("V")
-            else:
-                if "viewfile" in tgt.keys() and viewAli and i != 0:                             # skip for tracking target since it was already aligned after tilt to startTilt   
-                    sem.ReadOtherFile(0, "O", tgt["viewfile"])                                  # reads view file for first AlignTo instead
-                    is_x, is_y, *_ = sem.ReportImageShift()
-                    sem.GoToLowDoseArea("V")
-                    sem.SetImageShift(0, 0)
-                    sem.SetImageShift(is_x, is_y)
-                    sem.V()
-                    alignTo("O", debug)
-                    ASX, ASY = sem.ReportAlignShift()[4:6]
-                    log(f"Target alignment (View) error in X | Y: {round(ASX, 0)} nm | {round(ASY, 0)} nm")    
-                if "tgtfile" in tgt.keys() and previewAli:                
-                    sem.ReadOtherFile(0, "O", tgt["tgtfile"])                                   # reads tgt file for first AlignTo instead
-                    is_x, is_y, *_ = sem.ReportImageShift()
-                    sem.GoToLowDoseArea("R")
-                    sem.SetImageShift(0, 0)
-                    sem.SetImageShift(is_x, is_y)
-                    ronchi_before_preview_align(f"target {i + 1} preview alignment (tgtfile)", pos=i, pn=0)
-                    sem.L()
-                    alignTo("O", debug)
-                    AISX, AISY, ASX, ASY = sem.ReportAlignShift()[2:6]
-                    log(f"Target alignment (Prev) error in X | Y: {round(ASX, 0)} nm | {round(ASY, 0)} nm")
-                elif "viewfile" in tgt.keys() and previewAli:
-                    # Use align between mags to align preview image to view image
-                    if not viewAli:
-                        #sem.GoToLowDoseArea("V")                                                # If ReadOtherFile while in Record, pixel size of Record is used and AlignBetweenMags fails (seems to be fixed in 4.2beta from 14.08.2024)
-                        sem.ReadOtherFile(0, "O", tgt["viewfile"])                              # reads view file for first AlignTo instead
-                    else:
-                        # If View image was already aligned, take new centered View image at startTilt and use as reference instead
-                        is_x, is_y, *_ = sem.ReportImageShift()
-                        sem.GoToLowDoseArea("V")
-                        sem.SetImageShift(0, 0)
-                        sem.SetImageShift(is_x, is_y)
-                        sem.V()
-                        sem.Copy("A", "O")
-                    # Check defocus offset
-                    is_x, is_y, *_ = sem.ReportImageShift()
-                    sem.GoToLowDoseArea("R")                                                    # Switch to R before applying defocus offset to not mess with potential mP/nP offsets between View and Rec
-                    sem.SetImageShift(0, 0)
-                    sem.SetImageShift(is_x, is_y)
-                    defocus_offset = max(-10, sem.ReportLDDefocusOffset("V"))
-                    if defocus_offset != 0:
-                        sem.ChangeFocus(defocus_offset)                                             # Higher defocus for better correlation, but max at 10 to avoid major distortions
-                    ronchi_before_preview_align(f"target {i + 1} preview alignment (view to Record)", pos=i, pn=0)
-                    sem.L()
-                    sem.AlignBetweenMags("O", -1, -1, -1)
-                    AISX, AISY, ASX, ASY = sem.ReportAlignShift()[2:6]
-                    if defocus_offset != 0:
-                        sem.ChangeFocus(-defocus_offset)                                            # Reset focus
-                    log(f"Target alignment (Pv2V) error in X | Y: {round(ASX, 0)} nm | {round(ASY, 0)} nm")           
-
-                # Save preview image as new reference
-                if refFromPreview:
-                    sem.OpenNewFile(os.path.splitext(tgt["tgtfile"])[0] + "_tempref.mrc")
-                    sem.S()
-                    sem.CloseFile()
-                    position[-1][0]["ISXali"] = AISX                                            # Save shifts to real reference
-                    position[-1][0]["ISYali"] = AISY 
-
-            sem.GoToLowDoseArea("R")
-        ISXset, ISYset, *_ = sem.ReportImageShift()
-        SSX, SSY = sem.ReportSpecimenShift()
-        sem.SetImageShift(ISX0, ISY0)                                                           # reset IS to center position    
-
-        z0_ini = np.tan(np.radians(pretilt)) * (np.cos(np.radians(rotation)) * float(tgt["SSY"]) - np.sin(np.radians(rotation)) * float(tgt["SSX"]))
-        correctedFocus = positionFocus - z0_ini * np.cos(np.radians(startTilt)) - float(tgt["SSY"]) * np.sin(np.radians(startTilt))
-
-        position[-1][0]["SSX"] = float(SSX)
-        position[-1][0]["SSY"] = float(SSY)
-        position[-1][0]["focus"] = correctedFocus
-        position[-1][0]["z0"] = z0_ini                                                          # offset from eucentric height (will be refined during collection)
-        position[-1][0]["n0"] = float(tgt["SSY"])                                               # offset from tilt axis
-        position[-1][0]["ISXset"] = float(ISXset)
-        position[-1][0]["ISYset"] = float(ISYset)
-
-        position[-1].append(copy.deepcopy(position[-1][0]))                                     # plus and minus branch start with same values
-        position[-1].append(copy.deepcopy(position[-1][0]))
-
-        position[-1][1]["n0"] -= taOffsetPos
-        position[-1][2]["n0"] -= taOffsetNeg
-
-        positionFocus += stepDefocus                                                            # adds defocus step between targets and resets to initial defocus if minDefocus is surpassed
-        if positionFocus > minFocus0: positionFocus = focus0
-
-### Start tilt
-    log("Start tilt series...", style=1)
-
-    dewarFillTime = 0
-    maxProgress = total_tilt_steps * (len(position) - skippedTgts)
-    resumePercent = 0
-    startTime = sem.ReportClock()
-    lastSlitCheck = startTime
-
-    geo = [[], [], []]
-    tiltStepCounter = 0
-    schedule_start = 0
-    resumePN = 0
-    resumePlus = startTilt
-    resumeMinus = startTilt
-    posResumed = -1
-
-### Recovery attempt
-else:
-    if realign:
-        sem.MoveToNavItem(navID)
-        if alignToP:
-            x, y, binning, exp, *_ = sem.ImageProperties("P")
-            sem.SetExposure("V", exp)
-            sem.SetBinning("V", int(binning))
-            is_x, is_y, *_ = sem.ReportImageShift()
-            sem.GoToLowDoseArea("V")
-            sem.SetImageShift(0, 0)
-            sem.SetImageShift(is_x, is_y)
-            sem.V()
-            sem.CropCenterToSize("A", int(x), int(y))
-            alignTo("P", debug)
-            sem.RestoreCameraSet("V")
-        else:
-            sem.RealignToOtherItem(navID, 1)
-    position = []
-    skippedTgts = 0
-    for pos in range(len(targets)):
-        position.append([{},{},{}])
-        for i in range(2):
-            position[-1][i+1]["SSX"] = float(savedRun[pos][i]["SSX"])
-            position[-1][i+1]["SSY"] = float(savedRun[pos][i]["SSY"])
-            position[-1][i+1]["focus"] = float(savedRun[pos][i]["focus"])
-            position[-1][i+1]["z0"] = float(savedRun[pos][i]["z0"])
-            position[-1][i+1]["n0"] = float(savedRun[pos][i]["n0"])
-            if savedRun[pos][i]["shifts"] != "" and not realign:
-                position[-1][i+1]["shifts"] = [float(shift) for shift in savedRun[pos][i]["shifts"].split(",")]
-            else:
-                position[-1][i+1]["shifts"] = []
-            if savedRun[pos][i]["angles"] != "" and not realign:
-                position[-1][i+1]["angles"] = [float(angle) for angle in savedRun[pos][i]["angles"].split(",")]
-            else:
-                position[-1][i+1]["angles"] = []
-            position[-1][i+1]["ISXset"] = float(savedRun[pos][i]["ISXset"])
-            position[-1][i+1]["ISYset"] = float(savedRun[pos][i]["ISYset"])
-            position[-1][i+1]["ISXali"] = float(savedRun[pos][i]["ISXali"])
-            position[-1][i+1]["ISYali"] = float(savedRun[pos][i]["ISYali"])
-            position[-1][i+1]["dose"] = float(savedRun[pos][i]["dose"])
-            position[-1][i+1]["sec"] = int(savedRun[pos][i]["sec"])
-            position[-1][i+1]["skip"] = True if savedRun[pos][i]["skip"] == "True" or targets[pos]["skip"] == "True" else False
-
-        sem.AreaForCumulRecordDose(pos + 1)                                                     # set dose accumulator to highest recorded prior dose
-        sem.AccumulateRecordDose(max(position[-1][1]["dose"], position[-1][2]["dose"]))
-
-        if targets[pos]["skip"] == "True":
-            skippedTgts += 1
-
-    tilt_schedule = build_tilt_schedule(tiltScheme, startTilt, minTilt, maxTilt, step, groupSize)
-    total_tilt_steps = len(tilt_schedule)
-    log(f"Tilt series: {total_tilt_steps} angles ({tilt_schedule[0]} to {tilt_schedule[-1]} deg)")
-
-    posResumed = resume["pos"] + 1
-    tiltStepCounter = resume["sec"]
-    schedule_start = resume["sec"]
-
-    resumePlus = startTilt
-    resumeMinus = startTilt
-    resumePN = 1
-    for idx in range(schedule_start):
-        t = tilt_schedule[idx]
-        if t >= startTilt:
-            resumePlus = t
-        else:
-            resumeMinus = t
-    if schedule_start < total_tilt_steps:
-        resumePN = 1 if tilt_schedule[schedule_start] >= startTilt else 2
-    elif schedule_start > 0:
-        resumePN = 1 if tilt_schedule[schedule_start - 1] >= startTilt else 2
-
-    dewarFillTime = 0
-    maxProgress = total_tilt_steps * (len(position) - skippedTgts)
-    # progress = collected images * (positions - skipped positions) + current position - skipped positions scaled assuming homogeneous distribution of skipped positions
-    progress = resume["sec"] * (len(position) - skippedTgts) + resume["pos"] - skippedTgts * resume["pos"] / len(position)
-    resumePercent = round(100 * (progress / maxProgress), 1)
-
-    sem.GoToLowDoseArea("R")
-    origMag, *_ = sem.ReportMag()
-    s2ssMatrix = np.array(sem.StageToSpecimenMatrix(0)).reshape((2, 2))
-    is2ssMatrix = np.array(sem.ISToSpecimenMatrix(0)).reshape((2, 2))
-    camX, camY, *_ = sem.CameraProperties()
-    c2ssMatrix = np.array(sem.CameraToSpecimenMatrix(0)).reshape((2, 2))
-    ss2cMatrix = np.array(sem.SpecimenToCameraMatrix(0)).reshape((2, 2))
-    if debug:
-        log("DEBUG: Conversion matrices:")
-        log(f"    Stage to Specimen: {s2ssMatrix}", color=1)
-        log(f"    IS to Specimen: {is2ssMatrix}", color=1)
-        log(f"    Image to Specimen: {c2ssMatrix}", color=1)
-        log(f"    Specimen to Camera: {ss2cMatrix}", color=1)
-
-    focus0 = (position[0][1]["focus"] + position[0][2]["focus"]) / 2                            # get estimate for original microscope focus value by taking average of both branches of tracking target
-
-    startTime = sem.ReportClock()
-    lastSlitCheck = startTime
-
-
-### Tilt series
-run_tilt_series(schedule_start)
-
-### Finish
-sem.ClearStatusLine(0)
-if trackMag > 0:
-    sem.RestoreLowDoseParams("R")                                                               # restore record mag before script just in case
-sem.TiltTo(0)
-sem.SetDefocus(focus0)
-sem.SetImageShift(0, 0)
-sem.CloseFile()
-updateTargets(runFileName, targets)
-
-# Format final tilt stacks
-if delFinalStack:
-    for target in targets:
-        if checkFrames(target["tsfile"]):
-            os.remove(target["tsfile"])
-            log(f"NOTE: {target['tsfile']} was deleted. Please use saved frames to generate the tilt series.")
-else:
-    if sortByTilt or binFinalStack > 1:
-        for target in targets:
-            if sortByTilt:
-                sortTS(target["tsfile"])
-            if binFinalStack > 1:
-                binStack(target["tsfile"], binFinalStack)
-
-totalTime = round(sem.ReportClock() / 60, 1)
-perTime = round(totalTime / len(position), 1)
-if recoverInput == 1:
-    perTime = f"since recovery: {perTime}"
-log(datetime.now().strftime("%d.%m.%Y %H:%M:%S"))
-log(f"##### All tilt series completed in {totalTime} min ({perTime} min per tilt series) #####", color=3, style=1)
-sem.SaveLog()
 sem.Exit()
