@@ -98,7 +98,9 @@ breakpoints     = False     # Waits at every debug output for user to press B ke
 defocusMethod = "beam_tilt"     # ctf | beam_tilt - measure_defocus and autofocus_apply
 ctfXtiltX = 0.002836
 ctfXtiltY = 0.003867
-ctf_resolution_max_A = 10.0     # retry CtfFind if resolution [A] is above this
+ctfDefocusLo = -12.0            # CtfFind search range low [microns]
+ctfDefocusHi = -0.2             # CtfFind search range high [microns]
+ctf_resolution_max_A = 20.0     # retry CtfFind if resolution [A] is above this
 ctf_max_attempts = 3
 ctf_retry_delay_s = 5
 tilt_angle_mrad = 5.0
@@ -210,11 +212,6 @@ def checkValves():
     if not int(sem.ReportColumnOrGunValve()):
         sem.SetColumnOrGunValve(1)
 
-def _ctf_defocus_range():
-    track_d = trackDefocus if trackDefocus != 0 else maxDefocus
-    return min(maxDefocus, track_d) - 2, min(-0.2, minDefocus + 2)
-
-
 def _beam_tilt_measure_defocus_core():
     beam_tilt = sem.ReportBeamTilt()
     tilt_x_orig = float(beam_tilt[0])
@@ -272,7 +269,6 @@ def beam_tilt_measure_defocus():
 
 def ctf_measure_defocus():
     """CTF defocus: set X-tilt, Focus, CtfFind (with retries), restore X-tilt."""
-    ctf_lo, ctf_hi = _ctf_defocus_range()
     xtX, xtY = sem.ReportXLensDeflector(2)
     try:
         sem.SetXLensDeflector(2, ctfXtiltX, ctfXtiltY)
@@ -283,7 +279,7 @@ def ctf_measure_defocus():
                 if attempt > 1:
                     sem.Delay(ctf_retry_delay_s, "s")
                 sem.F()
-                cfind = sem.CtfFind("A", ctf_lo, ctf_hi)
+                cfind = sem.CtfFind("A", ctfDefocusLo, ctfDefocusHi)
                 if len(cfind) == 0:
                     log(f"ERROR: CtfFind failed on attempt {attempt}/{ctf_max_attempts}.")
                     if attempt < ctf_max_attempts:
