@@ -56,7 +56,7 @@ measure_cycles = 1
 
 ########## Ronchigram / laser alignment (before Preview) ##########
 # Trial LD area must match Record position; only exposure should differ.
-doRonchigram       = False
+doRonchigram       = True
 ronchiC3Offset     = -20
 ronchiDelay        = 2.0
 ronchiBinning      = 32
@@ -66,7 +66,7 @@ ronchiTargetPhaseB = 1.7
 ronchiCorrectKs    = [[6.74334974, -0.50967178], [0.62728835, 6.78255526]]
 ronchiPeakRadius   = 100
 ronchiCorrMatrix   = [[0.212, 1.28], [1.22, -0.243]]
-ronchiCorrectC3    = False        # apply C3 correction from mean ks error (diagonal fringe spacing)
+ronchiCorrectC3    = True        # apply C3 correction from mean ks error (diagonal fringe spacing)
 ronchiC3CorrectionFactor = 20 / 6.85  # um offset per um^-1 mean ks error
 ronchiMinErrForC3Correction = 0.5     # apply C3 on 1st Trial only if |c3 correction| exceeds this (um)
 ronchiMinErrForC3CorrectionRedo = 0.5 # apply C3 on 2nd Trial only if |c3 correction| exceeds this (um)
@@ -577,10 +577,9 @@ def loopAddTargets():
             if useSearch: 
                 sem.Search()
             else:
-                is_x, is_y, *_ = sem.ReportImageShift()
                 sem.GoToLowDoseArea("V")
                 sem.SetImageShift(0, 0)
-                sem.SetImageShift(is_x, is_y)
+                sem.SetImageShift(ISX0, ISY0)
                 sem.V()
             sem.GoToLowDoseArea("R")
             sem.SetImageShift(0, 0)
