@@ -31,6 +31,8 @@ zeroDefocus	    = 0 		# set to defocus [microns] used for start tilt image, if 0
 nav_item_list   = []        # e.g. [5, 10, 15]; empty = current nav item only (SetSelectedNavItem, SerialEM 4.2+)
 nav_pretilt_list = []       # parallel to nav_item_list; fall back to global pretilt when empty
 nav_rotation_list = []      # parallel to nav_item_list; fall back to global rotation when empty
+nav_start_defocus_list = [] # parallel to nav_item_list; objective defocus [um] before autofocus; else default_nav_start_defocus
+default_nav_start_defocus = -4  # SetDefocus at start of each nav item when not listed
 
 # Track settings
 trackExpTime    = 0         # set to exposure time [s] used for tracking tilt series, if 0: use same exposure time for all tilt series
@@ -1718,6 +1720,24 @@ def validate_nav_lists():
     if nav_rotation_list and len(nav_rotation_list) != n:
         sem.OKBox(f"ERROR: nav_rotation_list length ({len(nav_rotation_list)}) must match nav_item_list ({n}).")
         sem.Exit()
+    if nav_start_defocus_list and len(nav_start_defocus_list) != n:
+        sem.OKBox(f"ERROR: nav_start_defocus_list length ({len(nav_start_defocus_list)}) must match nav_item_list ({n}).")
+        sem.Exit()
+
+
+def get_nav_start_defocus(item_index):
+    """Objective defocus [um] to set at nav item start (before autofocus)."""
+    if nav_start_defocus_list and item_index < len(nav_start_defocus_list):
+        return float(nav_start_defocus_list[item_index])
+    return float(default_nav_start_defocus)
+
+
+def apply_nav_start_defocus(item_index, when=""):
+    """Set objective defocus before autofocus so measure/autofocus is not started too far off."""
+    defocus = get_nav_start_defocus(item_index)
+    sem.SetDefocus(defocus)
+    suffix = f" {when}" if when else ""
+    log(f"NOTE: Set objective defocus to {defocus:.2f} um at nav item start{suffix}.")
 
 
 def get_nav_geometry(item_index):
@@ -1922,6 +1942,7 @@ def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_acc
     log(f"Target defocus range (min/max/step): {minDefocus}/{maxDefocus}/{stepDefocus}")
     log(f"Defocus method (measure / autofocus): {defocusMethod}")
     log(f"Sample pretilt (rotation): {pretilt} ({rotation})")
+    log(f"Nav item start defocus: {get_nav_start_defocus(item_index):.2f} um")
     log(f"Tilt axis offset: {round(tiltAxisOffset, 3)}")
     log(f"Focus correction slope: {focusSlope}")
     log(f"Exposure time per tilt: {round(expTime, 3)} s (total: {round(expTime * int((maxTilt - minTilt) / step), 3)} s)")
@@ -1944,6 +1965,7 @@ def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_acc
 
         sem.SetCameraArea("V", "F")                                                                 # set View to Full for Eucentricity
         sem.MoveToNavItem(navID)
+        apply_nav_start_defocus(item_index, "after MoveToNavItem")
         log("Refining eucentricity...")
         sem.GoToLowDoseArea("V")
         is_x, is_y, *_ = sem.ReportImageShift()
@@ -2431,6 +2453,7 @@ def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_acc
         resumePercent = round(100 * (progress / maxProgress), 1)
 
         sem.GoToLowDoseArea("R")
+        apply_nav_start_defocus(item_index, "recovery")
         origMag, *_ = sem.ReportMag()
         s2ssMatrix = np.array(sem.StageToSpecimenMatrix(0)).reshape((2, 2))
         is2ssMatrix = np.array(sem.ISToSpecimenMatrix(0)).reshape((2, 2))
