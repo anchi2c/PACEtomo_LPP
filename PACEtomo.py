@@ -101,7 +101,8 @@ debug           = False     # Enables additional output for a few processes (e.g
 breakpoints     = False     # Waits at every debug output for user to press B key.
 
 # Defocus measure / autofocus (replaces sem.G / sem.G(-1))
-defocusMethod = "beam_tilt"     # ctf | beam_tilt - measure_defocus and autofocus_apply
+# ctf | beam_tilt (physics+calibration) | beam_tilt_sem (sem.G(-1)+calibration)
+defocusMethod = "beam_tilt"
 ctfXtiltX = 0.002836
 ctfXtiltY = 0.003867
 ctfDefocusLo = -12.0            # CtfFind search range low [microns]
@@ -248,6 +249,14 @@ def checkValves():
     if not int(sem.ReportColumnOrGunValve()):
         sem.SetColumnOrGunValve(1)
 
+def serialEM_measure_defocus():
+    """SerialEM sem.G(-1) defocus with optional scaling calibration."""
+    return btdef.measure_serialEM_defocus(
+        xtilt_x=beam_tilt_xtilt_x,
+        xtilt_y=beam_tilt_xtilt_y,
+    )
+
+
 def beam_tilt_measure_defocus():
     """Beam-tilt defocus via shared calibrated measurement."""
     return btdef.measure_defocus(
@@ -303,14 +312,22 @@ def ctf_measure_defocus():
 
 def measure_defocus():
     """sem.G(-1): measure defocus only, no focus change."""
-    if defocusMethod not in ("ctf", "beam_tilt"):
-        sem.OKBox(f"ERROR: Unknown defocusMethod '{defocusMethod}'. Use 'ctf' or 'beam_tilt'.")
+    if defocusMethod not in ("ctf", "beam_tilt", "beam_tilt_sem"):
+        sem.OKBox(
+            f"ERROR: Unknown defocusMethod '{defocusMethod}'. "
+            "Use 'ctf', 'beam_tilt', or 'beam_tilt_sem'."
+        )
         sem.Exit()
     if defocusMethod == "beam_tilt":
         defocus = np.nan
         speed_x = speed_y = 0.0
         for _ in range(measure_cycles):
             defocus, speed_x, speed_y = beam_tilt_measure_defocus()
+        return float(defocus), np.array([speed_x, speed_y])
+    if defocusMethod == "beam_tilt_sem":
+        defocus = np.nan
+        for _ in range(measure_cycles):
+            defocus, speed_x, speed_y = serialEM_measure_defocus()
         return float(defocus), np.array([speed_x, speed_y])
     defocus = ctf_measure_defocus()
     return float(defocus), np.array([0.0, 0.0])
@@ -322,13 +339,19 @@ def autofocus_apply(target):
     for cycle in range(1, autofocus_cycles + 1):
         if defocusMethod == "beam_tilt":
             defocus, speed_x, speed_y = beam_tilt_measure_defocus()
+        elif defocusMethod == "beam_tilt_sem":
+            defocus, speed_x, speed_y = serialEM_measure_defocus()
         else:
             defocus = ctf_measure_defocus()
+            speed_x = speed_y = 0.0
         if not np.isfinite(defocus):
             log(f"WARNING: Autofocus measurement failed on cycle {cycle}/{autofocus_cycles}.")
             return defocus
         error = target - defocus
-        log(f"Autofocus {cycle}/{autofocus_cycles}: measured={defocus:.4f} um, target={target:.3f} um, error={error:.3f} um")
+        log(
+            f"Autofocus {cycle}/{autofocus_cycles}: measured={defocus:.4f} um, "
+            f"target={target:.3f} um, error={error:.3f} um"
+        )
         if abs(error) <= autofocus_tolerance_um:
             return defocus
         sem.ChangeFocus(error)
@@ -2051,7 +2074,10 @@ def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_acc
                 for i in range(len(geoPoints)):
                     sem.ImageShiftByMicrons(geoPoints[i][0], geoPoints[i][1])
                     defocus, drift = measure_defocus()
-                    drift_ok = defocusMethod == "ctf" or np.linalg.norm(drift) >= 0.01
+                    drift_ok = (
+                        defocusMethod in ("ctf", "beam_tilt_sem")
+                        or np.linalg.norm(drift) >= 0.01
+                    )
                     if abs(defocus) >= 0.01 and drift_ok:
                         geoXYZ[0].append(geoPoints[i][0])
                         geoXYZ[1].append(geoPoints[i][1])

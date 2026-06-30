@@ -13,8 +13,9 @@ import serialem as sem
 ############ SETTINGS ############
 
 # Leave empty to use known physics (displacement/2beta - Cs*beta^2) only.
-# Set to a JSON from calibrate_beam_tilt_scaling.py (delta offset vs defocus)
-# or calibrate_beam_tilt_xtilt_matrix.py (X-tilt residual on physics base).
+# Set to a JSON from calibrate_beam_tilt_scaling.py (delta offset vs defocus),
+# calibrate_beam_tilt_serialEM.py (sem.G(-1) delta offset vs defocus), or
+# calibrate_beam_tilt_xtilt_matrix.py (X-tilt residual on physics base).
 calibration_file = ""
 
 # Optional inline calibration. A calibration file, when set, overrides this.
@@ -156,6 +157,16 @@ def _scaling_corrected_defocus(base_um, calib):
     return float(base_um - _scaling_delta_offset(base_um, calib))
 
 
+def _apply_scaling_calibration(base_um, calib):
+    """Apply delta-offset scaling calibration to a measured defocus [um]."""
+    if not calib:
+        return float(base_um)
+    model = calib.get("model", "physics_cs")
+    if model in ("beam_tilt_defocus_scaling", "beam_tilt_serialEM_scaling"):
+        return _scaling_corrected_defocus(base_um, calib)
+    return float(base_um)
+
+
 def defocus_from_raw(raw, tilt_angle_mrad=5.0, cs_mm=None, beam_tilt_axis="x",
                      defocus_tilt_correction=None, calibration_data=None):
     """
@@ -185,6 +196,8 @@ def defocus_from_raw(raw, tilt_angle_mrad=5.0, cs_mm=None, beam_tilt_axis="x",
         return float(base_um)
     if model == "beam_tilt_defocus_scaling":
         return _scaling_corrected_defocus(base_um, calib)
+    if model == "beam_tilt_serialEM_scaling":
+        return float(base_um)
     if model == "linear_xtilt_residual":
         return float(base_um + _fitted_correction(raw, calib))
     if model == "linear_xtilt_beam_tilt":
@@ -358,6 +371,52 @@ def measure_raw(tilt_angle_mrad=5.0, beam_tilt_correction=1.0,
         "drift_speed_y_nm_per_s": drift_y_nm / elapsed if elapsed > 0 else 0.0,
         "elapsed_s": elapsed,
     }
+
+
+def measure_serialEM_defocus_with_diagnostics(xtilt_x=None, xtilt_y=None,
+                                              lens_index=2,
+                                              calibration_data=None):
+    """Measure defocus with sem.G(-1) and optional scaling calibration."""
+    original_xtilt = _sem.ReportXLensDeflector(lens_index)
+    try:
+        if xtilt_x is not None and xtilt_y is not None:
+            _sem.SetXLensDeflector(lens_index, float(xtilt_x), float(xtilt_y))
+        _sem.G(-1)
+        base_um = float(_sem.ReportAutoFocus()[0])
+        xtilt = _sem.ReportXLensDeflector(lens_index)
+        calib = calibration_data if calibration_data is not None else get_calibration()
+        correction_um = 0.0
+        if calib and calib.get("model") in (
+            "beam_tilt_serialEM_scaling", "beam_tilt_defocus_scaling"
+        ):
+            correction_um = _scaling_delta_offset(base_um, calib)
+        defocus = _apply_scaling_calibration(base_um, calib)
+        raw = {
+            "measurement_method": "serialEM_G(-1)",
+            "serialEM_defocus_um": base_um,
+            "legacy_defocus_um": base_um,
+            "calibration_correction_um": float(correction_um),
+            "defocus_um": float(defocus),
+            "xtilt_x": float(xtilt[0]),
+            "xtilt_y": float(xtilt[1]),
+            "drift_speed_x_nm_per_s": 0.0,
+            "drift_speed_y_nm_per_s": 0.0,
+        }
+        return float(defocus), raw
+    finally:
+        _sem.SetXLensDeflector(lens_index, float(original_xtilt[0]), float(original_xtilt[1]))
+
+
+def measure_serialEM_defocus(xtilt_x=None, xtilt_y=None, lens_index=2,
+                             calibration_data=None):
+    """sem.G(-1) defocus; returns `(defocus, drift_x, drift_y)`."""
+    defocus, raw = measure_serialEM_defocus_with_diagnostics(
+        xtilt_x=xtilt_x,
+        xtilt_y=xtilt_y,
+        lens_index=lens_index,
+        calibration_data=calibration_data,
+    )
+    return defocus, raw["drift_speed_x_nm_per_s"], raw["drift_speed_y_nm_per_s"]
 
 
 def measure_defocus_with_diagnostics(tilt_angle_mrad=5.0,
