@@ -140,7 +140,7 @@ def run_autofocus_trial(correction):
     else:
         sign = displacement_from_tilt_x / abs(displacement_from_tilt_x)
 
-    defocus_measured = -1.0 * sign * displacement / tilt_angle_mrad
+    defocus_measured = -1.0 * sign * displacement / (2*tilt_angle_mrad)
 
     return defocus_measured, speed_x, speed_y
 
