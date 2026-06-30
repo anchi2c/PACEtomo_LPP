@@ -97,13 +97,19 @@ def measure_beam_tilt_defocus():
         beam_tilt_correction=beam_tilt_correction,
         beam_tilt_axis=beam_tilt_axis,
     )
-    defocus = btdef.legacy_physics_diagnostics(
+    diag = btdef.legacy_physics_diagnostics(
         raw,
         tilt_angle_mrad=tilt_angle_mrad,
         beam_tilt_axis=beam_tilt_axis,
         defocus_tilt_correction=beam_tilt_correction,
-    )["legacy_defocus_um"]
-    return defocus, raw
+    )
+    return {
+        "with_cs_um": float(diag["legacy_defocus_um"]),
+        "without_cs_um": float(diag["linear_term_um"]),
+        "cs_term_um": float(diag["cs_term_um"]),
+        "beta_rad": float(diag["beta_rad"]),
+        "raw": raw,
+    }
 
 
 def safe_ratio(measured, ctf):
@@ -146,75 +152,131 @@ def apply_affine_correction(measured, scale, offset):
     return float(scale) * float(measured) + float(offset)
 
 
-def make_plot(path, rows, fits):
-    ctf = np.array([float(r["ctf_defocus_um"]) for r in rows], dtype=float)
-    measured = np.array([float(r["beam_tilt_defocus_um"]) for r in rows], dtype=float)
-    delta = np.array([float(r["delta_um"]) for r in rows], dtype=float)
-    ratio = np.array([float(r["ratio"]) for r in rows], dtype=float)
+def fit_scaling(measured, ctf):
+    """Delta, ratio, and affine fits for one defocus estimate vs CTF."""
+    measured = [float(v) for v in measured]
+    ctf = [float(v) for v in ctf]
+    deltas = [m - c for m, c in zip(measured, ctf)]
+    ratios = [safe_ratio(m, c) for m, c in zip(measured, ctf)]
 
-    fig, axes = plt.subplots(2, 2, figsize=(10, 8), tight_layout=True)
-    ax = axes[0, 0]
-    ax.scatter(ctf, measured, label="data")
+    delta_slope, delta_intercept, delta_rms = fit_line(ctf, deltas)
+    ratio_slope, ratio_intercept, ratio_rms = fit_line(ctf, ratios)
+    affine_scale, affine_offset, affine_rms = fit_affine_true_from_measured(
+        measured, ctf
+    )
+    return {
+        "delta": {
+            "intercept": delta_intercept,
+            "slope_vs_ctf": delta_slope,
+            "rms_um": delta_rms,
+            "formula": "delta = intercept + slope * ctf_defocus",
+        },
+        "ratio": {
+            "intercept": ratio_intercept,
+            "slope_vs_ctf": ratio_slope,
+            "rms": ratio_rms,
+            "formula": "ratio = intercept + slope * ctf_defocus",
+        },
+        "affine": {
+            "scale": affine_scale,
+            "offset": affine_offset,
+            "rms_um": affine_rms,
+            "formula": "corrected_defocus = scale * measured + offset",
+        },
+        "constant": {
+            "mean_delta_um": float(np.nanmean(deltas)),
+            "mean_ratio": float(np.nanmean(ratios)),
+            "formula_delta": "corrected = measured - mean_delta",
+            "formula_ratio": "corrected = measured / mean_ratio",
+        },
+    }
+
+
+def make_plot(path, rows, fits_with_cs, fits_without_cs):
+    ctf = np.array([float(r["ctf_defocus_um"]) for r in rows], dtype=float)
     ctf_line = np.linspace(np.min(ctf), np.max(ctf), 100)
-    scale = fits["affine"]["scale"]
-    offset = fits["affine"]["offset"]
-    if np.isfinite(scale) and scale != 0:
+
+    fig, axes = plt.subplots(3, 2, figsize=(10, 11), tight_layout=True)
+
+    panels = [
+        ("with_cs_um", "delta_with_cs_um", "ratio_with_cs", fits_with_cs, "With Cs"),
+        (
+            "without_cs_um",
+            "delta_without_cs_um",
+            "ratio_without_cs",
+            fits_without_cs,
+            "Linear only (no Cs)",
+        ),
+    ]
+    for col, (meas_key, delta_key, ratio_key, fits, title) in enumerate(panels):
+        measured = np.array([float(r[meas_key]) for r in rows], dtype=float)
+        delta = np.array([float(r[delta_key]) for r in rows], dtype=float)
+        ratio = np.array([float(r[ratio_key]) for r in rows], dtype=float)
+
+        ax = axes[0, col]
+        ax.scatter(ctf, measured, label="data")
+        scale = fits["affine"]["scale"]
+        offset = fits["affine"]["offset"]
+        if np.isfinite(scale) and scale != 0:
+            ax.plot(
+                ctf_line,
+                (ctf_line - offset) / scale,
+                label="affine",
+                color="C1",
+            )
+        ax.plot(ctf_line, ctf_line, "--", color="gray", label="ideal")
+        ax.set_xlabel("CTF defocus (um)")
+        ax.set_ylabel("Beam-tilt defocus (um)")
+        ax.set_title(f"{title}: measured vs CTF")
+        ax.legend(fontsize=8)
+
+        ax = axes[1, col]
+        ax.scatter(ctf, delta)
         ax.plot(
             ctf_line,
-            (ctf_line - offset) / scale,
-            label="affine fit",
+            fits["delta"]["intercept"] + fits["delta"]["slope_vs_ctf"] * ctf_line,
             color="C1",
         )
-    ax.plot(ctf_line, ctf_line, "--", color="gray", label="ideal")
-    ax.set_xlabel("CTF defocus (um)")
-    ax.set_ylabel("Beam-tilt defocus (um)")
-    ax.set_title("Measured vs CTF")
-    ax.legend()
+        ax.axhline(0, color="gray", linestyle="--", linewidth=1)
+        ax.set_xlabel("CTF defocus (um)")
+        ax.set_ylabel("Delta (um)")
+        ax.set_title(f"{title}: delta vs CTF")
 
-    ax = axes[0, 1]
-    ax.scatter(ctf, delta)
-    ax.plot(
-        ctf_line,
-        fits["delta"]["intercept"] + fits["delta"]["slope_vs_ctf"] * ctf_line,
-        color="C1",
-    )
-    ax.axhline(0, color="gray", linestyle="--", linewidth=1)
-    ax.set_xlabel("CTF defocus (um)")
-    ax.set_ylabel("Delta (beam-tilt - CTF) (um)")
-    ax.set_title("Delta vs CTF")
-
-    ax = axes[1, 0]
-    ax.scatter(ctf, ratio)
-    ax.plot(
-        ctf_line,
-        fits["ratio"]["intercept"] + fits["ratio"]["slope_vs_ctf"] * ctf_line,
-        color="C1",
-    )
-    ax.axhline(1, color="gray", linestyle="--", linewidth=1)
-    ax.set_xlabel("CTF defocus (um)")
-    ax.set_ylabel("Ratio (beam-tilt / CTF)")
-    ax.set_title("Ratio vs CTF")
-
-    ax = axes[1, 1]
-    corrected = np.array(
-        [
-            apply_affine_correction(
-                r["beam_tilt_defocus_um"],
-                fits["affine"]["scale"],
-                fits["affine"]["offset"],
-            )
-            for r in rows
-        ],
-        dtype=float,
-    )
-    ax.scatter(ctf, corrected - ctf)
-    ax.axhline(0, color="gray", linestyle="--", linewidth=1)
-    ax.set_xlabel("CTF defocus (um)")
-    ax.set_ylabel("Corrected - CTF (um)")
-    ax.set_title("Affine correction residual")
+        ax = axes[2, col]
+        ax.scatter(ctf, ratio)
+        ax.plot(
+            ctf_line,
+            fits["ratio"]["intercept"] + fits["ratio"]["slope_vs_ctf"] * ctf_line,
+            color="C1",
+        )
+        ax.axhline(1, color="gray", linestyle="--", linewidth=1)
+        ax.set_xlabel("CTF defocus (um)")
+        ax.set_ylabel("Ratio")
+        ax.set_title(f"{title}: ratio vs CTF")
 
     fig.savefig(path, dpi=150)
     plt.show()
+
+
+def echo_fit_summary(label, fits):
+    echo(f"--- {label} ---")
+    echo(f"  mean delta: {fits['constant']['mean_delta_um']:.6f} um")
+    echo(f"  mean ratio: {fits['constant']['mean_ratio']:.6f}")
+    echo(
+        f"  delta vs CTF: {fits['delta']['intercept']:.6f} "
+        f"+ {fits['delta']['slope_vs_ctf']:.6f} * ctf  "
+        f"(RMS {fits['delta']['rms_um']:.6f} um)"
+    )
+    echo(
+        f"  ratio vs CTF: {fits['ratio']['intercept']:.6f} "
+        f"+ {fits['ratio']['slope_vs_ctf']:.6f} * ctf  "
+        f"(RMS {fits['ratio']['rms']:.6f})"
+    )
+    echo(
+        f"  affine: corrected = {fits['affine']['scale']:.6f} * measured "
+        f"+ {fits['affine']['offset']:.6f}  "
+        f"(RMS {fits['affine']['rms_um']:.6f} um)"
+    )
 
 
 def main():
@@ -252,11 +314,10 @@ def main():
             reached = set_target_defocus(target_defocus)
             echo(f"Defocus after adjustment: {reached:.3f} um")
 
-            beam_defocus, raw = measure_beam_tilt_defocus()
+            measure = measure_beam_tilt_defocus()
+            raw = measure["raw"]
             sem.L()
             ctf_defocus, ctf_res = run_ctffind()
-            delta = beam_defocus - ctf_defocus
-            ratio = safe_ratio(beam_defocus, ctf_defocus)
             drift = float(np.hypot(
                 raw["drift_speed_x_nm_per_s"], raw["drift_speed_y_nm_per_s"]
             ))
@@ -264,9 +325,14 @@ def main():
             row = {
                 "target_defocus_um": float(target_defocus),
                 "ctf_defocus_um": float(ctf_defocus),
-                "beam_tilt_defocus_um": float(beam_defocus),
-                "delta_um": float(delta),
-                "ratio": float(ratio),
+                "with_cs_um": measure["with_cs_um"],
+                "without_cs_um": measure["without_cs_um"],
+                "cs_term_um": measure["cs_term_um"],
+                "beta_rad": measure["beta_rad"],
+                "delta_with_cs_um": measure["with_cs_um"] - ctf_defocus,
+                "delta_without_cs_um": measure["without_cs_um"] - ctf_defocus,
+                "ratio_with_cs": safe_ratio(measure["with_cs_um"], ctf_defocus),
+                "ratio_without_cs": safe_ratio(measure["without_cs_um"], ctf_defocus),
                 "shift_x_um": float(raw["shift_x_um"]),
                 "shift_y_um": float(raw["shift_y_um"]),
                 "ctf_resolution_A": float(ctf_res),
@@ -274,65 +340,56 @@ def main():
             }
             rows.append(row)
             echo(
-                f"beam-tilt={beam_defocus:.4f} um, CTF={ctf_defocus:.4f} um, "
-                f"delta={delta:.4f} um, ratio={ratio:.4f}, drift={drift:.3f} nm/s"
+                f"with Cs={measure['with_cs_um']:.4f}, "
+                f"no Cs={measure['without_cs_um']:.4f}, "
+                f"Cs term={measure['cs_term_um']:.4f}, "
+                f"CTF={ctf_defocus:.4f} um, "
+                f"delta(Cs)={row['delta_with_cs_um']:.4f}, "
+                f"delta(no Cs)={row['delta_without_cs_um']:.4f}, "
+                f"ratio(Cs)={row['ratio_with_cs']:.4f}, "
+                f"ratio(no Cs)={row['ratio_without_cs']:.4f}, "
+                f"drift={drift:.3f} nm/s"
             )
 
-        measured = [r["beam_tilt_defocus_um"] for r in rows]
         ctf = [r["ctf_defocus_um"] for r in rows]
-        deltas = [r["delta_um"] for r in rows]
-        ratios = [r["ratio"] for r in rows]
+        fits_with_cs = fit_scaling([r["with_cs_um"] for r in rows], ctf)
+        fits_without_cs = fit_scaling([r["without_cs_um"] for r in rows], ctf)
 
-        delta_slope, delta_intercept, delta_rms = fit_line(ctf, deltas)
-        ratio_slope, ratio_intercept, ratio_rms = fit_line(ctf, ratios)
-        affine_scale, affine_offset, affine_rms = fit_affine_true_from_measured(
-            measured, ctf
-        )
+        if fits_with_cs["affine"]["rms_um"] <= fits_without_cs["affine"]["rms_um"]:
+            recommended = {
+                "equation": "with_cs",
+                "model": "affine",
+                "scale": fits_with_cs["affine"]["scale"],
+                "offset": fits_with_cs["affine"]["offset"],
+                "rms_um": fits_with_cs["affine"]["rms_um"],
+            }
+        else:
+            recommended = {
+                "equation": "without_cs",
+                "model": "affine",
+                "scale": fits_without_cs["affine"]["scale"],
+                "offset": fits_without_cs["affine"]["offset"],
+                "rms_um": fits_without_cs["affine"]["rms_um"],
+            }
 
-        mean_delta = float(np.nanmean(deltas))
-        mean_ratio = float(np.nanmean(ratios))
-
-        fits = {
-            "delta": {
-                "intercept": delta_intercept,
-                "slope_vs_ctf": delta_slope,
-                "rms_um": delta_rms,
-                "formula": "delta = intercept + slope * ctf_defocus",
-            },
-            "ratio": {
-                "intercept": ratio_intercept,
-                "slope_vs_ctf": ratio_slope,
-                "rms": ratio_rms,
-                "formula": "ratio = intercept + slope * ctf_defocus",
-            },
-            "affine": {
-                "scale": affine_scale,
-                "offset": affine_offset,
-                "rms_um": affine_rms,
-                "formula": "corrected_defocus = scale * measured + offset",
-            },
-            "constant": {
-                "mean_delta_um": mean_delta,
-                "mean_ratio": mean_ratio,
-                "formula_delta": "corrected = measured - mean_delta",
-                "formula_ratio": "corrected = measured / mean_ratio",
-            },
-        }
         calibration = {
             "model": "beam_tilt_defocus_scaling",
             "created": datetime.now().isoformat(timespec="seconds"),
             "tilt_angle_mrad": float(tilt_angle_mrad),
             "beam_tilt_correction": float(beam_tilt_correction),
             "beam_tilt_axis": beam_tilt_axis,
+            "spherical_aberration_mm": float(btdef.spherical_aberration_mm),
             "measurement_xtilt_x": float(measurement_xtilt_x),
             "measurement_xtilt_y": float(measurement_xtilt_y),
-            "fits": fits,
-            "recommended": {
-                "model": "affine",
-                "scale": affine_scale,
-                "offset": affine_offset,
-                "rms_um": affine_rms,
+            "with_cs": {
+                "equation": "-displacement/(2*beta) - Cs*beta^2",
+                "fits": fits_with_cs,
             },
+            "without_cs": {
+                "equation": "-displacement/(2*beta)  (linear term only)",
+                "fits": fits_without_cs,
+            },
+            "recommended": recommended,
         }
 
         with open(csv_measurements, "w", newline="") as fh:
@@ -343,23 +400,15 @@ def main():
         with open(calibration_json, "w") as fh:
             json.dump(calibration, fh, indent=2)
 
-        make_plot(plot_file, rows, fits)
+        make_plot(plot_file, rows, fits_with_cs, fits_without_cs)
 
         echo("================================================")
         echo("FIT RESULTS (X-tilt 0)")
-        echo(f"Constant mean delta: {mean_delta:.6f} um")
-        echo(f"Constant mean ratio: {mean_ratio:.6f}")
+        echo_fit_summary("With Cs", fits_with_cs)
+        echo_fit_summary("Without Cs (linear only)", fits_without_cs)
         echo(
-            f"Delta vs CTF: delta = {delta_intercept:.6f} "
-            f"+ {delta_slope:.6f} * ctf  (RMS {delta_rms:.6f} um)"
-        )
-        echo(
-            f"Ratio vs CTF: ratio = {ratio_intercept:.6f} "
-            f"+ {ratio_slope:.6f} * ctf  (RMS {ratio_rms:.6f})"
-        )
-        echo(
-            f"Affine (recommended): corrected = {affine_scale:.6f} * measured "
-            f"+ {affine_offset:.6f}  (RMS {affine_rms:.6f} um)"
+            f"Recommended affine: {recommended['equation']} "
+            f"(RMS {recommended['rms_um']:.6f} um)"
         )
         echo("================================================")
         echo(f"Saved measurements: {csv_measurements}")
