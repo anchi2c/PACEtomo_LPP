@@ -13,8 +13,8 @@ import serialem as sem
 ############ SETTINGS ############
 
 # Leave empty to use known physics (displacement/2beta - Cs*beta^2) only.
-# Set to a JSON from calibrate_beam_tilt_xtilt_matrix.py to add a fitted
-# residual correction on top of that physics base.
+# Set to a JSON from calibrate_beam_tilt_scaling.py (delta offset vs defocus)
+# or calibrate_beam_tilt_xtilt_matrix.py (X-tilt residual on physics base).
 calibration_file = ""
 
 # Optional inline calibration. A calibration file, when set, overrides this.
@@ -140,6 +140,21 @@ def _fitted_correction(raw, calib):
     return float(features.dot(coeffs))
 
 
+def _scaling_delta_offset(defocus_um, calib):
+    """Systematic offset from beam_tilt_scaling calibration [um]."""
+    delta_cfg = calib.get("delta_offset", {})
+    if not delta_cfg and "fits" in calib:
+        delta_cfg = calib["fits"].get("delta", {})
+    intercept = float(delta_cfg.get("intercept_um", delta_cfg.get("intercept", 0.0)))
+    slope = float(delta_cfg.get("slope", delta_cfg.get("slope_vs_ctf", 0.0)))
+    return intercept + slope * float(defocus_um)
+
+
+def _scaling_corrected_defocus(base_um, calib):
+    """Remove fitted delta offset using measured defocus as the defocus axis."""
+    return float(base_um - _scaling_delta_offset(base_um, calib))
+
+
 def defocus_from_raw(raw, tilt_angle_mrad=5.0, cs_mm=None, beam_tilt_axis="x",
                      defocus_tilt_correction=None, calibration_data=None):
     """
@@ -165,6 +180,8 @@ def defocus_from_raw(raw, tilt_angle_mrad=5.0, cs_mm=None, beam_tilt_axis="x",
     model = calib.get("model", "physics_cs")
     if model == "physics_cs":
         return float(base_um)
+    if model == "beam_tilt_defocus_scaling":
+        return _scaling_corrected_defocus(base_um, calib)
     if model == "linear_xtilt_residual":
         return float(base_um + _fitted_correction(raw, calib))
     if model == "linear_xtilt_beam_tilt":
@@ -375,7 +392,9 @@ def measure_defocus_with_diagnostics(tilt_angle_mrad=5.0,
         calib = calibration_data if calibration_data is not None else get_calibration()
         model = calib.get("model", "physics_cs") if calib else "physics_cs"
         correction_um = 0.0
-        if model == "linear_xtilt_residual":
+        if model == "beam_tilt_defocus_scaling":
+            correction_um = _scaling_delta_offset(raw["legacy_defocus_um"], calib)
+        elif model == "linear_xtilt_residual":
             correction_um = _fitted_correction(raw, calib)
         raw["calibration_correction_um"] = float(correction_um)
         defocus = defocus_from_raw(
