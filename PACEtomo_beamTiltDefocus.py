@@ -250,9 +250,11 @@ def measure_raw(tilt_angle_mrad=5.0, beam_tilt_correction=1.0,
         tilt_step_x = tilt_step
         tilt_step_y = 0.0
 
-    pixel_size_binned = float(_sem.ReportCurrentPixelSize("R"))
-    binning = float(_sem.ReportBinning("R"))
-    pixel_size_unbinned = pixel_size_binned / binning
+    focus_camera = "F"
+    pixel_size_binned_nm = float(_sem.ReportCurrentPixelSize(focus_camera))
+    focus_binning = float(_sem.ReportBinning(focus_camera))
+    # SerialEM returns pixel size in nm; defocus equation uses displacement [um].
+    pixel_size_unbinned_nm = pixel_size_binned_nm / focus_binning
 
     _sem.SetBeamTilt(tilt_x_plus, tilt_y_plus)
     _sem.F()
@@ -276,10 +278,10 @@ def measure_raw(tilt_angle_mrad=5.0, beam_tilt_correction=1.0,
     disp_x2_px = float(align_shift_2[0])
     disp_y2_px = float(align_shift_2[1])
 
-    drift_x = disp_x2_px * pixel_size_unbinned
-    drift_y = disp_y2_px * pixel_size_unbinned
-    shift_x = (disp_x1_px - disp_x2_px / 2.0) * pixel_size_unbinned
-    shift_y = (disp_y1_px - disp_y2_px / 2.0) * pixel_size_unbinned
+    drift_x_nm = disp_x2_px * pixel_size_unbinned_nm
+    drift_y_nm = disp_y2_px * pixel_size_unbinned_nm
+    shift_x_um = (disp_x1_px - disp_x2_px / 2.0) * pixel_size_unbinned_nm / 1000.0
+    shift_y_um = (disp_y1_px - disp_y2_px / 2.0) * pixel_size_unbinned_nm / 1000.0
     xtilt = _sem.ReportXLensDeflector(2)
 
     return {
@@ -291,18 +293,21 @@ def measure_raw(tilt_angle_mrad=5.0, beam_tilt_correction=1.0,
         "beam_tilt_correction": float(beam_tilt_correction),
         "xtilt_x": float(xtilt[0]),
         "xtilt_y": float(xtilt[1]),
-        "pixel_size_unbinned_um": pixel_size_unbinned,
+        "focus_camera": focus_camera,
+        "focus_binning": focus_binning,
+        "focus_pixel_size_binned_nm": pixel_size_binned_nm,
+        "focus_pixel_size_unbinned_nm": pixel_size_unbinned_nm,
         "align_shift_1_x_px": disp_x1_px,
         "align_shift_1_y_px": disp_y1_px,
         "align_shift_2_x_px": disp_x2_px,
         "align_shift_2_y_px": disp_y2_px,
-        "shift_x_um": shift_x,
-        "shift_y_um": shift_y,
-        "shift_abs_um": float(np.sqrt(shift_x * shift_x + shift_y * shift_y)),
-        "drift_x_um": drift_x,
-        "drift_y_um": drift_y,
-        "drift_speed_x_nm_per_s": drift_x / elapsed if elapsed > 0 else 0.0,
-        "drift_speed_y_nm_per_s": drift_y / elapsed if elapsed > 0 else 0.0,
+        "shift_x_um": shift_x_um,
+        "shift_y_um": shift_y_um,
+        "shift_abs_um": float(np.sqrt(shift_x_um * shift_x_um + shift_y_um * shift_y_um)),
+        "drift_x_nm": drift_x_nm,
+        "drift_y_nm": drift_y_nm,
+        "drift_speed_x_nm_per_s": drift_x_nm / elapsed if elapsed > 0 else 0.0,
+        "drift_speed_y_nm_per_s": drift_y_nm / elapsed if elapsed > 0 else 0.0,
         "elapsed_s": elapsed,
     }
 

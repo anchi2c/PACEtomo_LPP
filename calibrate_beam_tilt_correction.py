@@ -13,6 +13,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import serialem as sem
 
+import PACEtomo_beamTiltDefocus as btdef
+
 ############ SETTINGS ############
 
 # Beam tilt used for autofocus measurement [mrad]
@@ -93,9 +95,10 @@ def run_autofocus_trial(correction):
     tilt_x_plus = tilt_x_orig + correction * tilt_angle_mrad
     tilt_x_minus = tilt_x_orig - correction * tilt_angle_mrad
 
-    pixel_size_binned = float(sem.ReportCurrentPixelSize("R"))
-    binning = float(sem.ReportBinning("R"))
-    pixel_size_unbinned = pixel_size_binned / binning
+    focus_camera = "F"
+    pixel_size_binned_nm = float(sem.ReportCurrentPixelSize(focus_camera))
+    focus_binning = float(sem.ReportBinning(focus_camera))
+    pixel_size_unbinned_nm = pixel_size_binned_nm / focus_binning
 
     # Positive tilt
     sem.SetBeamTilt(tilt_x_plus, tilt_y_orig)
@@ -123,24 +126,21 @@ def run_autofocus_trial(correction):
     disp_x2_px = float(align_shift_2[0])
     disp_y2_px = float(align_shift_2[1])
 
-    drift_x = disp_x2_px * pixel_size_unbinned
-    drift_y = disp_y2_px * pixel_size_unbinned
-    speed_x = drift_x / elapsed if elapsed > 0 else 0.0
-    speed_y = drift_y / elapsed if elapsed > 0 else 0.0
+    drift_x_nm = disp_x2_px * pixel_size_unbinned_nm
+    drift_y_nm = disp_y2_px * pixel_size_unbinned_nm
+    speed_x = drift_x_nm / elapsed if elapsed > 0 else 0.0
+    speed_y = drift_y_nm / elapsed if elapsed > 0 else 0.0
 
-    displacement_from_tilt_x = (disp_x1_px - disp_x2_px / 2.0) * pixel_size_unbinned
-    displacement_from_tilt_y = (disp_y1_px - disp_y2_px / 2.0) * pixel_size_unbinned
-    displacement = np.sqrt(
-        displacement_from_tilt_x * displacement_from_tilt_x
-        + displacement_from_tilt_y * displacement_from_tilt_y
-    )
-
-    if displacement_from_tilt_x == 0:
-        sign = 1.0
-    else:
-        sign = displacement_from_tilt_x / abs(displacement_from_tilt_x)
-
-    defocus_measured = -1.0 * sign * displacement / (2*tilt_angle_mrad)
+    shift_x_um = (disp_x1_px - disp_x2_px / 2.0) * pixel_size_unbinned_nm / 1000.0
+    shift_y_um = (disp_y1_px - disp_y2_px / 2.0) * pixel_size_unbinned_nm / 1000.0
+    raw = {
+        "shift_x_um": shift_x_um,
+        "shift_y_um": shift_y_um,
+        "shift_abs_um": float(np.sqrt(shift_x_um * shift_x_um + shift_y_um * shift_y_um)),
+    }
+    defocus_measured = btdef.legacy_physics_diagnostics(
+        raw, tilt_angle_mrad=tilt_angle_mrad
+    )["legacy_defocus_um"]
 
     return defocus_measured, speed_x, speed_y
 
