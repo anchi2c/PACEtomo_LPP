@@ -38,6 +38,11 @@ max_defocus_adjust_iterations = 5
 # Delta is computed using the last cycle's autofocus value.
 autofocus_cycles = 2
 
+# XLensDeflector index and X-tilt for beam-tilt measurements (restored after run).
+xtilt_lens_index = 2
+measurement_xtilt_x = 0.0
+measurement_xtilt_y = 0.0
+
 # Output file names (written in current SerialEM working directory)
 csv_measurements = "beam_tilt_correction_measurements.csv"
 csv_summary = "beam_tilt_correction_summary.csv"
@@ -237,102 +242,126 @@ def main():
     sem.Echo(f"Testing corrections: {list(np.array(beam_tilt_corrections, dtype=float))}")
     sem.Echo(f"Target defocus values: {target_defocus_values}")
 
+    original_xtilt = sem.ReportXLensDeflector(xtilt_lens_index)
+    sem.Echo(
+        f"Saved XLensDeflector({xtilt_lens_index}): "
+        f"({float(original_xtilt[0]):.6f}, {float(original_xtilt[1]):.6f})"
+    )
+
     measurement_rows = []
     summary_rows = []
     grouped_results = []
     fitted_corrections = []
 
-    for target_defocus in target_defocus_values:
-        sem.Echo("------------------------------------------------")
-        sem.Echo(f"Starting target defocus {target_defocus:.3f} um")
-        reached_defocus = set_target_defocus(target_defocus)
-        sem.Echo(f"Defocus after adjustment loop: {reached_defocus:.3f} um")
+    try:
+        sem.SetXLensDeflector(
+            xtilt_lens_index, float(measurement_xtilt_x), float(measurement_xtilt_y)
+        )
+        sem.Echo(
+            f"Set XLensDeflector({xtilt_lens_index}) to "
+            f"({measurement_xtilt_x:.6f}, {measurement_xtilt_y:.6f}) for calibration"
+        )
 
-        corr_vals = []
-        delta_vals = []
-        for corr in beam_tilt_corrections:
-            corr = float(corr)
-            cycle_defocus = []
-            speed_x = 0.0
-            speed_y = 0.0
-            for _ in range(autofocus_cycles):
-                af_defocus, speed_x, speed_y = run_autofocus_trial(corr)
-                cycle_defocus.append(af_defocus)
-            af_defocus_used = cycle_defocus[-1]
-            cycle1 = cycle_defocus[0] if len(cycle_defocus) >= 1 else np.nan
-            cycle2 = cycle_defocus[1] if len(cycle_defocus) >= 2 else np.nan
+        for target_defocus in target_defocus_values:
+            sem.Echo("------------------------------------------------")
+            sem.Echo(f"Starting target defocus {target_defocus:.3f} um")
+            reached_defocus = set_target_defocus(target_defocus)
+            sem.Echo(f"Defocus after adjustment loop: {reached_defocus:.3f} um")
 
-            sem.L()
-            ctf_defocus, ctf_res = run_ctffind()
-            delta = af_defocus_used - ctf_defocus
+            corr_vals = []
+            delta_vals = []
+            for corr in beam_tilt_corrections:
+                corr = float(corr)
+                cycle_defocus = []
+                speed_x = 0.0
+                speed_y = 0.0
+                for _ in range(autofocus_cycles):
+                    af_defocus, speed_x, speed_y = run_autofocus_trial(corr)
+                    cycle_defocus.append(af_defocus)
+                af_defocus_used = cycle_defocus[-1]
+                cycle1 = cycle_defocus[0] if len(cycle_defocus) >= 1 else np.nan
+                cycle2 = cycle_defocus[1] if len(cycle_defocus) >= 2 else np.nan
 
-            sem.Echo(
-                f"target={target_defocus:.3f} um, corr={corr:.4f}, "
-                f"AF(last of {autofocus_cycles})={af_defocus_used:.4f} um, "
-                f"CTF={ctf_defocus:.4f} um, delta={delta:.4f} um, "
-                f"drift=({speed_x:.3f}, {speed_y:.3f}) nm/s"
-            )
+                sem.L()
+                ctf_defocus, ctf_res = run_ctffind()
+                delta = af_defocus_used - ctf_defocus
 
-            measurement_rows.append(
+                sem.Echo(
+                    f"target={target_defocus:.3f} um, corr={corr:.4f}, "
+                    f"AF(last of {autofocus_cycles})={af_defocus_used:.4f} um, "
+                    f"CTF={ctf_defocus:.4f} um, delta={delta:.4f} um, "
+                    f"drift=({speed_x:.3f}, {speed_y:.3f}) nm/s"
+                )
+
+                measurement_rows.append(
+                    {
+                        "target_defocus_um": target_defocus,
+                        "beam_tilt_correction": corr,
+                        "autofocus_cycle_used": autofocus_cycles,
+                        "autofocus_defocus_cycle1_um": cycle1,
+                        "autofocus_defocus_cycle2_um": cycle2,
+                        "autofocus_defocus_um": af_defocus_used,
+                        "ctf_defocus_um": ctf_defocus,
+                        "delta_um": delta,
+                        "ctf_resolution_A": ctf_res,
+                        "drift_speed_x_nm_per_s": speed_x,
+                        "drift_speed_y_nm_per_s": speed_y,
+                    }
+                )
+                corr_vals.append(corr)
+                delta_vals.append(delta)
+
+            slope, intercept, best_correction = fit_best_correction(corr_vals, delta_vals)
+            fitted_corrections.append(best_correction)
+            summary_rows.append(
                 {
                     "target_defocus_um": target_defocus,
-                    "beam_tilt_correction": corr,
-                    "autofocus_cycle_used": autofocus_cycles,
-                    "autofocus_defocus_cycle1_um": cycle1,
-                    "autofocus_defocus_cycle2_um": cycle2,
-                    "autofocus_defocus_um": af_defocus_used,
-                    "ctf_defocus_um": ctf_defocus,
-                    "delta_um": delta,
-                    "ctf_resolution_A": ctf_res,
-                    "drift_speed_x_nm_per_s": speed_x,
-                    "drift_speed_y_nm_per_s": speed_y,
+                    "fitted_correction": best_correction,
+                    "fit_slope": slope,
+                    "fit_intercept": intercept,
                 }
             )
-            corr_vals.append(corr)
-            delta_vals.append(delta)
+            grouped_results.append(
+                {
+                    "target_defocus": target_defocus,
+                    "corrections": corr_vals,
+                    "deltas": delta_vals,
+                    "slope": slope,
+                    "intercept": intercept,
+                    "best_correction": best_correction,
+                }
+            )
+            sem.Echo(
+                f"Fitted correction for defocus {target_defocus:.3f} um: "
+                f"{best_correction:.6f}"
+            )
 
-        slope, intercept, best_correction = fit_best_correction(corr_vals, delta_vals)
-        fitted_corrections.append(best_correction)
-        summary_rows.append(
-            {
-                "target_defocus_um": target_defocus,
-                "fitted_correction": best_correction,
-                "fit_slope": slope,
-                "fit_intercept": intercept,
-            }
-        )
-        grouped_results.append(
-            {
-                "target_defocus": target_defocus,
-                "corrections": corr_vals,
-                "deltas": delta_vals,
-                "slope": slope,
-                "intercept": intercept,
-                "best_correction": best_correction,
-            }
+        finite_corr = [v for v in fitted_corrections if np.isfinite(v)]
+        mean_correction = float(np.mean(finite_corr)) if finite_corr else float("nan")
+
+        save_measurements_csv(csv_measurements, measurement_rows)
+        save_summary_csv(csv_summary, summary_rows, mean_correction)
+        make_plot(plot_file, grouped_results)
+
+        sem.Echo("------------------------------------------------")
+        sem.Echo("Fitted beam tilt correction values by target defocus:")
+        for row in summary_rows:
+            sem.Echo(
+                f"  defocus {float(row['target_defocus_um']):.3f} um -> "
+                f"correction {float(row['fitted_correction']):.6f}"
+            )
+        sem.Echo(f"Mean beam tilt correction: {mean_correction:.6f}")
+        sem.Echo(f"Saved measurements CSV: {csv_measurements}")
+        sem.Echo(f"Saved summary CSV: {csv_summary}")
+        sem.Echo(f"Saved fit plot: {plot_file}")
+    finally:
+        sem.SetXLensDeflector(
+            xtilt_lens_index, float(original_xtilt[0]), float(original_xtilt[1])
         )
         sem.Echo(
-            f"Fitted correction for defocus {target_defocus:.3f} um: {best_correction:.6f}"
+            f"Restored XLensDeflector({xtilt_lens_index}) to "
+            f"({float(original_xtilt[0]):.6f}, {float(original_xtilt[1]):.6f})"
         )
-
-    finite_corr = [v for v in fitted_corrections if np.isfinite(v)]
-    mean_correction = float(np.mean(finite_corr)) if finite_corr else float("nan")
-
-    save_measurements_csv(csv_measurements, measurement_rows)
-    save_summary_csv(csv_summary, summary_rows, mean_correction)
-    make_plot(plot_file, grouped_results)
-
-    sem.Echo("------------------------------------------------")
-    sem.Echo("Fitted beam tilt correction values by target defocus:")
-    for row in summary_rows:
-        sem.Echo(
-            f"  defocus {float(row['target_defocus_um']):.3f} um -> "
-            f"correction {float(row['fitted_correction']):.6f}"
-        )
-    sem.Echo(f"Mean beam tilt correction: {mean_correction:.6f}")
-    sem.Echo(f"Saved measurements CSV: {csv_measurements}")
-    sem.Echo(f"Saved summary CSV: {csv_summary}")
-    sem.Echo(f"Saved fit plot: {plot_file}")
 
     sem.SuppressReports(0)
     sem.Exit()

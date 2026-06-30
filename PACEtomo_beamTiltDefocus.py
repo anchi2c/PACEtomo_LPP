@@ -293,6 +293,18 @@ def measure_raw(tilt_angle_mrad=5.0, beam_tilt_correction=1.0,
     drift_y_nm = disp_y2_px * pixel_size_unbinned_nm
     shift_x_um = (disp_x1_px - disp_x2_px / 2.0) * pixel_size_unbinned_nm / 1000.0
     shift_y_um = (disp_y1_px - disp_y2_px / 2.0) * pixel_size_unbinned_nm / 1000.0
+    pixel_size_um = pixel_size_unbinned_nm / 1000.0
+    if beam_tilt_axis.lower() == "y":
+        minus_vs_plus_ref_um = disp_y1_px * pixel_size_um
+        drift_return_um = disp_y2_px * pixel_size_um
+        shift_axis_um = shift_y_um
+    else:
+        minus_vs_plus_ref_um = disp_x1_px * pixel_size_um
+        drift_return_um = disp_x2_px * pixel_size_um
+        shift_axis_um = shift_x_um
+    # Drift-corrected +/- branch shifts about zero beam tilt (symmetric pair).
+    plus_branch_shift_um = 0.5 * shift_axis_um
+    minus_branch_shift_um = -0.5 * shift_axis_um
     xtilt = _sem.ReportXLensDeflector(2)
 
     return {
@@ -314,6 +326,11 @@ def measure_raw(tilt_angle_mrad=5.0, beam_tilt_correction=1.0,
         "align_shift_2_y_px": disp_y2_px,
         "shift_x_um": shift_x_um,
         "shift_y_um": shift_y_um,
+        "shift_axis_um": float(shift_axis_um),
+        "plus_branch_shift_um": float(plus_branch_shift_um),
+        "minus_branch_shift_um": float(minus_branch_shift_um),
+        "minus_vs_plus_ref_um": float(minus_vs_plus_ref_um),
+        "drift_return_um": float(drift_return_um),
         "shift_abs_um": float(np.sqrt(shift_x_um * shift_x_um + shift_y_um * shift_y_um)),
         "drift_x_nm": drift_x_nm,
         "drift_y_nm": drift_y_nm,

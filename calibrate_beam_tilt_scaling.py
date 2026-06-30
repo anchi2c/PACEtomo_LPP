@@ -2,7 +2,7 @@
 # ===================================================================
 # ScriptName     calibrate_beam_tilt_scaling
 # Purpose:       At X-tilt 0, sweep defocus and fit delta/ratio vs CTF to
-#                compensate beam-tilt defocus (offset + defocus-dependent scale).
+#                compensate beam-tilt defocus (physics + Cs).
 # ===================================================================
 import sys
 sys.path.append(r"C:\Program Files\SerialEM\PythonModules")
@@ -30,7 +30,6 @@ ctf_defocus_hi = -0.2
 target_defocus_tolerance_um = 0.05
 max_defocus_adjust_iterations = 5
 
-# XLensDeflector: save, set to 0 for all measurements, restore at end.
 xtilt_lens_index = 2
 measurement_xtilt_x = 0.0
 measurement_xtilt_y = 0.0
@@ -39,6 +38,7 @@ save_dir = ""
 csv_measurements = "beam_tilt_scaling_measurements.csv"
 calibration_json = "beam_tilt_scaling_calibration.json"
 plot_file = "beam_tilt_scaling_fits.png"
+shift_plot_file = "beam_tilt_scaling_shifts.png"
 
 ########## END SETTINGS ##########
 
@@ -51,13 +51,14 @@ btdef.configure(sem_module=sem, logger=echo)
 
 
 def prepare_output_paths():
-    global csv_measurements, calibration_json, plot_file
+    global csv_measurements, calibration_json, plot_file, shift_plot_file
     if not save_dir:
         return
     os.makedirs(save_dir, exist_ok=True)
     csv_measurements = os.path.join(save_dir, os.path.basename(csv_measurements))
     calibration_json = os.path.join(save_dir, os.path.basename(calibration_json))
     plot_file = os.path.join(save_dir, os.path.basename(plot_file))
+    shift_plot_file = os.path.join(save_dir, os.path.basename(shift_plot_file))
 
 
 def run_ctffind():
@@ -104,8 +105,7 @@ def measure_beam_tilt_defocus():
         defocus_tilt_correction=beam_tilt_correction,
     )
     return {
-        "with_cs_um": float(diag["legacy_defocus_um"]),
-        "without_cs_um": float(diag["linear_term_um"]),
+        "beam_tilt_defocus_um": float(diag["legacy_defocus_um"]),
         "cs_term_um": float(diag["cs_term_um"]),
         "beta_rad": float(diag["beta_rad"]),
         "raw": raw,
@@ -131,10 +131,6 @@ def fit_line(x, y):
 
 
 def fit_affine_true_from_measured(measured, ctf):
-    """
-    Fit CTF = scale * measured + offset.
-    Runtime: corrected_defocus = scale * measured + offset
-    """
     measured = np.array(measured, dtype=float)
     ctf = np.array(ctf, dtype=float)
     mask = np.isfinite(measured) & np.isfinite(ctf)
@@ -148,12 +144,7 @@ def fit_affine_true_from_measured(measured, ctf):
     return float(scale), float(offset), rms
 
 
-def apply_affine_correction(measured, scale, offset):
-    return float(scale) * float(measured) + float(offset)
-
-
 def fit_scaling(measured, ctf):
-    """Delta, ratio, and affine fits for one defocus estimate vs CTF."""
     measured = [float(v) for v in measured]
     ctf = [float(v) for v in ctf]
     deltas = [m - c for m, c in zip(measured, ctf)]
@@ -186,80 +177,105 @@ def fit_scaling(measured, ctf):
         "constant": {
             "mean_delta_um": float(np.nanmean(deltas)),
             "mean_ratio": float(np.nanmean(ratios)),
-            "formula_delta": "corrected = measured - mean_delta",
-            "formula_ratio": "corrected = measured / mean_ratio",
         },
     }
 
 
-def make_plot(path, rows, fits_with_cs, fits_without_cs):
+def make_scaling_plot(path, rows, fits):
     ctf = np.array([float(r["ctf_defocus_um"]) for r in rows], dtype=float)
+    measured = np.array([float(r["beam_tilt_defocus_um"]) for r in rows], dtype=float)
+    delta = np.array([float(r["delta_um"]) for r in rows], dtype=float)
+    ratio = np.array([float(r["ratio"]) for r in rows], dtype=float)
     ctf_line = np.linspace(np.min(ctf), np.max(ctf), 100)
 
-    fig, axes = plt.subplots(3, 2, figsize=(10, 11), tight_layout=True)
+    fig, axes = plt.subplots(2, 2, figsize=(10, 8), tight_layout=True)
 
-    panels = [
-        ("with_cs_um", "delta_with_cs_um", "ratio_with_cs", fits_with_cs, "With Cs"),
-        (
-            "without_cs_um",
-            "delta_without_cs_um",
-            "ratio_without_cs",
-            fits_without_cs,
-            "Linear only (no Cs)",
-        ),
-    ]
-    for col, (meas_key, delta_key, ratio_key, fits, title) in enumerate(panels):
-        measured = np.array([float(r[meas_key]) for r in rows], dtype=float)
-        delta = np.array([float(r[delta_key]) for r in rows], dtype=float)
-        ratio = np.array([float(r[ratio_key]) for r in rows], dtype=float)
+    ax = axes[0, 0]
+    ax.scatter(ctf, measured, label="data")
+    scale = fits["affine"]["scale"]
+    offset = fits["affine"]["offset"]
+    if np.isfinite(scale) and scale != 0:
+        ax.plot(ctf_line, (ctf_line - offset) / scale, label="affine", color="C1")
+    ax.plot(ctf_line, ctf_line, "--", color="gray", label="ideal")
+    ax.set_xlabel("CTF defocus (um)")
+    ax.set_ylabel("Beam-tilt defocus (um)")
+    ax.set_title("Measured vs CTF")
+    ax.legend(fontsize=8)
 
-        ax = axes[0, col]
-        ax.scatter(ctf, measured, label="data")
-        scale = fits["affine"]["scale"]
-        offset = fits["affine"]["offset"]
-        if np.isfinite(scale) and scale != 0:
-            ax.plot(
-                ctf_line,
-                (ctf_line - offset) / scale,
-                label="affine",
-                color="C1",
-            )
-        ax.plot(ctf_line, ctf_line, "--", color="gray", label="ideal")
-        ax.set_xlabel("CTF defocus (um)")
-        ax.set_ylabel("Beam-tilt defocus (um)")
-        ax.set_title(f"{title}: measured vs CTF")
-        ax.legend(fontsize=8)
+    ax = axes[0, 1]
+    ax.scatter(ctf, delta)
+    ax.plot(
+        ctf_line,
+        fits["delta"]["intercept"] + fits["delta"]["slope_vs_ctf"] * ctf_line,
+        color="C1",
+    )
+    ax.axhline(0, color="gray", linestyle="--", linewidth=1)
+    ax.set_xlabel("CTF defocus (um)")
+    ax.set_ylabel("Delta (um)")
+    ax.set_title("Delta vs CTF")
 
-        ax = axes[1, col]
-        ax.scatter(ctf, delta)
-        ax.plot(
-            ctf_line,
-            fits["delta"]["intercept"] + fits["delta"]["slope_vs_ctf"] * ctf_line,
-            color="C1",
-        )
-        ax.axhline(0, color="gray", linestyle="--", linewidth=1)
-        ax.set_xlabel("CTF defocus (um)")
-        ax.set_ylabel("Delta (um)")
-        ax.set_title(f"{title}: delta vs CTF")
+    ax = axes[1, 0]
+    ax.scatter(ctf, ratio)
+    ax.plot(
+        ctf_line,
+        fits["ratio"]["intercept"] + fits["ratio"]["slope_vs_ctf"] * ctf_line,
+        color="C1",
+    )
+    ax.axhline(1, color="gray", linestyle="--", linewidth=1)
+    ax.set_xlabel("CTF defocus (um)")
+    ax.set_ylabel("Ratio")
+    ax.set_title("Ratio vs CTF")
 
-        ax = axes[2, col]
-        ax.scatter(ctf, ratio)
-        ax.plot(
-            ctf_line,
-            fits["ratio"]["intercept"] + fits["ratio"]["slope_vs_ctf"] * ctf_line,
-            color="C1",
-        )
-        ax.axhline(1, color="gray", linestyle="--", linewidth=1)
-        ax.set_xlabel("CTF defocus (um)")
-        ax.set_ylabel("Ratio")
-        ax.set_title(f"{title}: ratio vs CTF")
+    corrected = np.array(
+        [
+            fits["affine"]["scale"] * r["beam_tilt_defocus_um"]
+            + fits["affine"]["offset"]
+            for r in rows
+        ],
+        dtype=float,
+    )
+    ax = axes[1, 1]
+    ax.scatter(ctf, corrected - ctf)
+    ax.axhline(0, color="gray", linestyle="--", linewidth=1)
+    ax.set_xlabel("CTF defocus (um)")
+    ax.set_ylabel("Corrected - CTF (um)")
+    ax.set_title("Affine correction residual")
 
     fig.savefig(path, dpi=150)
     plt.show()
 
 
-def echo_fit_summary(label, fits):
-    echo(f"--- {label} ---")
+def make_shift_plot(path, rows, plus_fit, minus_fit):
+    ctf = np.array([float(r["ctf_defocus_um"]) for r in rows], dtype=float)
+    plus = np.array([float(r["plus_branch_shift_um"]) for r in rows], dtype=float)
+    minus = np.array([float(r["minus_branch_shift_um"]) for r in rows], dtype=float)
+    ctf_line = np.linspace(np.min(ctf), np.max(ctf), 100)
+
+    fig, ax = plt.subplots(figsize=(8, 5), tight_layout=True)
+    ax.scatter(ctf, plus, label="+ branch", color="C0")
+    ax.scatter(ctf, minus, label="- branch", color="C1")
+    ax.plot(
+        ctf_line,
+        plus_fit[1] + plus_fit[0] * ctf_line,
+        color="C0",
+        label=f"+ fit: {plus_fit[1]:.4f} + {plus_fit[0]:.4f}*ctf",
+    )
+    ax.plot(
+        ctf_line,
+        minus_fit[1] + minus_fit[0] * ctf_line,
+        color="C1",
+        label=f"- fit: {minus_fit[1]:.4f} + {minus_fit[0]:.4f}*ctf",
+    )
+    ax.axhline(0, color="gray", linestyle="--", linewidth=1)
+    ax.set_xlabel("CTF defocus (um)")
+    ax.set_ylabel(f"Signed shift along {beam_tilt_axis} (um)")
+    ax.set_title("Plus/minus branch shifts vs defocus")
+    ax.legend(fontsize=8)
+    fig.savefig(path, dpi=150)
+    plt.show()
+
+
+def echo_fit_summary(fits):
     echo(f"  mean delta: {fits['constant']['mean_delta_um']:.6f} um")
     echo(f"  mean ratio: {fits['constant']['mean_ratio']:.6f}")
     echo(
@@ -325,14 +341,16 @@ def main():
             row = {
                 "target_defocus_um": float(target_defocus),
                 "ctf_defocus_um": float(ctf_defocus),
-                "with_cs_um": measure["with_cs_um"],
-                "without_cs_um": measure["without_cs_um"],
+                "beam_tilt_defocus_um": measure["beam_tilt_defocus_um"],
                 "cs_term_um": measure["cs_term_um"],
                 "beta_rad": measure["beta_rad"],
-                "delta_with_cs_um": measure["with_cs_um"] - ctf_defocus,
-                "delta_without_cs_um": measure["without_cs_um"] - ctf_defocus,
-                "ratio_with_cs": safe_ratio(measure["with_cs_um"], ctf_defocus),
-                "ratio_without_cs": safe_ratio(measure["without_cs_um"], ctf_defocus),
+                "delta_um": measure["beam_tilt_defocus_um"] - ctf_defocus,
+                "ratio": safe_ratio(measure["beam_tilt_defocus_um"], ctf_defocus),
+                "shift_axis_um": float(raw["shift_axis_um"]),
+                "plus_branch_shift_um": float(raw["plus_branch_shift_um"]),
+                "minus_branch_shift_um": float(raw["minus_branch_shift_um"]),
+                "minus_vs_plus_ref_um": float(raw["minus_vs_plus_ref_um"]),
+                "drift_return_um": float(raw["drift_return_um"]),
                 "shift_x_um": float(raw["shift_x_um"]),
                 "shift_y_um": float(raw["shift_y_um"]),
                 "ctf_resolution_A": float(ctf_res),
@@ -340,37 +358,22 @@ def main():
             }
             rows.append(row)
             echo(
-                f"with Cs={measure['with_cs_um']:.4f}, "
-                f"no Cs={measure['without_cs_um']:.4f}, "
+                f"defocus={measure['beam_tilt_defocus_um']:.4f}, "
                 f"Cs term={measure['cs_term_um']:.4f}, "
                 f"CTF={ctf_defocus:.4f} um, "
-                f"delta(Cs)={row['delta_with_cs_um']:.4f}, "
-                f"delta(no Cs)={row['delta_without_cs_um']:.4f}, "
-                f"ratio(Cs)={row['ratio_with_cs']:.4f}, "
-                f"ratio(no Cs)={row['ratio_without_cs']:.4f}, "
+                f"delta={row['delta_um']:.4f}, ratio={row['ratio']:.4f}, "
+                f"+ branch={row['plus_branch_shift_um']:.4f} um, "
+                f"- branch={row['minus_branch_shift_um']:.4f} um, "
+                f"- vs + ref={row['minus_vs_plus_ref_um']:.4f} um, "
                 f"drift={drift:.3f} nm/s"
             )
 
         ctf = [r["ctf_defocus_um"] for r in rows]
-        fits_with_cs = fit_scaling([r["with_cs_um"] for r in rows], ctf)
-        fits_without_cs = fit_scaling([r["without_cs_um"] for r in rows], ctf)
-
-        if fits_with_cs["affine"]["rms_um"] <= fits_without_cs["affine"]["rms_um"]:
-            recommended = {
-                "equation": "with_cs",
-                "model": "affine",
-                "scale": fits_with_cs["affine"]["scale"],
-                "offset": fits_with_cs["affine"]["offset"],
-                "rms_um": fits_with_cs["affine"]["rms_um"],
-            }
-        else:
-            recommended = {
-                "equation": "without_cs",
-                "model": "affine",
-                "scale": fits_without_cs["affine"]["scale"],
-                "offset": fits_without_cs["affine"]["offset"],
-                "rms_um": fits_without_cs["affine"]["rms_um"],
-            }
+        plus = [r["plus_branch_shift_um"] for r in rows]
+        minus = [r["minus_branch_shift_um"] for r in rows]
+        fits = fit_scaling([r["beam_tilt_defocus_um"] for r in rows], ctf)
+        plus_slope, plus_intercept, plus_rms = fit_line(ctf, plus)
+        minus_slope, minus_intercept, minus_rms = fit_line(ctf, minus)
 
         calibration = {
             "model": "beam_tilt_defocus_scaling",
@@ -381,15 +384,28 @@ def main():
             "spherical_aberration_mm": float(btdef.spherical_aberration_mm),
             "measurement_xtilt_x": float(measurement_xtilt_x),
             "measurement_xtilt_y": float(measurement_xtilt_y),
-            "with_cs": {
-                "equation": "-displacement/(2*beta) - Cs*beta^2",
-                "fits": fits_with_cs,
+            "equation": "-displacement/(2*beta) - Cs*beta^2",
+            "fits": fits,
+            "branch_shift_fits_vs_ctf": {
+                "plus_branch": {
+                    "slope": plus_slope,
+                    "intercept": plus_intercept,
+                    "rms_um": plus_rms,
+                    "formula": "plus_shift = intercept + slope * ctf_defocus",
+                },
+                "minus_branch": {
+                    "slope": minus_slope,
+                    "intercept": minus_intercept,
+                    "rms_um": minus_rms,
+                    "formula": "minus_shift = intercept + slope * ctf_defocus",
+                },
             },
-            "without_cs": {
-                "equation": "-displacement/(2*beta)  (linear term only)",
-                "fits": fits_without_cs,
+            "recommended": {
+                "model": "affine",
+                "scale": fits["affine"]["scale"],
+                "offset": fits["affine"]["offset"],
+                "rms_um": fits["affine"]["rms_um"],
             },
-            "recommended": recommended,
         }
 
         with open(csv_measurements, "w", newline="") as fh:
@@ -400,20 +416,27 @@ def main():
         with open(calibration_json, "w") as fh:
             json.dump(calibration, fh, indent=2)
 
-        make_plot(plot_file, rows, fits_with_cs, fits_without_cs)
+        make_scaling_plot(plot_file, rows, fits)
+        make_shift_plot(
+            shift_plot_file, rows, (plus_slope, plus_intercept), (minus_slope, minus_intercept)
+        )
 
         echo("================================================")
-        echo("FIT RESULTS (X-tilt 0)")
-        echo_fit_summary("With Cs", fits_with_cs)
-        echo_fit_summary("Without Cs (linear only)", fits_without_cs)
+        echo("FIT RESULTS (X-tilt 0, physics + Cs)")
+        echo_fit_summary(fits)
         echo(
-            f"Recommended affine: {recommended['equation']} "
-            f"(RMS {recommended['rms_um']:.6f} um)"
+            f"+ branch vs CTF: {plus_intercept:.6f} + {plus_slope:.6f} * ctf "
+            f"(RMS {plus_rms:.6f} um)"
+        )
+        echo(
+            f"- branch vs CTF: {minus_intercept:.6f} + {minus_slope:.6f} * ctf "
+            f"(RMS {minus_rms:.6f} um)"
         )
         echo("================================================")
         echo(f"Saved measurements: {csv_measurements}")
         echo(f"Saved calibration JSON: {calibration_json}")
-        echo(f"Saved plot: {plot_file}")
+        echo(f"Saved scaling plot: {plot_file}")
+        echo(f"Saved shift plot: {shift_plot_file}")
 
     finally:
         sem.SetXLensDeflector(

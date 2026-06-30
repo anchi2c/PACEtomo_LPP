@@ -29,7 +29,7 @@ spherical_aberration_mm = 2.7
 
 # Defocus equation tilt scale (replaces beam_tilt_correction in beta only).
 # SetBeamTilt still uses beam_tilt_correction above; many scopes need ~0.95 here.
-defocus_tilt_correction = 0.95
+defocus_tilt_correction = 2
 
 # Optional sweep grid for defocus_tilt_correction fit. Leave empty for 0.7-1.3.
 defocus_tilt_corrections_for_fit = []
