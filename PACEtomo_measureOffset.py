@@ -20,7 +20,7 @@ plot        = True  # plot measurements
 # Defocus measurement in tilt loop (sem.G(-1) replacement)
 defocusMethod = "ctf"       # ctf | beam_tilt
 
-# X-tilt for defocus measurement (CTF and beam-tilt)
+# X-tilt for CtfFind
 ctfXtiltX = 0.002836
 ctfXtiltY = 0.003867
 ctfDefocusLo = -10.0        # CtfFind search range low [microns]
@@ -29,10 +29,12 @@ ctf_resolution_max_A = 10.0 # retry CtfFind if resolution [A] is above this
 ctf_max_attempts = 3        # max CtfFind attempts per measurement
 ctf_retry_delay_s = 5       # delay before refocus shot on retry [s]
 
-# Beam-tilt (always used for initial autofocus; also for tilt loop if defocusMethod == beam_tilt)
-tilt_angle_mrad = 5.0
-beam_tilt_correction = 1.73       # physical scale: requested beam tilt mrad -> SetBeamTilt units
-defocus_tilt_correction = 0.95    # tilt scale in defocus beta only (often < beam_tilt_correction)
+# Beam-tilt (match calibrate_beam_tilt_scaling.py)
+tilt_angle_mrad = 10.0
+beam_tilt_correction = 1.73
+defocus_tilt_correction = beam_tilt_correction
+beam_tilt_xtilt_x = 0.0
+beam_tilt_xtilt_y = 0.0
 spherical_aberration_mm = 2.7     # Cs for defocus = -disp/(2*beta) - Cs*beta^2 [mm]
 autofocus_cycles = 2              # initial autofocus: correct focus to target_defocus (sem.G)
 measure_cycles = 1                # cycles per tilt-loop measurement
@@ -62,8 +64,8 @@ def beam_tilt_measure_defocus():
         tilt_angle_mrad=tilt_angle_mrad,
         beam_tilt_correction=beam_tilt_correction,
         defocus_tilt_correction=defocus_tilt_correction,
-        xtilt_x=ctfXtiltX,
-        xtilt_y=ctfXtiltY,
+        xtilt_x=beam_tilt_xtilt_x,
+        xtilt_y=beam_tilt_xtilt_y,
         cs_mm=spherical_aberration_mm,
     )
 

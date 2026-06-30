@@ -27,7 +27,8 @@ calibration = {
 # Spherical aberration coefficient [mm]. Base beam-tilt equation:
 #   defocus_um = -displacement_um / (2 * beta_rad) - Cs_um * beta_rad^2
 #   beta_rad = tilt_angle_mrad * defocus_tilt_correction * 1e-3
-# defocus_tilt_correction scales tilt in the defocus equation only (not SetBeamTilt).
+# When defocus_tilt_correction is omitted, beam_tilt_correction is used for beta too
+# (matches calibrate_beam_tilt_scaling.py).
 spherical_aberration_mm = 2.7
 
 ########## END SETTINGS ##########
@@ -119,7 +120,7 @@ def _physics_cs_defocus(raw, tilt_angle_mrad, cs_mm, beam_tilt_axis="x",
     beta_rad = tilt_angle_mrad * defocus_tilt_correction * 1e-3
 
     defocus_tilt_correction enters the defocus equation only. SetBeamTilt uses
-    beam_tilt_correction separately (often ~1.73); many scopes need ~0.95 here.
+    beam_tilt_correction; by default both use the same factor.
     """
     beta_rad = float(tilt_angle_mrad) * float(defocus_tilt_correction) * 1e-3
     signed_displacement = _signed_displacement_um(raw, beam_tilt_axis)
@@ -169,8 +170,10 @@ def defocus_from_raw(raw, tilt_angle_mrad=5.0, cs_mm=None, beam_tilt_axis="x",
     if defocus_tilt_correction is None:
         if calib and "defocus_tilt_correction" in calib:
             defocus_tilt_correction = float(calib["defocus_tilt_correction"])
+        elif "defocus_tilt_correction" in raw:
+            defocus_tilt_correction = float(raw["defocus_tilt_correction"])
         else:
-            defocus_tilt_correction = float(raw.get("defocus_tilt_correction", 1.0))
+            defocus_tilt_correction = float(raw.get("beam_tilt_correction", 1.0))
     base_um, _, _, _ = _physics_cs_defocus(
         raw, tilt_angle_mrad, cs_mm, beam_tilt_axis=beam_tilt_axis,
         defocus_tilt_correction=defocus_tilt_correction,
@@ -376,18 +379,18 @@ def measure_defocus_with_diagnostics(tilt_angle_mrad=5.0,
             beam_tilt_correction=beam_tilt_correction,
             beam_tilt_axis=beam_tilt_axis,
         )
-        if defocus_tilt_correction is not None:
-            raw["defocus_tilt_correction"] = float(defocus_tilt_correction)
+        beta_correction = (
+            float(defocus_tilt_correction)
+            if defocus_tilt_correction is not None
+            else float(raw["beam_tilt_correction"])
+        )
+        raw["defocus_tilt_correction"] = beta_correction
         raw.update(legacy_physics_diagnostics(
             raw,
             tilt_angle_mrad=tilt_angle_mrad,
             cs_mm=cs_mm,
             beam_tilt_axis=beam_tilt_axis,
-            defocus_tilt_correction=(
-                defocus_tilt_correction
-                if defocus_tilt_correction is not None
-                else float(raw.get("defocus_tilt_correction", 1.0))
-            ),
+            defocus_tilt_correction=beta_correction,
         ))
         calib = calibration_data if calibration_data is not None else get_calibration()
         model = calib.get("model", "physics_cs") if calib else "physics_cs"

@@ -24,6 +24,7 @@ import PACEtomo_beamTiltDefocus as btdef
 
 tilt_angle_mrad = 10.0
 beam_tilt_correction = 1.73
+defocus_tilt_correction = beam_tilt_correction  # same factor in beta as SetBeamTilt
 beam_tilt_axis = "x"
 
 target_defocus_values = [-1.0, -2.0, -3.0, -4.0, -5.0]
@@ -133,7 +134,7 @@ def measure_beam_tilt_defocus():
             raw,
             tilt_angle_mrad=tilt_angle_mrad,
             beam_tilt_axis=beam_tilt_axis,
-            defocus_tilt_correction=beam_tilt_correction,
+            defocus_tilt_correction=defocus_tilt_correction,
         )
         return {
             "beam_tilt_defocus_um": float(diag["legacy_defocus_um"]),
@@ -212,6 +213,7 @@ def main():
     echo(f"Output directory: {os.path.dirname(csv_measurements)}")
     echo(
         f"beam_tilt_correction={beam_tilt_correction}, "
+        f"defocus_tilt_correction={defocus_tilt_correction}, "
         f"tilt_angle_mrad={tilt_angle_mrad}, "
         f"SetBeamTilt step={beam_tilt_correction * tilt_angle_mrad:.4f}"
     )
@@ -263,6 +265,7 @@ def main():
             "created": datetime.now().isoformat(timespec="seconds"),
             "tilt_angle_mrad": float(tilt_angle_mrad),
             "beam_tilt_correction": float(beam_tilt_correction),
+            "defocus_tilt_correction": float(defocus_tilt_correction),
             "beam_tilt_axis": beam_tilt_axis,
             "spherical_aberration_mm": float(btdef.spherical_aberration_mm),
             "ctf_xtilt_x": float(ctf_xtilt_x),

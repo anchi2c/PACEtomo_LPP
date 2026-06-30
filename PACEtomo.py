@@ -109,9 +109,11 @@ ctfDefocusHi = -0.2             # CtfFind search range high [microns]
 ctf_resolution_max_A = 20.0     # retry CtfFind if resolution [A] is above this
 ctf_max_attempts = 3
 ctf_retry_delay_s = 5
-tilt_angle_mrad = 5.0
-beam_tilt_correction = 1.73       # physical scale: requested beam tilt mrad -> SetBeamTilt units
-defocus_tilt_correction = 0.95    # tilt scale in defocus beta only (often < beam_tilt_correction)
+tilt_angle_mrad = 10.0            # match calibrate_beam_tilt_scaling.py
+beam_tilt_correction = 1.73       # SetBeamTilt scale; same value used in defocus beta
+defocus_tilt_correction = beam_tilt_correction
+beam_tilt_xtilt_x = 0.0           # X-tilt for beam-tilt defocus (scaling calib default)
+beam_tilt_xtilt_y = 0.0
 spherical_aberration_mm = 2.7     # Cs for defocus = -disp/(2*beta) - Cs*beta^2 [mm]
 autofocus_cycles = 2
 measure_cycles = 1
@@ -252,8 +254,8 @@ def beam_tilt_measure_defocus():
         tilt_angle_mrad=tilt_angle_mrad,
         beam_tilt_correction=beam_tilt_correction,
         defocus_tilt_correction=defocus_tilt_correction,
-        xtilt_x=ctfXtiltX,
-        xtilt_y=ctfXtiltY,
+        xtilt_x=beam_tilt_xtilt_x,
+        xtilt_y=beam_tilt_xtilt_y,
         cs_mm=spherical_aberration_mm,
     )
 
