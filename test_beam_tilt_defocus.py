@@ -1,8 +1,8 @@
 #!Python
 # ===================================================================
 # ScriptName     test_beam_tilt_defocus
-# Purpose:       Validate PACEtomo_beamTiltDefocus vs CTF using the same
-#                parameters as calibrate_beam_tilt_scaling.py.
+# Purpose:       Beam-tilt autofocus to a single target defocus, then
+#                compare the converged value with CtfFind at CTF X-tilt.
 # ===================================================================
 import sys
 sys.path.append(r"C:\Program Files\SerialEM\PythonModules")
@@ -16,12 +16,12 @@ beam_tilt_correction = 1.73
 defocus_tilt_correction = beam_tilt_correction
 beam_tilt_axis = "x"
 
-target_defocus_values = [-1.0, -2.0, -3.0, -4.0, -5.0]
+target_defocus_um = -4.0
+autofocus_tolerance_um = 0.05
+max_autofocus_cycles = 3
 
 ctf_defocus_lo = -10.0
 ctf_defocus_hi = -0.2
-target_defocus_tolerance_um = 0.05
-max_defocus_adjust_iterations = 5
 
 xtilt_lens_index = 2
 ctf_xtilt_x = 0.002836
@@ -30,7 +30,7 @@ beam_tilt_xtilt_x = 0.0
 beam_tilt_xtilt_y = 0.0
 
 # Point at scaling JSON to test calibration; leave "" for physics-only.
-calibration_file = r""
+calibration_file = r"X:\k3f_leginonframes\p26jun29a\xtilt_calib_test\beam_tilt_scaling_calibration.json"
 
 ########## END SETTINGS ##########
 
@@ -71,22 +71,32 @@ def acquire_ctf_reference():
         set_xtilt(float(xtilt[0]), float(xtilt[1]))
 
 
-def set_target_defocus(target_defocus):
-    sem.GoToLowDoseArea("R")
-    sem.SetImageShift(0, 0)
-    current_defocus = float("nan")
-    for attempt in range(1, max_defocus_adjust_iterations + 1):
-        current_defocus, _ = acquire_ctf_reference()
-        error = target_defocus - current_defocus
-        echo(
-            f"Target defocus {attempt}/{max_defocus_adjust_iterations}: "
-            f"current={current_defocus:.3f} um, target={target_defocus:.3f} um"
+def beam_tilt_autofocus(target):
+    """Iterate beam-tilt measure + ChangeFocus until within tolerance."""
+    defocus = float("nan")
+    for cycle in range(1, max_autofocus_cycles + 1):
+        defocus, raw = btdef.measure_defocus_with_diagnostics(
+            tilt_angle_mrad=tilt_angle_mrad,
+            beam_tilt_correction=beam_tilt_correction,
+            defocus_tilt_correction=defocus_tilt_correction,
+            xtilt_x=beam_tilt_xtilt_x,
+            xtilt_y=beam_tilt_xtilt_y,
+            lens_index=xtilt_lens_index,
+            beam_tilt_axis=beam_tilt_axis,
         )
-        if abs(error) <= target_defocus_tolerance_um:
-            return current_defocus
+        error = float(target) - defocus
+        echo(
+            f"Autofocus {cycle}/{max_autofocus_cycles}: "
+            f"measured={defocus:.4f} um, target={float(target):.3f} um, "
+            f"error={error:.3f} um, "
+            f"drift=({raw['drift_speed_x_nm_per_s']:.2f}, "
+            f"{raw['drift_speed_y_nm_per_s']:.2f}) nm/s"
+        )
+        if abs(error) <= autofocus_tolerance_um:
+            return defocus, raw
         sem.ChangeFocus(error)
-    echo("WARNING: Target defocus not reached within tolerance.")
-    return current_defocus
+    echo("WARNING: Beam-tilt autofocus did not reach tolerance.")
+    return defocus, raw
 
 
 def main():
@@ -98,6 +108,7 @@ def main():
         f"defocus_tilt_correction={defocus_tilt_correction}, "
         f"tilt_angle_mrad={tilt_angle_mrad}"
     )
+    echo(f"target defocus={target_defocus_um:.3f} um")
     echo(f"CTF X-tilt=({ctf_xtilt_x:.6f}, {ctf_xtilt_y:.6f})")
     echo(f"beam-tilt X-tilt=({beam_tilt_xtilt_x:.6f}, {beam_tilt_xtilt_y:.6f})")
 
@@ -107,48 +118,35 @@ def main():
         f"({float(original_xtilt[0]):.6f}, {float(original_xtilt[1]):.6f})"
     )
 
-    deltas_physics = []
-    deltas_calibrated = []
     try:
-        for target_defocus in target_defocus_values:
-            echo("------------------------------------------------")
-            echo(f"Target defocus {float(target_defocus):.3f} um")
-            reached = set_target_defocus(target_defocus)
-            echo(f"CTF after focus adjust: {reached:.3f} um")
+        sem.GoToLowDoseArea("R")
+        sem.SetImageShift(0, 0)
 
-            defocus, raw = btdef.measure_defocus_with_diagnostics(
-                tilt_angle_mrad=tilt_angle_mrad,
-                beam_tilt_correction=beam_tilt_correction,
-                defocus_tilt_correction=defocus_tilt_correction,
-                xtilt_x=beam_tilt_xtilt_x,
-                xtilt_y=beam_tilt_xtilt_y,
-                lens_index=xtilt_lens_index,
-                beam_tilt_axis=beam_tilt_axis,
-            )
-            ctf_defocus, ctf_res = acquire_ctf_reference()
+        echo("------------------------------------------------")
+        echo("Beam-tilt autofocus")
+        beam_defocus, raw = beam_tilt_autofocus(target_defocus_um)
 
-            physics = raw["legacy_defocus_um"]
-            correction = raw["calibration_correction_um"]
-            delta_physics = physics - ctf_defocus
-            delta_calibrated = defocus - ctf_defocus
-            deltas_physics.append(delta_physics)
-            deltas_calibrated.append(delta_calibrated)
+        echo("------------------------------------------------")
+        echo("CTF reference measurement")
+        ctf_defocus, ctf_res = acquire_ctf_reference()
 
-            echo(
-                f"physics={physics:.4f}, Cs={raw['cs_term_um']:.4f}, "
-                f"correction={correction:.4f}, calibrated={defocus:.4f}, "
-                f"CTF={ctf_defocus:.4f} ({ctf_res:.1f} A), "
-                f"delta(physics)={delta_physics:.4f}, "
-                f"delta(calibrated)={delta_calibrated:.4f}, "
-                f"drift=({raw['drift_speed_x_nm_per_s']:.2f}, "
-                f"{raw['drift_speed_y_nm_per_s']:.2f}) nm/s"
-            )
+        physics = raw["legacy_defocus_um"]
+        correction = raw["calibration_correction_um"]
+        error_vs_target = beam_defocus - target_defocus_um
+        delta_vs_ctf = beam_defocus - ctf_defocus
+        physics_vs_ctf = physics - ctf_defocus
 
         echo("================================================")
-        echo(
-            f"mean delta(physics)={sum(deltas_physics) / len(deltas_physics):.4f} um, "
-            f"mean delta(calibrated)={sum(deltas_calibrated) / len(deltas_calibrated):.4f} um"
-        )
+        echo("FINAL RESULTS")
+        echo(f"  target defocus:        {target_defocus_um:.4f} um")
+        echo(f"  beam-tilt (calibrated): {beam_defocus:.4f} um")
+        echo(f"  beam-tilt (physics):    {physics:.4f} um")
+        echo(f"  calibration correction: {correction:.4f} um")
+        echo(f"  Cs term:                {raw['cs_term_um']:.4f} um")
+        echo(f"  CTF:                    {ctf_defocus:.4f} um ({ctf_res:.1f} A)")
+        echo(f"  error vs target:        {error_vs_target:.4f} um")
+        echo(f"  delta calibrated-CTF:   {delta_vs_ctf:.4f} um")
+        echo(f"  delta physics-CTF:      {physics_vs_ctf:.4f} um")
         echo("================================================")
 
     finally:
