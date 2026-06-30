@@ -7,6 +7,7 @@
 
 import csv
 import json
+import os
 from datetime import datetime
 
 import matplotlib.pyplot as plt
@@ -69,7 +70,10 @@ repeats = 1
 # Reject rows from fitting if drift exceeds this speed. Set <= 0 to disable.
 max_drift_nm_per_s = 2.0
 
-# Output file names in the current SerialEM working directory.
+# Output directory. Empty string writes to the current SerialEM working directory.
+save_dir = ""
+
+# Output file names (written under save_dir when set).
 csv_measurements = "beam_tilt_xtilt_matrix_measurements.csv"
 csv_summary = "beam_tilt_xtilt_matrix_summary.csv"
 calibration_json = "beam_tilt_xtilt_matrix_calibration.json"
@@ -83,6 +87,26 @@ def echo(text):
 
 
 btdef.configure(sem_module=sem, logger=echo)
+
+
+def prepare_output_paths():
+    """Resolve output paths under save_dir and create the directory if needed."""
+    global csv_measurements, csv_summary, calibration_json, plot_file
+    if not save_dir:
+        return
+    os.makedirs(save_dir, exist_ok=True)
+    csv_measurements = os.path.join(save_dir, csv_measurements)
+    csv_summary = os.path.join(save_dir, csv_summary)
+    calibration_json = os.path.join(save_dir, calibration_json)
+    plot_file = os.path.join(save_dir, plot_file)
+
+
+def legacy_ctf_ratio(legacy_defocus, ctf_defocus):
+    """Ratio legacy / CTF defocus; NaN when CTF is zero or values are invalid."""
+    if (not np.isfinite(legacy_defocus) or not np.isfinite(ctf_defocus)
+            or abs(float(ctf_defocus)) < 1e-6):
+        return np.nan
+    return float(legacy_defocus) / float(ctf_defocus)
 
 
 def axis_or_grid(x_steps, y_steps, step_size, include_grid):
@@ -194,6 +218,7 @@ def measurement_fields():
         "legacy_defocus_um",
         "ctf_defocus_um",
         "delta_legacy_minus_ctf_um",
+        "ratio_legacy_over_ctf",
         "ctf_resolution_A",
         "drift_speed_x_nm_per_s",
         "drift_speed_y_nm_per_s",
@@ -278,6 +303,10 @@ def collect_measurements():
                                 calibration_data={"model": "legacy_radial"},
                             )
                             ctf_defocus, ctf_res = acquire_ctf_reference()
+                            delta_legacy_ctf = legacy_defocus - ctf_defocus
+                            ratio_legacy_ctf = legacy_ctf_ratio(
+                                legacy_defocus, ctf_defocus
+                            )
                             drift_abs = float(np.hypot(
                                 raw["drift_speed_x_nm_per_s"],
                                 raw["drift_speed_y_nm_per_s"],
@@ -313,7 +342,8 @@ def collect_measurements():
                                 "shift_abs_um": raw["shift_abs_um"],
                                 "legacy_defocus_um": legacy_defocus,
                                 "ctf_defocus_um": ctf_defocus,
-                                "delta_legacy_minus_ctf_um": legacy_defocus - ctf_defocus,
+                                "delta_legacy_minus_ctf_um": delta_legacy_ctf,
+                                "ratio_legacy_over_ctf": ratio_legacy_ctf,
                                 "ctf_resolution_A": ctf_res,
                                 "drift_speed_x_nm_per_s": raw["drift_speed_x_nm_per_s"],
                                 "drift_speed_y_nm_per_s": raw["drift_speed_y_nm_per_s"],
@@ -323,11 +353,17 @@ def collect_measurements():
                             }
                             append_measurement(csv_measurements, row)
                             rows.append(row)
+                            ratio_text = (
+                                f"{ratio_legacy_ctf:.4f}"
+                                if np.isfinite(ratio_legacy_ctf)
+                                else "NaN"
+                            )
                             sem.Echo(
                                 f"xtilt=({xtilt_x:.6f}, {xtilt_y:.6f}), "
                                 f"bt_offset=({bt_off_x:.3f}, {bt_off_y:.3f}), "
                                 f"legacy={legacy_defocus:.4f}, CTF={ctf_defocus:.4f}, "
-                                f"delta={legacy_defocus - ctf_defocus:.4f}, "
+                                f"delta={delta_legacy_ctf:.4f}, "
+                                f"ratio={ratio_text}, "
                                 f"drift={drift_abs:.3f} nm/s"
                             )
     finally:
@@ -535,6 +571,9 @@ def main():
     sem.SuppressReports()
     sem.Echo("##### Beam tilt / X-tilt matrix calibration #####")
     sem.Echo(f"Timestamp: {datetime.now().isoformat(timespec='seconds')}")
+    prepare_output_paths()
+    if save_dir:
+        sem.Echo(f"Output directory: {save_dir}")
     initialize_measurements(csv_measurements)
     rows = collect_measurements()
     calibration, fit_rows = fit_defocus_model(rows)
