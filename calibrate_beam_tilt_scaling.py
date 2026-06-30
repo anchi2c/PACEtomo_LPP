@@ -33,10 +33,16 @@ ctf_defocus_hi = -0.2
 target_defocus_tolerance_um = 0.05
 max_defocus_adjust_iterations = 5
 
-# XLensDeflector index and X-tilt for beam-tilt measurements (restored after run).
+# XLensDeflector index (restored after run).
 xtilt_lens_index = 2
-measurement_xtilt_x = 0.0
-measurement_xtilt_y = 0.0
+
+# X-tilt for CtfFind and defocus adjustment (match PACEtomo ctfXtiltX/Y).
+ctf_xtilt_x = 0.002836
+ctf_xtilt_y = 0.003867
+
+# X-tilt for beam-tilt defocus measurements.
+beam_tilt_xtilt_x = 0.0
+beam_tilt_xtilt_y = 0.0
 
 # Output directory. Empty string writes to the current SerialEM working directory.
 save_dir = r"X:\k3f_leginonframes\p26jun29a\xtilt_calib_test"
@@ -69,6 +75,10 @@ def prepare_output_paths():
     plot_file = os.path.abspath(plot_file)
 
 
+def set_xtilt(x, y):
+    sem.SetXLensDeflector(xtilt_lens_index, float(x), float(y))
+
+
 def run_ctffind():
     sem.NoMessageBoxOnError(1)
     try:
@@ -81,13 +91,23 @@ def run_ctffind():
     return float(cfind[0]), float(cfind[-1])
 
 
+def acquire_ctf_reference():
+    """CtfFind at ctf_xtilt; restore previous XLensDeflector."""
+    xtilt = sem.ReportXLensDeflector(xtilt_lens_index)
+    try:
+        set_xtilt(ctf_xtilt_x, ctf_xtilt_y)
+        sem.L()
+        return run_ctffind()
+    finally:
+        set_xtilt(float(xtilt[0]), float(xtilt[1]))
+
+
 def set_target_defocus(target_defocus):
     sem.GoToLowDoseArea("R")
     sem.SetImageShift(0, 0)
     current_defocus = np.nan
     for attempt in range(1, max_defocus_adjust_iterations + 1):
-        sem.L()
-        current_defocus, _ = run_ctffind()
+        current_defocus, _ = acquire_ctf_reference()
         error = target_defocus - current_defocus
         echo(
             f"Target defocus {attempt}/{max_defocus_adjust_iterations}: "
@@ -101,25 +121,30 @@ def set_target_defocus(target_defocus):
 
 
 def measure_beam_tilt_defocus():
-    raw = btdef.measure_raw(
-        tilt_angle_mrad=tilt_angle_mrad,
-        beam_tilt_correction=beam_tilt_correction,
-        beam_tilt_axis=beam_tilt_axis,
-    )
-    diag = btdef.legacy_physics_diagnostics(
-        raw,
-        tilt_angle_mrad=tilt_angle_mrad,
-        beam_tilt_axis=beam_tilt_axis,
-        defocus_tilt_correction=beam_tilt_correction,
-    )
-    return {
-        "beam_tilt_defocus_um": float(diag["legacy_defocus_um"]),
-        "cs_term_um": float(diag["cs_term_um"]),
-        "beta_rad": float(diag["beta_rad"]),
-        "drift_speed_nm_per_s": float(np.hypot(
-            raw["drift_speed_x_nm_per_s"], raw["drift_speed_y_nm_per_s"]
-        )),
-    }
+    xtilt = sem.ReportXLensDeflector(xtilt_lens_index)
+    try:
+        set_xtilt(beam_tilt_xtilt_x, beam_tilt_xtilt_y)
+        raw = btdef.measure_raw(
+            tilt_angle_mrad=tilt_angle_mrad,
+            beam_tilt_correction=beam_tilt_correction,
+            beam_tilt_axis=beam_tilt_axis,
+        )
+        diag = btdef.legacy_physics_diagnostics(
+            raw,
+            tilt_angle_mrad=tilt_angle_mrad,
+            beam_tilt_axis=beam_tilt_axis,
+            defocus_tilt_correction=beam_tilt_correction,
+        )
+        return {
+            "beam_tilt_defocus_um": float(diag["legacy_defocus_um"]),
+            "cs_term_um": float(diag["cs_term_um"]),
+            "beta_rad": float(diag["beta_rad"]),
+            "drift_speed_nm_per_s": float(np.hypot(
+                raw["drift_speed_x_nm_per_s"], raw["drift_speed_y_nm_per_s"]
+            )),
+        }
+    finally:
+        set_xtilt(float(xtilt[0]), float(xtilt[1]))
 
 
 def fit_delta_vs_defocus(defocus_um, delta_um):
@@ -178,18 +203,20 @@ def make_plot(path, rows, delta_fit):
 def main():
     sem.SuppressReports()
     prepare_output_paths()
-    xtilt_label = (
-        f"X-tilt ({measurement_xtilt_x:.6f}, {measurement_xtilt_y:.6f})"
+    ctf_xtilt_label = f"CTF X-tilt ({ctf_xtilt_x:.6f}, {ctf_xtilt_y:.6f})"
+    beam_xtilt_label = (
+        f"beam-tilt X-tilt ({beam_tilt_xtilt_x:.6f}, {beam_tilt_xtilt_y:.6f})"
     )
-    echo(f"##### Beam tilt defocus scaling calibration ({xtilt_label}) #####")
+    echo("##### Beam tilt defocus scaling calibration #####")
     echo(f"Timestamp: {datetime.now().isoformat(timespec='seconds')}")
     echo(f"Output directory: {os.path.dirname(csv_measurements)}")
     echo(
         f"beam_tilt_correction={beam_tilt_correction}, "
         f"tilt_angle_mrad={tilt_angle_mrad}, "
-        f"SetBeamTilt step={beam_tilt_correction * tilt_angle_mrad:.4f}, "
-        f"measurement {xtilt_label}"
+        f"SetBeamTilt step={beam_tilt_correction * tilt_angle_mrad:.4f}"
     )
+    echo(ctf_xtilt_label)
+    echo(beam_xtilt_label)
 
     original_xtilt = sem.ReportXLensDeflector(xtilt_lens_index)
     echo(
@@ -199,14 +226,6 @@ def main():
 
     rows = []
     try:
-        sem.SetXLensDeflector(
-            xtilt_lens_index, float(measurement_xtilt_x), float(measurement_xtilt_y)
-        )
-        echo(
-            f"Set XLensDeflector({xtilt_lens_index}) to "
-            f"({measurement_xtilt_x:.6f}, {measurement_xtilt_y:.6f})"
-        )
-
         for target_defocus in target_defocus_values:
             echo("------------------------------------------------")
             echo(f"Target defocus {float(target_defocus):.3f} um")
@@ -214,8 +233,7 @@ def main():
             echo(f"Defocus after adjustment: {reached:.3f} um")
 
             measure = measure_beam_tilt_defocus()
-            sem.L()
-            ctf_defocus, ctf_res = run_ctffind()
+            ctf_defocus, ctf_res = acquire_ctf_reference()
 
             row = {
                 "target_defocus_um": float(target_defocus),
@@ -247,8 +265,10 @@ def main():
             "beam_tilt_correction": float(beam_tilt_correction),
             "beam_tilt_axis": beam_tilt_axis,
             "spherical_aberration_mm": float(btdef.spherical_aberration_mm),
-            "measurement_xtilt_x": float(measurement_xtilt_x),
-            "measurement_xtilt_y": float(measurement_xtilt_y),
+            "ctf_xtilt_x": float(ctf_xtilt_x),
+            "ctf_xtilt_y": float(ctf_xtilt_y),
+            "beam_tilt_xtilt_x": float(beam_tilt_xtilt_x),
+            "beam_tilt_xtilt_y": float(beam_tilt_xtilt_y),
             "equation": "-displacement/(2*beta) - Cs*beta^2",
             "delta_offset": {
                 "intercept_um": delta_fit["intercept_um"],
@@ -273,7 +293,9 @@ def main():
         make_plot(plot_file, rows, delta_fit)
 
         echo("================================================")
-        echo(f"CALIBRATION ({xtilt_label})")
+        echo("CALIBRATION")
+        echo(f"  {ctf_xtilt_label}")
+        echo(f"  {beam_xtilt_label}")
         echo(f"  mean delta: {delta_fit['mean_delta_um']:.6f} um")
         echo(
             f"  delta vs defocus: {delta_fit['intercept_um']:.6f} "
