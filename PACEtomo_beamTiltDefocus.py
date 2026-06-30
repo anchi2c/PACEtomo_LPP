@@ -12,16 +12,21 @@ import serialem as sem
 
 ############ SETTINGS ############
 
-# Leave empty to use the legacy scalar beam-tilt equation. Set to a JSON file
-# written by calibrate_beam_tilt_xtilt_matrix.py to use fitted coefficients.
+# Leave empty to use known physics (displacement/2beta - Cs*beta^2) only.
+# Set to a JSON from calibrate_beam_tilt_xtilt_matrix.py to add a fitted
+# residual correction on top of that physics base.
 calibration_file = ""
 
 # Optional inline calibration. A calibration file, when set, overrides this.
 calibration = {
-    "model": "legacy_radial",
+    "model": "physics_cs",
     "feature_names": [],
     "coefficients": [],
 }
+
+# Spherical aberration coefficient [mm]. Base beam-tilt equation (legacy):
+#   defocus_um = displacement_um / (2 * beta_rad) - Cs_um * beta_rad^2
+spherical_aberration_mm = 2.7
 
 ########## END SETTINGS ##########
 
@@ -52,7 +57,7 @@ def load_calibration(path):
 
 
 def get_calibration():
-    """Return calibration from file, inline settings, or legacy fallback."""
+    """Return matrix calibration from file, inline settings, or physics-only default."""
     global _calibration_cache
     if calibration_file:
         if _calibration_cache is None:
@@ -96,27 +101,106 @@ def _feature_value(name, raw):
     return float(values[name])
 
 
-def _legacy_defocus(raw, tilt_angle_mrad, legacy_divisor):
-    shift_x = raw["shift_x_um"]
-    shift_y = raw["shift_y_um"]
-    displacement = np.sqrt(shift_x * shift_x + shift_y * shift_y)
-    sign = 1.0 if shift_x == 0 else shift_x / abs(shift_x)
-    return -1.0 * sign * displacement / (legacy_divisor * tilt_angle_mrad)
+def _signed_displacement_um(raw, beam_tilt_axis="x"):
+    """Signed image displacement along the beam-tilt measurement axis [um]."""
+    if beam_tilt_axis.lower() == "y":
+        return float(raw["shift_y_um"])
+    return float(raw["shift_x_um"])
 
 
-def defocus_from_raw(raw, tilt_angle_mrad=5.0, legacy_divisor=2.0,
-                     calibration_data=None):
-    """Convert raw beam-tilt shift diagnostics into defocus in microns."""
-    calib = calibration_data if calibration_data is not None else get_calibration()
-    if not calib or calib.get("model", "legacy_radial") == "legacy_radial":
-        return _legacy_defocus(raw, tilt_angle_mrad, legacy_divisor)
+def _physics_cs_defocus(raw, tilt_angle_mrad, cs_mm, beam_tilt_axis="x",
+                        beta_factor=1.0):
+    """
+    Known physics beam-tilt defocus with Cs [um] (the legacy/base equation).
 
+    defocus_um = displacement_um / (2 * beta_rad) - Cs_um * beta_rad^2
+
+    beta_factor scales effective beta (empirical correction on tilt angle).
+    """
+    beta_rad = float(tilt_angle_mrad) * 1e-3 * float(beta_factor)
+    signed_displacement = _signed_displacement_um(raw, beam_tilt_axis)
+    cs_um = float(cs_mm) * 1000.0
+    linear_term_um = signed_displacement / (2.0 * beta_rad)
+    cs_term_um = cs_um * beta_rad * beta_rad
+    defocus_um = linear_term_um - cs_term_um
+    return defocus_um, linear_term_um, cs_term_um, beta_rad
+
+
+def _fitted_correction(raw, calib):
+    """Empirical residual from matrix calibration (added on top of physics base)."""
     feature_names = calib.get("feature_names", [])
     coeffs = np.array(calib.get("coefficients", []), dtype=float)
     if len(feature_names) != len(coeffs):
         raise ValueError("Calibration feature_names and coefficients lengths differ")
     features = np.array([_feature_value(name, raw) for name in feature_names], dtype=float)
     return float(features.dot(coeffs))
+
+
+def defocus_from_raw(raw, tilt_angle_mrad=5.0, cs_mm=None, beam_tilt_axis="x",
+                     calibration_data=None):
+    """
+    Convert raw beam-tilt diagnostics to defocus [um].
+
+    Always starts from the physics+Cs base. A loaded matrix calibration adds a
+    fitted residual on top; it does not replace the known equation.
+    """
+    if cs_mm is None:
+        cs_mm = spherical_aberration_mm
+    base_um, _, _, _ = _physics_cs_defocus(
+        raw, tilt_angle_mrad, cs_mm, beam_tilt_axis=beam_tilt_axis
+    )
+    calib = calibration_data if calibration_data is not None else get_calibration()
+    if not calib:
+        return float(base_um)
+    model = calib.get("model", "physics_cs")
+    if model == "physics_cs":
+        return float(base_um)
+    if model == "linear_xtilt_residual":
+        return float(base_um + _fitted_correction(raw, calib))
+    if model == "linear_xtilt_beam_tilt":
+        # Older absolute fit (replaces base); kept for existing JSON files.
+        return float(_fitted_correction(raw, calib))
+    return float(base_um)
+
+
+def legacy_physics_diagnostics(raw, tilt_angle_mrad=5.0, cs_mm=None,
+                               beam_tilt_axis="x"):
+    """Term breakdown for the known physics+Cs legacy equation."""
+    if cs_mm is None:
+        cs_mm = spherical_aberration_mm
+    defocus_um, linear_term_um, cs_term_um, beta_rad = _physics_cs_defocus(
+        raw, tilt_angle_mrad, cs_mm, beam_tilt_axis=beam_tilt_axis
+    )
+    return {
+        "beta_rad": float(beta_rad),
+        "linear_term_um": float(linear_term_um),
+        "cs_term_um": float(cs_term_um),
+        "legacy_defocus_um": float(defocus_um),
+        "spherical_aberration_mm": float(cs_mm),
+    }
+
+
+def empirical_physics_cs_defocus(raw, tilt_angle_mrad=5.0, cs_mm=None,
+                                 beam_tilt_axis="x", beta_factor=1.0):
+    """
+    Physics+Cs defocus with scaled beta (empirical tilt-angle correction).
+
+      beta_eff = beta * beta_factor
+      defocus_um = displacement / (2 * beta_eff) - Cs * beta_eff^2
+
+    beta_factor is separate from hardware beam_tilt_correction on SetBeamTilt.
+    """
+    if cs_mm is None:
+        cs_mm = spherical_aberration_mm
+    defocus_um, _, _, _ = _physics_cs_defocus(
+        raw, tilt_angle_mrad, cs_mm, beam_tilt_axis=beam_tilt_axis,
+        beta_factor=beta_factor,
+    )
+    return float(defocus_um)
+
+
+# physics_cs_diagnostics kept as alias for older call sites
+physics_cs_diagnostics = legacy_physics_diagnostics
 
 
 def calibration_range_warnings(raw, calibration_data=None):
@@ -227,9 +311,10 @@ def measure_defocus_with_diagnostics(tilt_angle_mrad=5.0,
                                      beam_tilt_correction=1.0,
                                      xtilt_x=None, xtilt_y=None,
                                      lens_index=2, beam_tilt_axis="x",
-                                     legacy_divisor=2.0,
-                                     calibration_data=None):
+                                     cs_mm=None, calibration_data=None):
     """Measure defocus and return `(defocus, diagnostics)`."""
+    if cs_mm is None:
+        cs_mm = spherical_aberration_mm
     original_xtilt = _sem.ReportXLensDeflector(lens_index)
     original_beam_tilt = _sem.ReportBeamTilt()
     try:
@@ -240,10 +325,23 @@ def measure_defocus_with_diagnostics(tilt_angle_mrad=5.0,
             beam_tilt_correction=beam_tilt_correction,
             beam_tilt_axis=beam_tilt_axis,
         )
+        raw.update(legacy_physics_diagnostics(
+            raw,
+            tilt_angle_mrad=tilt_angle_mrad,
+            cs_mm=cs_mm,
+            beam_tilt_axis=beam_tilt_axis,
+        ))
+        calib = calibration_data if calibration_data is not None else get_calibration()
+        model = calib.get("model", "physics_cs") if calib else "physics_cs"
+        correction_um = 0.0
+        if model == "linear_xtilt_residual":
+            correction_um = _fitted_correction(raw, calib)
+        raw["calibration_correction_um"] = float(correction_um)
         defocus = defocus_from_raw(
             raw,
             tilt_angle_mrad=tilt_angle_mrad,
-            legacy_divisor=legacy_divisor,
+            cs_mm=cs_mm,
+            beam_tilt_axis=beam_tilt_axis,
             calibration_data=calibration_data,
         )
         raw["defocus_um"] = float(defocus)
@@ -260,7 +358,7 @@ def measure_defocus_with_diagnostics(tilt_angle_mrad=5.0,
 
 def measure_defocus(tilt_angle_mrad=5.0, beam_tilt_correction=1.0,
                     xtilt_x=None, xtilt_y=None, lens_index=2,
-                    beam_tilt_axis="x", legacy_divisor=2.0,
+                    beam_tilt_axis="x", cs_mm=None,
                     calibration_data=None):
     """Measure defocus and return `(defocus, drift_speed_x, drift_speed_y)`."""
     defocus, raw = measure_defocus_with_diagnostics(
@@ -270,7 +368,7 @@ def measure_defocus(tilt_angle_mrad=5.0, beam_tilt_correction=1.0,
         xtilt_y=xtilt_y,
         lens_index=lens_index,
         beam_tilt_axis=beam_tilt_axis,
-        legacy_divisor=legacy_divisor,
+        cs_mm=cs_mm,
         calibration_data=calibration_data,
     )
     return defocus, raw["drift_speed_x_nm_per_s"], raw["drift_speed_y_nm_per_s"]
@@ -279,7 +377,7 @@ def measure_defocus(tilt_angle_mrad=5.0, beam_tilt_correction=1.0,
 def autofocus_apply(target_defocus, cycles=2, tolerance_um=0.05,
                     tilt_angle_mrad=5.0, beam_tilt_correction=1.0,
                     xtilt_x=None, xtilt_y=None, lens_index=2,
-                    beam_tilt_axis="x", legacy_divisor=2.0,
+                    beam_tilt_axis="x", cs_mm=None,
                     calibration_data=None):
     """Measure defocus by beam tilt and correct objective focus."""
     defocus = np.nan
@@ -291,7 +389,7 @@ def autofocus_apply(target_defocus, cycles=2, tolerance_um=0.05,
             xtilt_y=xtilt_y,
             lens_index=lens_index,
             beam_tilt_axis=beam_tilt_axis,
-            legacy_divisor=legacy_divisor,
+            cs_mm=cs_mm,
             calibration_data=calibration_data,
         )
         error = float(target_defocus) - defocus
