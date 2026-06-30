@@ -139,7 +139,7 @@ def run_autofocus_trial(correction):
         "shift_abs_um": float(np.sqrt(shift_x_um * shift_x_um + shift_y_um * shift_y_um)),
     }
     defocus_measured = btdef.legacy_physics_diagnostics(
-        raw, tilt_angle_mrad=tilt_angle_mrad
+        raw, tilt_angle_mrad=tilt_angle_mrad, defocus_tilt_correction=correction
     )["legacy_defocus_um"]
 
     return defocus_measured, speed_x, speed_y

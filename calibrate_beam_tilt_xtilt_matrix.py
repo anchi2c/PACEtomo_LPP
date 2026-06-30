@@ -27,13 +27,12 @@ beam_tilt_axis = "x"
 # Spherical aberration [mm] for defocus = displacement/(2*beta) - Cs*beta^2
 spherical_aberration_mm = 2.7
 
-# Empirical beta scale in physics+Cs:
-#   defocus = displacement/(2*beta*f) - Cs*(beta*f)^2  (beta = tilt_angle_mrad * 1e-3)
-# Separate from hardware beam_tilt_correction (SetBeamTilt scale).
-empirical_defocus_factor = 1.0
+# Defocus equation tilt scale (replaces beam_tilt_correction in beta only).
+# SetBeamTilt still uses beam_tilt_correction above; many scopes need ~0.95 here.
+defocus_tilt_correction = 0.95
 
-# Optional sweep grid for beta-factor fit. Leave empty for 0.7-1.3.
-empirical_defocus_factors_for_fit = []
+# Optional sweep grid for defocus_tilt_correction fit. Leave empty for 0.7-1.3.
+defocus_tilt_corrections_for_fit = []
 
 # Nominal X-tilt used as the center of the beam-tilt autofocus sweep.
 nominal_xtilt_x = 0.0
@@ -135,22 +134,22 @@ def row_to_raw(row):
     }
 
 
-def fit_empirical_beta_factor_zero_crossing(fit_rows, factors):
-    """Fit beta factor where mean(empirical physics+Cs - CTF) crosses zero."""
+def fit_defocus_tilt_correction_zero_crossing(fit_rows, factors):
+    """Fit defocus_tilt_correction where mean(defocus - CTF) crosses zero."""
     if len(fit_rows) == 0 or len(factors) < 2:
         return np.nan, np.nan, np.nan
     mean_deltas = []
     for factor in factors:
         deltas = []
         for row in fit_rows:
-            empirical = btdef.empirical_physics_cs_defocus(
+            defocus = btdef.empirical_physics_cs_defocus(
                 row_to_raw(row),
                 tilt_angle_mrad=tilt_angle_mrad,
                 cs_mm=spherical_aberration_mm,
                 beam_tilt_axis=beam_tilt_axis,
-                beta_factor=factor,
+                defocus_tilt_correction=factor,
             )
-            deltas.append(empirical - float(row["ctf_defocus_um"]))
+            deltas.append(defocus - float(row["ctf_defocus_um"]))
         mean_deltas.append(float(np.mean(deltas)))
     slope, intercept = np.polyfit(np.array(factors, dtype=float),
                                   np.array(mean_deltas, dtype=float), 1)
@@ -159,37 +158,35 @@ def fit_empirical_beta_factor_zero_crossing(fit_rows, factors):
     return slope, intercept, -intercept / slope
 
 
-def fit_empirical_beta_factor_min_rms(fit_rows, factors):
-    """Grid search for beta factor minimizing RMS vs CTF (nonlinear with Cs)."""
+def fit_defocus_tilt_correction_min_rms(fit_rows, factors):
+    """Grid search for defocus_tilt_correction minimizing RMS vs CTF."""
     if len(fit_rows) == 0 or len(factors) == 0:
         return np.nan, np.nan
     best_factor = np.nan
     best_rms = np.nan
     for factor in factors:
-        rms = empirical_rms_error_um(fit_rows, factor)
+        rms = defocus_tilt_correction_rms_error_um(fit_rows, factor)
         if np.isfinite(rms) and (not np.isfinite(best_rms) or rms < best_rms):
             best_factor = float(factor)
             best_rms = float(rms)
     return best_factor, best_rms
 
 
-def apply_empirical_fitted_columns(rows, fitted_factor):
-    """Add recalculated physics+Cs defocus using the fitted beta factor."""
+def apply_fitted_defocus_tilt_correction_columns(rows, fitted_correction):
+    """Add recalculated defocus using the fitted defocus_tilt_correction."""
     for row in rows:
-        empirical_fitted = btdef.empirical_physics_cs_defocus(
+        defocus_fitted = btdef.empirical_physics_cs_defocus(
             row_to_raw(row),
             tilt_angle_mrad=tilt_angle_mrad,
             cs_mm=spherical_aberration_mm,
             beam_tilt_axis=beam_tilt_axis,
-            beta_factor=fitted_factor,
+            defocus_tilt_correction=fitted_correction,
         )
         ctf = float(row["ctf_defocus_um"])
-        row["fitted_empirical_defocus_factor"] = float(fitted_factor)
-        row["empirical_fitted_defocus_um"] = float(empirical_fitted)
-        row["delta_empirical_fitted_minus_ctf_um"] = empirical_fitted - ctf
-        row["ratio_empirical_fitted_over_ctf"] = legacy_ctf_ratio(
-            empirical_fitted, ctf
-        )
+        row["fitted_defocus_tilt_correction"] = float(fitted_correction)
+        row["fitted_defocus_um"] = float(defocus_fitted)
+        row["delta_fitted_minus_ctf_um"] = defocus_fitted - ctf
+        row["ratio_fitted_over_ctf"] = legacy_ctf_ratio(defocus_fitted, ctf)
 
 
 def axis_or_grid(x_steps, y_steps, step_size, include_grid):
@@ -306,14 +303,15 @@ def measurement_fields():
         "cs_term_um",
         "spherical_aberration_mm",
         "legacy_defocus_um",
-        "empirical_defocus_factor",
-        "empirical_defocus_um",
-        "delta_empirical_minus_ctf_um",
-        "ratio_empirical_over_ctf",
-        "fitted_empirical_defocus_factor",
-        "empirical_fitted_defocus_um",
-        "delta_empirical_fitted_minus_ctf_um",
-        "ratio_empirical_fitted_over_ctf",
+        "legacy_defocus_tilt_correction",
+        "defocus_tilt_correction",
+        "trial_defocus_um",
+        "delta_trial_minus_ctf_um",
+        "ratio_trial_over_ctf",
+        "fitted_defocus_tilt_correction",
+        "fitted_defocus_um",
+        "delta_fitted_minus_ctf_um",
+        "ratio_fitted_over_ctf",
         "ctf_defocus_um",
         "delta_legacy_minus_ctf_um",
         "ratio_legacy_over_ctf",
@@ -406,23 +404,24 @@ def collect_measurements():
                                 tilt_angle_mrad=tilt_angle_mrad,
                                 cs_mm=spherical_aberration_mm,
                                 beam_tilt_axis=beam_tilt_axis,
+                                defocus_tilt_correction=beam_tilt_correction,
                             )
                             legacy_defocus = legacy["legacy_defocus_um"]
-                            empirical_defocus = btdef.empirical_physics_cs_defocus(
+                            trial_defocus = btdef.empirical_physics_cs_defocus(
                                 raw,
                                 tilt_angle_mrad=tilt_angle_mrad,
                                 cs_mm=spherical_aberration_mm,
                                 beam_tilt_axis=beam_tilt_axis,
-                                beta_factor=empirical_defocus_factor,
+                                defocus_tilt_correction=defocus_tilt_correction,
                             )
                             ctf_defocus, ctf_res = acquire_ctf_reference()
                             delta_legacy_ctf = legacy_defocus - ctf_defocus
                             ratio_legacy_ctf = legacy_ctf_ratio(
                                 legacy_defocus, ctf_defocus
                             )
-                            delta_empirical_ctf = empirical_defocus - ctf_defocus
-                            ratio_empirical_ctf = legacy_ctf_ratio(
-                                empirical_defocus, ctf_defocus
+                            delta_trial_ctf = trial_defocus - ctf_defocus
+                            ratio_trial_ctf = legacy_ctf_ratio(
+                                trial_defocus, ctf_defocus
                             )
                             drift_abs = float(np.hypot(
                                 raw["drift_speed_x_nm_per_s"],
@@ -465,14 +464,15 @@ def collect_measurements():
                                 "cs_term_um": legacy["cs_term_um"],
                                 "spherical_aberration_mm": legacy["spherical_aberration_mm"],
                                 "legacy_defocus_um": legacy_defocus,
-                                "empirical_defocus_factor": float(empirical_defocus_factor),
-                                "empirical_defocus_um": empirical_defocus,
-                                "delta_empirical_minus_ctf_um": delta_empirical_ctf,
-                                "ratio_empirical_over_ctf": ratio_empirical_ctf,
-                                "fitted_empirical_defocus_factor": "",
-                                "empirical_fitted_defocus_um": "",
-                                "delta_empirical_fitted_minus_ctf_um": "",
-                                "ratio_empirical_fitted_over_ctf": "",
+                                "legacy_defocus_tilt_correction": float(beam_tilt_correction),
+                                "defocus_tilt_correction": float(defocus_tilt_correction),
+                                "trial_defocus_um": trial_defocus,
+                                "delta_trial_minus_ctf_um": delta_trial_ctf,
+                                "ratio_trial_over_ctf": ratio_trial_ctf,
+                                "fitted_defocus_tilt_correction": "",
+                                "fitted_defocus_um": "",
+                                "delta_fitted_minus_ctf_um": "",
+                                "ratio_fitted_over_ctf": "",
                                 "ctf_defocus_um": ctf_defocus,
                                 "delta_legacy_minus_ctf_um": delta_legacy_ctf,
                                 "ratio_legacy_over_ctf": ratio_legacy_ctf,
@@ -490,22 +490,23 @@ def collect_measurements():
                                 if np.isfinite(ratio_legacy_ctf)
                                 else "NaN"
                             )
-                            ratio_empirical_text = (
-                                f"{ratio_empirical_ctf:.4f}"
-                                if np.isfinite(ratio_empirical_ctf)
+                            ratio_trial_text = (
+                                f"{ratio_trial_ctf:.4f}"
+                                if np.isfinite(ratio_trial_ctf)
                                 else "NaN"
                             )
                             sem.Echo(
                                 f"xtilt=({xtilt_x:.6f}, {xtilt_y:.6f}), "
                                 f"bt_offset=({bt_off_x:.3f}, {bt_off_y:.3f}), "
-                                f"legacy={legacy_defocus:.4f}, "
-                                f"empirical(beta*f={empirical_defocus_factor:.3f})="
-                                f"{empirical_defocus:.4f}, "
+                                f"legacy(corr={beam_tilt_correction:.3f})="
+                                f"{legacy_defocus:.4f}, "
+                                f"trial(corr={defocus_tilt_correction:.3f})="
+                                f"{trial_defocus:.4f}, "
                                 f"CTF={ctf_defocus:.4f}, "
                                 f"delta_legacy={delta_legacy_ctf:.4f}, "
                                 f"ratio_legacy={ratio_legacy_text}, "
-                                f"delta_empirical={delta_empirical_ctf:.4f}, "
-                                f"ratio_empirical={ratio_empirical_text}, "
+                                f"delta_trial={delta_trial_ctf:.4f}, "
+                                f"ratio_trial={ratio_trial_text}, "
                                 f"drift={drift_abs:.3f} nm/s"
                             )
     finally:
@@ -611,47 +612,47 @@ def fit_defocus_model(rows):
     return calibration, fit_rows
 
 
-def rows_for_empirical_fit(rows):
+def rows_for_defocus_tilt_fit(rows):
     fit_rows = [row for row in rows if int(row["fit_used"]) == 1]
     return fit_rows if fit_rows else rows
 
 
-def empirical_rms_error_um(fit_rows, factor):
-    if len(fit_rows) == 0 or not np.isfinite(factor):
+def defocus_tilt_correction_rms_error_um(fit_rows, correction):
+    if len(fit_rows) == 0 or not np.isfinite(correction):
         return np.nan
     errors = []
     for row in fit_rows:
-        empirical = btdef.empirical_physics_cs_defocus(
+        defocus = btdef.empirical_physics_cs_defocus(
             row_to_raw(row),
             tilt_angle_mrad=tilt_angle_mrad,
             cs_mm=spherical_aberration_mm,
             beam_tilt_axis=beam_tilt_axis,
-            beta_factor=factor,
+            defocus_tilt_correction=correction,
         )
-        errors.append(empirical - float(row["ctf_defocus_um"]))
+        errors.append(defocus - float(row["ctf_defocus_um"]))
     return float(np.sqrt(np.mean(np.array(errors, dtype=float) ** 2)))
 
 
-def fit_empirical_defocus_model(fit_rows):
-    factors = list(empirical_defocus_factors_for_fit)
+def fit_defocus_tilt_correction_model(fit_rows):
+    factors = list(defocus_tilt_corrections_for_fit)
     if len(factors) < 2:
         factors = list(np.linspace(0.7, 1.3, 25))
-    slope, intercept, factor_zero = fit_empirical_beta_factor_zero_crossing(
+    slope, intercept, factor_zero = fit_defocus_tilt_correction_zero_crossing(
         fit_rows, factors
     )
-    factor_min_rms, rms_min = fit_empirical_beta_factor_min_rms(fit_rows, factors)
+    factor_min_rms, rms_min = fit_defocus_tilt_correction_min_rms(fit_rows, factors)
     return {
-        "trial_empirical_defocus_factor": float(empirical_defocus_factor),
-        "trial_empirical_rms_error_um": empirical_rms_error_um(
-            fit_rows, empirical_defocus_factor
+        "trial_defocus_tilt_correction": float(defocus_tilt_correction),
+        "trial_rms_error_um": defocus_tilt_correction_rms_error_um(
+            fit_rows, defocus_tilt_correction
         ),
-        "fitted_empirical_defocus_factor": float(factor_min_rms),
-        "fitted_empirical_rms_error_um": float(rms_min),
-        "fitted_empirical_defocus_factor_zero_crossing": float(factor_zero),
+        "fitted_defocus_tilt_correction": float(factor_min_rms),
+        "fitted_rms_error_um": float(rms_min),
+        "fitted_defocus_tilt_correction_zero_crossing": float(factor_zero),
         "zero_crossing_fit_slope": float(slope),
         "zero_crossing_fit_intercept": float(intercept),
-        "beta_factor_grid": [float(v) for v in factors],
-        "equation": "displacement/(2*beta*f) - Cs*(beta*f)^2",
+        "defocus_tilt_correction_grid": [float(v) for v in factors],
+        "equation": "-displacement/(2*beta) - Cs*beta^2, beta=tilt_mrad*corr*1e-3",
     }
 
 
@@ -688,7 +689,7 @@ def fit_shift_sensitivity(rows):
     return summaries
 
 
-def save_summary(path, calibration, shift_summaries, empirical_fit=None):
+def save_summary(path, calibration, shift_summaries, defocus_tilt_fit=None):
     fields = ["metric", "value"]
     with open(path, "w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=fields)
@@ -709,26 +710,26 @@ def save_summary(path, calibration, shift_summaries, empirical_fit=None):
                 "metric": "legacy_rms_error_um",
                 "value": calibration["legacy_rms_error_um"],
             })
-        if empirical_fit is not None:
+        if defocus_tilt_fit is not None:
             writer.writerow({
-                "metric": "trial_empirical_defocus_factor",
-                "value": empirical_fit["trial_empirical_defocus_factor"],
+                "metric": "trial_defocus_tilt_correction",
+                "value": defocus_tilt_fit["trial_defocus_tilt_correction"],
             })
             writer.writerow({
-                "metric": "trial_empirical_rms_error_um",
-                "value": empirical_fit["trial_empirical_rms_error_um"],
+                "metric": "trial_rms_error_um",
+                "value": defocus_tilt_fit["trial_rms_error_um"],
             })
             writer.writerow({
-                "metric": "fitted_empirical_defocus_factor",
-                "value": empirical_fit["fitted_empirical_defocus_factor"],
+                "metric": "fitted_defocus_tilt_correction",
+                "value": defocus_tilt_fit["fitted_defocus_tilt_correction"],
             })
             writer.writerow({
-                "metric": "fitted_empirical_rms_error_um",
-                "value": empirical_fit["fitted_empirical_rms_error_um"],
+                "metric": "fitted_rms_error_um",
+                "value": defocus_tilt_fit["fitted_rms_error_um"],
             })
             writer.writerow({
-                "metric": "fitted_empirical_defocus_factor_zero_crossing",
-                "value": empirical_fit["fitted_empirical_defocus_factor_zero_crossing"],
+                "metric": "fitted_defocus_tilt_correction_zero_crossing",
+                "value": defocus_tilt_fit["fitted_defocus_tilt_correction_zero_crossing"],
             })
         for summary in shift_summaries:
             writer.writerow({
@@ -743,13 +744,11 @@ def make_plots(path, rows, calibration):
         return
     ctf = np.array([float(row["ctf_defocus_um"]) for row in valid_rows], dtype=float)
     legacy = np.array([float(row["legacy_defocus_um"]) for row in valid_rows], dtype=float)
-    empirical = np.array(
-        [float(row["empirical_defocus_um"]) for row in valid_rows], dtype=float
-    )
-    empirical_fitted = np.array(
+    trial = np.array([float(row["trial_defocus_um"]) for row in valid_rows], dtype=float)
+    fitted = np.array(
         [
-            float(row["empirical_fitted_defocus_um"])
-            if row.get("empirical_fitted_defocus_um") not in ("", None)
+            float(row["fitted_defocus_um"])
+            if row.get("fitted_defocus_um") not in ("", None)
             else np.nan
             for row in valid_rows
         ],
@@ -768,8 +767,8 @@ def make_plots(path, rows, calibration):
     axes[0].set_title("Known physics error (before matrix correction)")
 
     axes[1].scatter(xtilt_x, legacy - ctf, label="legacy", alpha=0.7)
-    if np.any(np.isfinite(empirical)):
-        axes[1].scatter(xtilt_x, empirical - ctf, label="empirical", alpha=0.7)
+    if np.any(np.isfinite(trial)):
+        axes[1].scatter(xtilt_x, trial - ctf, label="trial corr", alpha=0.7)
     axes[1].axhline(0, color="gray", linestyle="--", linewidth=1)
     axes[1].set_xlabel("XLensDeflector(2) X")
     axes[1].set_ylabel("Defocus - CTF (um)")
@@ -786,12 +785,10 @@ def make_plots(path, rows, calibration):
     if calibration is not None:
         x = feature_matrix(valid_rows, calibration["feature_names"])
         residual = x.dot(np.array(calibration["coefficients"], dtype=float))
-        fitted = legacy + residual
-        axes[3].scatter(ctf, fitted - ctf, label="matrix", alpha=0.7)
-        if np.any(np.isfinite(empirical_fitted)):
-            axes[3].scatter(
-                ctf, empirical_fitted - ctf, label="empirical fitted", alpha=0.7
-            )
+        matrix_fitted = legacy + residual
+        axes[3].scatter(ctf, matrix_fitted - ctf, label="matrix", alpha=0.7)
+        if np.any(np.isfinite(fitted)):
+            axes[3].scatter(ctf, fitted - ctf, label="fitted corr", alpha=0.7)
         axes[3].axhline(0, color="gray", linestyle="--", linewidth=1)
         axes[3].set_xlabel("CTF defocus (um)")
         axes[3].set_ylabel("Fitted - CTF (um)")
@@ -815,16 +812,17 @@ def main():
     rows = collect_measurements()
     calibration, fit_rows = fit_defocus_model(rows)
     shift_summaries = fit_shift_sensitivity(rows)
-    empirical_fit_rows = rows_for_empirical_fit(rows)
-    empirical_fit = fit_empirical_defocus_model(empirical_fit_rows)
-    fitted_empirical_factor = empirical_fit["fitted_empirical_defocus_factor"]
-    if np.isfinite(fitted_empirical_factor):
-        apply_empirical_fitted_columns(rows, fitted_empirical_factor)
+    defocus_tilt_fit_rows = rows_for_defocus_tilt_fit(rows)
+    defocus_tilt_fit = fit_defocus_tilt_correction_model(defocus_tilt_fit_rows)
+    fitted_correction = defocus_tilt_fit["fitted_defocus_tilt_correction"]
+    if np.isfinite(fitted_correction):
+        apply_fitted_defocus_tilt_correction_columns(rows, fitted_correction)
         write_measurements_csv(csv_measurements, rows)
 
     if calibration is not None:
         calibration["shift_sensitivity_models"] = shift_summaries
-        calibration["empirical_beta_factor_fit"] = empirical_fit
+        calibration["defocus_tilt_correction_fit"] = defocus_tilt_fit
+        calibration["defocus_tilt_correction"] = float(fitted_correction)
         with open(calibration_json, "w") as fh:
             json.dump(calibration, fh, indent=2)
         sem.Echo(
@@ -834,24 +832,24 @@ def main():
         sem.Echo(f"Saved calibration JSON: {calibration_json}")
     else:
         with open(calibration_json, "w") as fh:
-            json.dump({"empirical_beta_factor_fit": empirical_fit}, fh, indent=2)
-        sem.Echo(f"Saved empirical-only JSON: {calibration_json}")
+            json.dump({"defocus_tilt_correction_fit": defocus_tilt_fit}, fh, indent=2)
+        sem.Echo(f"Saved defocus-tilt-correction JSON: {calibration_json}")
 
     sem.Echo(
-        f"Empirical trial factor {empirical_fit['trial_empirical_defocus_factor']:.4f}: "
-        f"RMS {empirical_fit['trial_empirical_rms_error_um']:.4f} um"
+        f"Trial defocus_tilt_correction {defocus_tilt_fit['trial_defocus_tilt_correction']:.4f}: "
+        f"RMS {defocus_tilt_fit['trial_rms_error_um']:.4f} um"
     )
     sem.Echo(
-        f"Empirical beta factor (min RMS) "
-        f"{empirical_fit['fitted_empirical_defocus_factor']:.4f}: "
-        f"RMS {empirical_fit['fitted_empirical_rms_error_um']:.4f} um"
+        f"Fitted defocus_tilt_correction (min RMS) "
+        f"{defocus_tilt_fit['fitted_defocus_tilt_correction']:.4f}: "
+        f"RMS {defocus_tilt_fit['fitted_rms_error_um']:.4f} um"
     )
     sem.Echo(
-        f"Empirical fitted factor (zero crossing) "
-        f"{empirical_fit['fitted_empirical_defocus_factor_zero_crossing']:.4f}"
+        f"Fitted defocus_tilt_correction (zero crossing) "
+        f"{defocus_tilt_fit['fitted_defocus_tilt_correction_zero_crossing']:.4f}"
     )
 
-    save_summary(csv_summary, calibration, shift_summaries, empirical_fit)
+    save_summary(csv_summary, calibration, shift_summaries, defocus_tilt_fit)
     make_plots(plot_file, rows, calibration)
     sem.Echo(f"Saved measurements CSV: {csv_measurements}")
     sem.Echo(f"Saved summary CSV: {csv_summary}")

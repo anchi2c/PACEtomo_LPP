@@ -24,8 +24,10 @@ calibration = {
     "coefficients": [],
 }
 
-# Spherical aberration coefficient [mm]. Base beam-tilt equation (legacy):
-#   defocus_um = displacement_um / (2 * beta_rad) - Cs_um * beta_rad^2
+# Spherical aberration coefficient [mm]. Base beam-tilt equation:
+#   defocus_um = -displacement_um / (2 * beta_rad) - Cs_um * beta_rad^2
+#   beta_rad = tilt_angle_mrad * defocus_tilt_correction * 1e-3
+# defocus_tilt_correction scales tilt in the defocus equation only (not SetBeamTilt).
 spherical_aberration_mm = 2.7
 
 ########## END SETTINGS ##########
@@ -109,18 +111,20 @@ def _signed_displacement_um(raw, beam_tilt_axis="x"):
 
 
 def _physics_cs_defocus(raw, tilt_angle_mrad, cs_mm, beam_tilt_axis="x",
-                        beta_factor=1.0):
+                        defocus_tilt_correction=1.0):
     """
-    Known physics beam-tilt defocus with Cs [um] (the legacy/base equation).
+    Known physics beam-tilt defocus with Cs [um].
 
-    defocus_um = displacement_um / (2 * beta_rad) - Cs_um * beta_rad^2
+    defocus_um = -displacement_um / (2 * beta_rad) - Cs_um * beta_rad^2
+    beta_rad = tilt_angle_mrad * defocus_tilt_correction * 1e-3
 
-    beta_factor scales effective beta (empirical correction on tilt angle).
+    defocus_tilt_correction enters the defocus equation only. SetBeamTilt uses
+    beam_tilt_correction separately (often ~1.73); many scopes need ~0.95 here.
     """
-    beta_rad = float(tilt_angle_mrad) * 1e-3 * float(beta_factor)
+    beta_rad = float(tilt_angle_mrad) * float(defocus_tilt_correction) * 1e-3
     signed_displacement = _signed_displacement_um(raw, beam_tilt_axis)
     cs_um = float(cs_mm) * 1000.0
-    linear_term_um = signed_displacement / (2.0 * beta_rad)
+    linear_term_um = -signed_displacement / (2.0 * beta_rad)
     cs_term_um = cs_um * beta_rad * beta_rad
     defocus_um = linear_term_um - cs_term_um
     return defocus_um, linear_term_um, cs_term_um, beta_rad
@@ -137,7 +141,7 @@ def _fitted_correction(raw, calib):
 
 
 def defocus_from_raw(raw, tilt_angle_mrad=5.0, cs_mm=None, beam_tilt_axis="x",
-                     calibration_data=None):
+                     defocus_tilt_correction=None, calibration_data=None):
     """
     Convert raw beam-tilt diagnostics to defocus [um].
 
@@ -146,10 +150,16 @@ def defocus_from_raw(raw, tilt_angle_mrad=5.0, cs_mm=None, beam_tilt_axis="x",
     """
     if cs_mm is None:
         cs_mm = spherical_aberration_mm
-    base_um, _, _, _ = _physics_cs_defocus(
-        raw, tilt_angle_mrad, cs_mm, beam_tilt_axis=beam_tilt_axis
-    )
     calib = calibration_data if calibration_data is not None else get_calibration()
+    if defocus_tilt_correction is None:
+        if calib and "defocus_tilt_correction" in calib:
+            defocus_tilt_correction = float(calib["defocus_tilt_correction"])
+        else:
+            defocus_tilt_correction = float(raw.get("defocus_tilt_correction", 1.0))
+    base_um, _, _, _ = _physics_cs_defocus(
+        raw, tilt_angle_mrad, cs_mm, beam_tilt_axis=beam_tilt_axis,
+        defocus_tilt_correction=defocus_tilt_correction,
+    )
     if not calib:
         return float(base_um)
     model = calib.get("model", "physics_cs")
@@ -164,15 +174,18 @@ def defocus_from_raw(raw, tilt_angle_mrad=5.0, cs_mm=None, beam_tilt_axis="x",
 
 
 def legacy_physics_diagnostics(raw, tilt_angle_mrad=5.0, cs_mm=None,
-                               beam_tilt_axis="x"):
-    """Term breakdown for the known physics+Cs legacy equation."""
+                               beam_tilt_axis="x",
+                               defocus_tilt_correction=1.0):
+    """Term breakdown for the physics+Cs equation."""
     if cs_mm is None:
         cs_mm = spherical_aberration_mm
     defocus_um, linear_term_um, cs_term_um, beta_rad = _physics_cs_defocus(
-        raw, tilt_angle_mrad, cs_mm, beam_tilt_axis=beam_tilt_axis
+        raw, tilt_angle_mrad, cs_mm, beam_tilt_axis=beam_tilt_axis,
+        defocus_tilt_correction=defocus_tilt_correction,
     )
     return {
         "beta_rad": float(beta_rad),
+        "defocus_tilt_correction": float(defocus_tilt_correction),
         "linear_term_um": float(linear_term_um),
         "cs_term_um": float(cs_term_um),
         "legacy_defocus_um": float(defocus_um),
@@ -181,20 +194,18 @@ def legacy_physics_diagnostics(raw, tilt_angle_mrad=5.0, cs_mm=None,
 
 
 def empirical_physics_cs_defocus(raw, tilt_angle_mrad=5.0, cs_mm=None,
-                                 beam_tilt_axis="x", beta_factor=1.0):
+                                 beam_tilt_axis="x",
+                                 defocus_tilt_correction=1.0):
     """
-    Physics+Cs defocus with scaled beta (empirical tilt-angle correction).
+    Same physics+Cs equation with a trial defocus_tilt_correction in beta.
 
-      beta_eff = beta * beta_factor
-      defocus_um = displacement / (2 * beta_eff) - Cs * beta_eff^2
-
-    beta_factor is separate from hardware beam_tilt_correction on SetBeamTilt.
+    Typically ~0.95 instead of beam_tilt_correction (~1.73) on SetBeamTilt.
     """
     if cs_mm is None:
         cs_mm = spherical_aberration_mm
     defocus_um, _, _, _ = _physics_cs_defocus(
         raw, tilt_angle_mrad, cs_mm, beam_tilt_axis=beam_tilt_axis,
-        beta_factor=beta_factor,
+        defocus_tilt_correction=defocus_tilt_correction,
     )
     return float(defocus_um)
 
@@ -314,6 +325,7 @@ def measure_raw(tilt_angle_mrad=5.0, beam_tilt_correction=1.0,
 
 def measure_defocus_with_diagnostics(tilt_angle_mrad=5.0,
                                      beam_tilt_correction=1.0,
+                                     defocus_tilt_correction=None,
                                      xtilt_x=None, xtilt_y=None,
                                      lens_index=2, beam_tilt_axis="x",
                                      cs_mm=None, calibration_data=None):
@@ -330,11 +342,18 @@ def measure_defocus_with_diagnostics(tilt_angle_mrad=5.0,
             beam_tilt_correction=beam_tilt_correction,
             beam_tilt_axis=beam_tilt_axis,
         )
+        if defocus_tilt_correction is not None:
+            raw["defocus_tilt_correction"] = float(defocus_tilt_correction)
         raw.update(legacy_physics_diagnostics(
             raw,
             tilt_angle_mrad=tilt_angle_mrad,
             cs_mm=cs_mm,
             beam_tilt_axis=beam_tilt_axis,
+            defocus_tilt_correction=(
+                defocus_tilt_correction
+                if defocus_tilt_correction is not None
+                else float(raw.get("defocus_tilt_correction", 1.0))
+            ),
         ))
         calib = calibration_data if calibration_data is not None else get_calibration()
         model = calib.get("model", "physics_cs") if calib else "physics_cs"
@@ -347,6 +366,7 @@ def measure_defocus_with_diagnostics(tilt_angle_mrad=5.0,
             tilt_angle_mrad=tilt_angle_mrad,
             cs_mm=cs_mm,
             beam_tilt_axis=beam_tilt_axis,
+            defocus_tilt_correction=defocus_tilt_correction,
             calibration_data=calibration_data,
         )
         raw["defocus_um"] = float(defocus)
@@ -362,6 +382,7 @@ def measure_defocus_with_diagnostics(tilt_angle_mrad=5.0,
 
 
 def measure_defocus(tilt_angle_mrad=5.0, beam_tilt_correction=1.0,
+                    defocus_tilt_correction=None,
                     xtilt_x=None, xtilt_y=None, lens_index=2,
                     beam_tilt_axis="x", cs_mm=None,
                     calibration_data=None):
@@ -369,6 +390,7 @@ def measure_defocus(tilt_angle_mrad=5.0, beam_tilt_correction=1.0,
     defocus, raw = measure_defocus_with_diagnostics(
         tilt_angle_mrad=tilt_angle_mrad,
         beam_tilt_correction=beam_tilt_correction,
+        defocus_tilt_correction=defocus_tilt_correction,
         xtilt_x=xtilt_x,
         xtilt_y=xtilt_y,
         lens_index=lens_index,
@@ -381,6 +403,7 @@ def measure_defocus(tilt_angle_mrad=5.0, beam_tilt_correction=1.0,
 
 def autofocus_apply(target_defocus, cycles=2, tolerance_um=0.05,
                     tilt_angle_mrad=5.0, beam_tilt_correction=1.0,
+                    defocus_tilt_correction=None,
                     xtilt_x=None, xtilt_y=None, lens_index=2,
                     beam_tilt_axis="x", cs_mm=None,
                     calibration_data=None):
@@ -390,6 +413,7 @@ def autofocus_apply(target_defocus, cycles=2, tolerance_um=0.05,
         defocus, speed_x, speed_y = measure_defocus(
             tilt_angle_mrad=tilt_angle_mrad,
             beam_tilt_correction=beam_tilt_correction,
+            defocus_tilt_correction=defocus_tilt_correction,
             xtilt_x=xtilt_x,
             xtilt_y=xtilt_y,
             lens_index=lens_index,

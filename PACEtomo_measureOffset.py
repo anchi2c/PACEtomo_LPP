@@ -32,7 +32,8 @@ ctf_retry_delay_s = 5       # delay before refocus shot on retry [s]
 # Beam-tilt (always used for initial autofocus; also for tilt loop if defocusMethod == beam_tilt)
 tilt_angle_mrad = 5.0
 beam_tilt_correction = 1.73       # physical scale: requested beam tilt mrad -> SetBeamTilt units
-spherical_aberration_mm = 2.7     # Cs for defocus = disp/(2*beta) - Cs*beta^2 [mm]
+defocus_tilt_correction = 0.95    # tilt scale in defocus beta only (often < beam_tilt_correction)
+spherical_aberration_mm = 2.7     # Cs for defocus = -disp/(2*beta) - Cs*beta^2 [mm]
 autofocus_cycles = 2              # initial autofocus: correct focus to target_defocus (sem.G)
 measure_cycles = 1                # cycles per tilt-loop measurement
 
@@ -60,6 +61,7 @@ def beam_tilt_measure_defocus():
     return btdef.measure_defocus(
         tilt_angle_mrad=tilt_angle_mrad,
         beam_tilt_correction=beam_tilt_correction,
+        defocus_tilt_correction=defocus_tilt_correction,
         xtilt_x=ctfXtiltX,
         xtilt_y=ctfXtiltY,
         cs_mm=spherical_aberration_mm,
