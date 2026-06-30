@@ -4,7 +4,8 @@
 # Purpose:       Measure how beam tilt, residual beam tilt, and
 #                XLensDeflector(2) affect beam-tilt defocus autofocus.
 # ===================================================================
-
+import sys
+sys.path.append(r"C:\Program Files\SerialEM\PythonModules")
 import csv
 import json
 import os
