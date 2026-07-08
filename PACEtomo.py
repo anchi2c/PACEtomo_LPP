@@ -67,6 +67,8 @@ extendedMdoc    = True      # saves additional info to .mdoc file
 
 # Hardware settings
 slowTilt        = False     # do backlash step for all tilt angles, on bad stages large tilt steps are less accurate
+fixedStageTilt  = False     # keep stage at fixedStageTiltAngle while running the full scheduled tilt series
+fixedStageTiltAngle = 0.0   # physical stage angle [degrees] when fixedStageTilt is True
 taOffsetPos     = 0         # additional tilt axis offset values [microns] applied to calculations for positive and...
 taOffsetNeg     = 0         # ...negative branch of the tilt series (possibly useful for side-entry holder systems)
 checkDewar      = True      # check if dewars are refilling before every acquisition
@@ -248,6 +250,20 @@ def checkSlit(vec, size, tilt, pn):                                             
 def checkValves():
     if not int(sem.ReportColumnOrGunValve()):
         sem.SetColumnOrGunValve(1)
+
+
+def ensure_fixed_stage_tilt(when="", quiet=False):
+    """Move stage to fixedStageTiltAngle when fixedStageTilt is enabled."""
+    if not fixedStageTilt:
+        return
+    target = float(fixedStageTiltAngle)
+    current = float(sem.ReportTiltAngle())
+    if abs(current - target) > 0.05:
+        sem.TiltTo(target)
+        if not quiet:
+            suffix = f" {when}" if when else ""
+            log(f"NOTE: fixedStageTilt: stage set to {target:.1f} deg{suffix}.")
+
 
 def serialEM_measure_defocus():
     """SerialEM sem.G(-1) defocus with optional scaling calibration."""
@@ -1317,21 +1333,21 @@ def Tilt(tilt):
 
     # Tilt if within tilt range, skip branch if not
     if -tiltLimit <= tilt <= tiltLimit:
-        if tilt != startTilt:
-            sem.TiltTo(tilt)
         skip_branch = False
+        if not fixedStageTilt and tilt != startTilt:
+            sem.TiltTo(tilt)
     else:
         log(f"WARNING: Tilt angle [{tilt} degrees] could not be reached. This branch of the tilt series will be aborted.")
         skip_branch = True
 
     if tilt < startTilt:
         increment = -step
-        if tilt - step >= -tiltLimit:
+        if not fixedStageTilt and tilt - step >= -tiltLimit:
             sem.TiltBy(-step)
             sem.TiltTo(tilt)
         pn = 2
     else:
-        if slowTilt and startTilt < tilt <= tiltLimit:                                                       # on bad stages, better to do backlash as well to enhance accuracy
+        if not fixedStageTilt and slowTilt and startTilt < tilt <= tiltLimit:
             sem.TiltBy(-step)
             sem.TiltTo(tilt)
         increment = step
@@ -1343,8 +1359,11 @@ def Tilt(tilt):
             position[pos][pn]["skip"] = True
         return
 
+    if fixedStageTilt:
+        ensure_fixed_stage_tilt(quiet=True)
+
     sem.Delay(delayTilt, "s")
-    realTilt = float(sem.ReportTiltAngle())
+    realTilt = float(tilt) if fixedStageTilt else float(sem.ReportTiltAngle())
 
     if zeroExpTime > 0 and tilt == startTilt:
         sem.SetExposure("R", zeroExpTime)
@@ -1928,6 +1947,11 @@ def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_acc
     log(f"Data points used: {dataPoints}")
     log(f"Target defocus range (min/max/step): {minDefocus}/{maxDefocus}/{stepDefocus}")
     log(f"Defocus method (measure / autofocus): {defocusMethod}")
+    if fixedStageTilt:
+        log(
+            f"fixedStageTilt: stage held at {fixedStageTiltAngle:.1f} deg; "
+            f"scheduled series {minTilt} to {maxTilt} deg ({step} deg step)"
+        )
     log(f"Sample pretilt (rotation): {pretilt} ({rotation})")
     log(f"Nav item start defocus: {get_nav_start_defocus(item_index):.2f} um")
     log(f"Tilt axis offset: {round(tiltAxisOffset, 3)}")
@@ -2052,7 +2076,9 @@ def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_acc
 
         if measureGeo:
             log("Measuring geometry...")
-            if int(round(float(sem.ReportTiltAngle()))) != 0:
+            if fixedStageTilt:
+                ensure_fixed_stage_tilt("for measureGeo")
+            elif int(round(float(sem.ReportTiltAngle()))) != 0:
                 sem.TiltTo(0)
             if len(geoPoints) > 0 and "SSX" in geoPoints[0].keys():                                 # if there are geo points in tgts file, adjust format from dict to list
                 geoPoints = [[point["SSX"], point["SSY"]] for point in geoPoints]
@@ -2145,34 +2171,48 @@ def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_acc
         log(f"Tilt series: {total_tilt_steps} angles ({tilt_schedule[0]} to {tilt_schedule[-1]} deg)")
 
         first_tilt = tilt_schedule[0]
-        log("Tilting to start tilt angle...")
-        # backlash correction
-        is_x, is_y, *_ = sem.ReportImageShift()
-        sem.GoToLowDoseArea("V")
-        sem.SetImageShift(0, 0)
-        sem.SetImageShift(is_x, is_y)
-        sem.V()
-        sem.Copy("A", "O")
-
-        curTilt = int(round(float(sem.ReportTiltAngle())))
-
-        # Walk up if necessary
-        while abs(first_tilt - curTilt) > 10:
-            log(f"DEBUG: Doing walkup to {curTilt + (10 if first_tilt > curTilt else -10)}...")
-            sem.TiltTo(curTilt + (10 if first_tilt > curTilt else -10))
+        if fixedStageTilt:
+            log(
+                f"fixedStageTilt: skipping tilt-to-start; "
+                f"stage stays at {fixedStageTiltAngle:.1f} deg "
+                f"(first scheduled angle {first_tilt:.1f} deg)"
+            )
+            ensure_fixed_stage_tilt("before tilt series")
             is_x, is_y, *_ = sem.ReportImageShift()
             sem.GoToLowDoseArea("V")
             sem.SetImageShift(0, 0)
             sem.SetImageShift(is_x, is_y)
             sem.V()
-            alignTo("O", debug)
-
+            sem.Copy("A", "O")
+        else:
+            log("Tilting to start tilt angle...")
+            # backlash correction
+            is_x, is_y, *_ = sem.ReportImageShift()
+            sem.GoToLowDoseArea("V")
+            sem.SetImageShift(0, 0)
+            sem.SetImageShift(is_x, is_y)
             sem.V()
             sem.Copy("A", "O")
+
             curTilt = int(round(float(sem.ReportTiltAngle())))
 
-        sem.TiltTo(first_tilt - step)
-        sem.TiltTo(first_tilt)
+            # Walk up if necessary
+            while abs(first_tilt - curTilt) > 10:
+                log(f"DEBUG: Doing walkup to {curTilt + (10 if first_tilt > curTilt else -10)}...")
+                sem.TiltTo(curTilt + (10 if first_tilt > curTilt else -10))
+                is_x, is_y, *_ = sem.ReportImageShift()
+                sem.GoToLowDoseArea("V")
+                sem.SetImageShift(0, 0)
+                sem.SetImageShift(is_x, is_y)
+                sem.V()
+                alignTo("O", debug)
+
+                sem.V()
+                sem.Copy("A", "O")
+                curTilt = int(round(float(sem.ReportTiltAngle())))
+
+            sem.TiltTo(first_tilt - step)
+            sem.TiltTo(first_tilt)
 
         sem.V()
         alignTo("O", debug)
