@@ -7,6 +7,7 @@
 # ===================================================================
 
 import csv
+import time
 from datetime import datetime
 
 import matplotlib.pyplot as plt
@@ -16,13 +17,16 @@ import serialem as sem
 ############ SETTINGS ############
 
 # Beam tilt used for autofocus measurement [mrad]
-tilt_angle_mrad_values = [-10.0, -5.0, 5.0, 10.0]
+sc=1.7335
+tilt_angle_mrad_values = [-10.0,10.0]
+tilt_angle_mrad_values = list(map((lambda x: x*sc), tilt_angle_mrad_values))
 
 # Correction factors to beam tilt scale in conversion to defocus
 correction = 1
 
-# Target defocus values [microns] to calibrate at
-target_stage_z_values = [-2.0, -1.0, 0.0, 1.0, 2.0]
+# Target stage z values [microns] to calibrate at
+# 1 um backlash applied before the first
+target_stage_z_values = [1.5,1.0,0.5,0.0,-0.5,-1,-1.5]
 
 # CTF search range [microns]
 ctf_defocus_lo = -10.0
@@ -63,6 +67,8 @@ def set_target_stage_z(target_stage_z):
     sem.GoToLowDoseArea("R")
     sem.SetImageShift(0, 0)
     sem.MoveStageTo(xyz0[0],xyz0[1],xyz0[2]+target_stage_z)
+    time.sleep(5)
+    sem.ReportStageXYZ()
     current_defocus = np.nan
     for attempt in range(1):
         sem.L()
@@ -98,6 +104,8 @@ def run_autofocus_trial(tilt_angle_mrad):
 
     # Positive tilt
     sem.SetBeamTilt(tilt_x_plus, tilt_y_orig)
+    bt = sem.ReportBeamTilt()
+    sem.Echo(f"ActuralBeamTilt: {float(bt[0]):.5f} ")
     sem.F() #acquire image with Focus preset
     sem.ResetClock()
     sem.Copy("A", "L")
@@ -139,7 +147,7 @@ def run_autofocus_trial(tilt_angle_mrad):
     else:
         sign = displacement_from_tilt_x / abs(displacement_from_tilt_x)
 
-    defocus_measured = -1.0 * sign * displacement / tilt_angle_mrad
+    defocus_measured = -1.0 * sign * displacement
 
     return defocus_measured, speed_x, speed_y
 
@@ -239,6 +247,8 @@ def main():
     summary_rows = []
     grouped_results = []
 
+    set_target_stage_z(target_stage_z_values[0]+1.0)
+ 
     for target_stage_z in target_stage_z_values:
         sem.Echo("------------------------------------------------")
         sem.Echo(f"Measuring target defocus for stage z {target_stage_z:.3f} um")
@@ -311,6 +321,8 @@ def main():
             f"Fitted slope for defocus {target_stage_z:.3f} um: {slope:.6f}, "
             f"Fitted intercept for defocus {target_stage_z:.3f} um: {intercept:.6f}"
         )
+
+    sem.MoveStageTo(xyz0[0],xyz0[1],xyz0[2])
 
     save_measurements_csv(csv_measurements, measurement_rows)
     save_summary_csv(csv_summary, summary_rows)

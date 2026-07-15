@@ -1,0 +1,1151 @@
+MaxMacros	60
+Macro	0
+#!Python
+# ===================================================================
+# ScriptName     test_beam_tilt
+# Purpose:       plot beam tilt image shift at different stage z height
+#                compared with CtfFind defocus.
+# Author:        Generated for PACEtomo workflow
+# ===================================================================
+
+import csv
+import time
+from datetime import datetime
+
+import matplotlib.pyplot as plt
+import numpy as np
+import serialem as sem
+
+############ SETTINGS ############
+
+# Beam tilt used for autofocus measurement [mrad]
+sc=1.7335
+tilt_angle_mrad_values = [-10.0,10.0]
+tilt_angle_mrad_values = list(map((lambda x: x*sc), tilt_angle_mrad_values))
+
+# Correction factors to beam tilt scale in conversion to defocus
+correction = 1
+
+# Target stage z values [microns] to calibrate at
+# 1 um backlash applied before the first
+target_stage_z_values = [1.5,1.0,0.5,0.0,-0.5,-1,-1.5]
+
+# CTF search range [microns]
+ctf_defocus_lo = -10.0
+ctf_defocus_hi = -0.2
+
+# Defocus convergence settings for setting each target defocus
+target_stage_z_tolerance_um = 0.01
+max_defocus_adjust_iterations = 5
+
+# Number of autofocus cycles per test.
+# Delta is computed using the last cycle's autofocus value.
+autofocus_cycles = 1
+
+# Output file names (written in current SerialEM working directory)
+csv_measurements = "beam_tilt_autofocus_measurements.csv"
+csv_summary = "beam_tilt_autofocus_summary.csv"
+plot_file = "beam_tilt_autofocus_fits.png"
+
+########## END SETTINGS ##########
+
+xyz0 = sem.ReportStageXYZ()
+
+def run_ctffind():
+    """Run CtfFind on buffer A and return defocus in microns."""
+    sem.NoMessageBoxOnError(1)
+    try:
+        cfind = sem.CtfFind("A", ctf_defocus_lo, ctf_defocus_hi)
+    finally:
+        sem.NoMessageBoxOnError(0)
+    if len(cfind) == 0:
+        sem.Echo("ERROR: CtfFind failed.")
+        sem.Exit()
+    return float(cfind[0]), float(cfind[-1])
+
+
+def set_target_stage_z(target_stage_z):
+    """Adjust focus to target defocus and verify with CtfFind."""
+    sem.GoToLowDoseArea("R")
+    sem.SetImageShift(0, 0)
+    sem.MoveStageTo(xyz0[0],xyz0[1],xyz0[2]+target_stage_z)
+    time.sleep(5)
+    sem.ReportStageXYZ()
+    current_defocus = np.nan
+    for attempt in range(1):
+        sem.L()
+        current_defocus, _ = run_ctffind()
+        error = target_stage_z - current_defocus
+        sem.Echo(
+            f"Target defocus check {attempt}/{max_defocus_adjust_iterations}: "
+            f"current={current_defocus:.3f} um, target={target_stage_z:.3f} um, "
+            f"error={error:.3f} um"
+        )
+        if True:
+            return current_defocus
+    sem.Echo(
+        "WARNING: Target defocus not reached within tolerance after max iterations."
+    )
+    return current_defocus
+
+
+def run_autofocus_trial(tilt_angle_mrad):
+    """
+    Execute one autofocus-like measurement with a given beam tilt_angle.
+    Returns:
+      defocus_measured [microns], speed_x [nm/s], speed_y [nm/s]
+    """
+    beam_tilt = sem.ReportBeamTilt()
+    tilt_x_orig = float(beam_tilt[0])
+    tilt_y_orig = float(beam_tilt[1])
+    tilt_x_plus = tilt_x_orig + correction * tilt_angle_mrad
+
+    pixel_size_binned = float(sem.ReportCurrentPixelSize("R"))
+    binning = float(sem.ReportBinning("R"))
+    pixel_size_unbinned = pixel_size_binned / binning
+
+    # Positive tilt
+    sem.SetBeamTilt(tilt_x_plus, tilt_y_orig)
+    bt = sem.ReportBeamTilt()
+    sem.Echo(f"ActuralBeamTilt: {float(bt[0]):.5f} ")
+    sem.F() #acquire image with Focus preset
+    sem.ResetClock()
+    sem.Copy("A", "L")
+
+    # Zero tilt
+    sem.SetBeamTilt(tilt_x_orig, tilt_y_orig)
+    sem.F()
+    sem.AlignTo("L", 1)
+    align_shift_1 = sem.ReportAlignShift()
+    disp_x1_px = float(align_shift_1[0])
+    disp_y1_px = float(align_shift_1[1])
+
+    # Positive tilt again to correct for drift
+    sem.SetBeamTilt(tilt_x_plus, tilt_y_orig)
+    sem.F()
+    sem.AlignTo("L", 1)
+    align_shift_2 = sem.ReportAlignShift()
+    disp_x2_px = float(align_shift_2[0])
+    disp_y2_px = float(align_shift_2[1])
+    elapsed = float(sem.ReportClock())
+
+    # Align to origin
+    sem.SetBeamTilt(tilt_x_orig, tilt_y_orig)
+
+    drift_x = disp_x2_px * pixel_size_unbinned
+    drift_y = disp_y2_px * pixel_size_unbinned
+    speed_x = drift_x / elapsed if elapsed > 0 else 0.0
+    speed_y = drift_y / elapsed if elapsed > 0 else 0.0
+
+    displacement_from_tilt_x = (disp_x1_px - disp_x2_px / 2.0) * pixel_size_unbinned
+    displacement_from_tilt_y = (disp_y1_px - disp_y2_px / 2.0) * pixel_size_unbinned
+    displacement = np.sqrt(
+        displacement_from_tilt_x * displacement_from_tilt_x
+        + displacement_from_tilt_y * displacement_from_tilt_y
+    )
+
+    if displacement_from_tilt_x == 0:
+        sign = 1.0
+    else:
+        sign = displacement_from_tilt_x / abs(displacement_from_tilt_x)
+
+    defocus_measured = -1.0 * sign * displacement
+
+    return defocus_measured, speed_x, speed_y
+
+def fit_auto_focus(corrections, af_vals):
+    """Linear fit of delta vs correction; returns slope, intercept, root."""
+    result, residuals, rank, singular_values, rcond = np.polyfit(corrections, af_vals, 1, full=True)
+    slope = result[0]
+    intercept = result[1]
+    return slope, intercept, residuals
+
+def save_measurements_csv(path, rows):
+    fields = [
+        "target_stage_z_um",
+        "tilt_angle_mrad",
+        "autofocus_cycle_used",
+        "autofocus_defocus_cycle1_um",
+        "autofocus_defocus_cycle2_um",
+        "autofocus_defocus_um",
+        "ctf_defocus_um",
+        "delta_um",
+        "ctf_resolution_A",
+        "drift_speed_x_nm_per_s",
+        "drift_speed_y_nm_per_s",
+    ]
+    with open(path, "w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def save_summary_csv(path, rows):
+    fields = [
+        "target_stage_z_um",
+        "fit_slope",
+        "fit_intercept",
+        "fit_residuals",
+    ]
+    with open(path, "w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+        writer.writerow(
+            {
+                "target_stage_z_um": "MEAN",
+                "fit_slope": "",
+                "fit_intercept": "",
+                "fit_residuals": "",
+            }
+        )
+
+
+def make_plot(path, grouped_results):
+    n = len(grouped_results)
+    ncols = 2
+    nrows = int(np.ceil(n / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(12, 4 * nrows), tight_layout=True)
+    axes = np.atleast_1d(axes).ravel()
+
+    for i, res in enumerate(grouped_results):
+        ax = axes[i]
+        print(res)
+        x = np.array(res["tilt_angle_mrad_values"], dtype=float)
+        y = np.array(res["af_values"], dtype=float)
+        slope = res["slope"]
+        intercept = res["intercept"]
+        best = res["residuals"]
+
+        ax.scatter(x, y, label="measurements")
+        xfit = np.linspace(np.min(x), np.max(x), 200)
+        ax.plot(xfit, slope * xfit + intercept, label="linear fit")
+        ax.axhline(0, color="gray", linestyle="--", linewidth=1)
+        if np.isfinite(slope):
+            ax.axvline(slope, color="red", linestyle=":", linewidth=1)
+            title = f"Stage Z {res['target_stage_z']:.2f} um, slope={slope:.4f}, intercept={intercept:.4f}"
+        else:
+            title = f"Stage Z {res['target_stage_z']:.2f} um, slope=NaN"
+        ax.set_title(title)
+        ax.set_xlabel("Beam tilt (mrad)")
+        ax.set_ylabel("Autofocus value (?)")
+        ax.legend()
+
+    for j in range(i + 1, len(axes)):
+        axes[j].axis("off")
+
+    fig.savefig(path, dpi=150)
+    plt.show()
+
+
+def main():
+    sem.SuppressReports()
+    sem.Echo("##### Beam tilt calibration test #####")
+    sem.Echo(f"Timestamp: {datetime.now().isoformat(timespec='seconds')}")
+    sem.Echo(f"Testing beam tilts: {list(np.array(tilt_angle_mrad_values, dtype=float))}")
+    sem.Echo(f"Target stage values from eucentric: {target_stage_z_values}")
+
+    measurement_rows = []
+    summary_rows = []
+    grouped_results = []
+
+    set_target_stage_z(target_stage_z_values[0]+1.0)
+ 
+    for target_stage_z in target_stage_z_values:
+        sem.Echo("------------------------------------------------")
+        sem.Echo(f"Measuring target defocus for stage z {target_stage_z:.3f} um")
+        reached_defocus = set_target_stage_z(target_stage_z)
+        sem.Echo(f"CtffindDefocus: {reached_defocus:.3f} um")
+
+        tilt_vals = []
+        af_vals = []
+        for tilt in tilt_angle_mrad_values:
+            tilt = float(tilt)
+            cycle_defocus = []
+            speed_x = 0.0
+            speed_y = 0.0
+            for _ in range(autofocus_cycles):
+                af_defocus, speed_x, speed_y = run_autofocus_trial(tilt)
+                cycle_defocus.append(af_defocus)
+            af_defocus_used = cycle_defocus[-1]
+            cycle1 = cycle_defocus[0] if len(cycle_defocus) >= 1 else np.nan
+            cycle2 = cycle_defocus[1] if len(cycle_defocus) >= 2 else np.nan
+
+            sem.L()
+            ctf_defocus, ctf_res = run_ctffind()
+            delta = af_defocus_used - ctf_defocus
+
+            sem.Echo(
+                f"target={target_stage_z:.3f} um, tilt={tilt:.4f}, "
+                f"AF(last of {autofocus_cycles})={af_defocus_used:.4f} um, "
+                f"CTF={ctf_defocus:.4f} um, delta={delta:.4f} um, "
+                f"drift=({speed_x:.3f}, {speed_y:.3f}) nm/s"
+            )
+
+            measurement_rows.append(
+                {
+                    "target_stage_z_um": target_stage_z,
+                    "tilt_angle_mrad": tilt,
+                    "autofocus_cycle_used": autofocus_cycles,
+                    "autofocus_defocus_cycle1_um": cycle1,
+                    "autofocus_defocus_cycle2_um": cycle2,
+                    "autofocus_defocus_um": af_defocus_used,
+                    "ctf_defocus_um": ctf_defocus,
+                    "delta_um": delta,
+                    "ctf_resolution_A": ctf_res,
+                    "drift_speed_x_nm_per_s": speed_x,
+                    "drift_speed_y_nm_per_s": speed_y,
+                }
+            )
+            tilt_vals.append(tilt)
+            af_vals.append(af_defocus_used)
+
+        slope, intercept, residuals = fit_auto_focus(tilt_vals, af_vals)
+        summary_rows.append(
+            {
+                "target_stage_z_um": target_stage_z,
+                "fit_slope": slope,
+                "fit_intercept": intercept,
+                "fit_residuals": residuals,
+            }
+        )
+        grouped_results.append(
+            {
+                "target_stage_z": target_stage_z,
+                "tilt_angle_mrad_values": tilt_vals,
+                "af_values": af_vals,
+                "slope": slope,
+                "intercept": intercept,
+                "residuals": residuals,
+            }
+        )
+        sem.Echo(
+            f"Fitted slope for defocus {target_stage_z:.3f} um: {slope:.6f}, "
+            f"Fitted intercept for defocus {target_stage_z:.3f} um: {intercept:.6f}"
+        )
+
+    sem.MoveStageTo(xyz0[0],xyz0[1],xyz0[2])
+
+    save_measurements_csv(csv_measurements, measurement_rows)
+    save_summary_csv(csv_summary, summary_rows)
+    make_plot(plot_file, grouped_results)
+
+    sem.Echo("------------------------------------------------")
+    sem.Echo("Fitted beam tilt correction values by target defocus:")
+    for row in summary_rows:
+        sem.Echo(
+            f"  defocus {float(row['target_stage_z_um']):.3f} um -> "
+        )
+    sem.Echo(f"Saved measurements CSV: {csv_measurements}")
+    sem.Echo(f"Saved summary CSV: {csv_summary}")
+    sem.Echo(f"Saved fit plot: {plot_file}")
+
+    sem.SuppressReports(0)
+    sem.Exit()
+
+
+if __name__ == "__main__":
+    main()
+EndMacro
+Macro	1
+#!Python
+import serialem as sem
+import time
+
+def echo_beamtilt():
+    beam_tilt = sem.ReportBeamTilt()
+    tilt_x = float(beam_tilt[0])
+    tilt_y = float(beam_tilt[1])
+    sem.Echo(f"beamtilt {tilt_x:.3f}, {tilt_y:.3f} um")
+    return tilt_x, tilt_y
+
+sem.Echo("***TestBeamTilt***")
+tilt_x_orig, tilt_y_orig = echo_beamtilt()
+tilt_x_plus = tilt_x_orig +10*1.7335
+
+sem.SetBeamTilt(tilt_x_plus, tilt_y_orig)
+echo_beamtilt()
+time.sleep(5)
+
+sem.SetBeamTilt(tilt_x_orig, tilt_y_orig)
+echo_beamtilt()
+#sem.SetBeamTilt(0.0,0.0)
+#echo_beamtilt()
+EndMacro
+Macro	2
+#!Python
+# ===================================================================
+# ScriptName     LAFIS calibration
+# Purpose:       calibrate laser alignment aberration free image shift
+# Author:        Anchi Cheng, Misha Kopylov
+# ===================================================================
+
+import csv
+from datetime import datetime
+
+import matplotlib.pyplot as plt
+import numpy as np
+import serialem as sem
+
+############ SETTINGS ############
+image_shift_delta_um = [(-5.0,5.0),]
+
+xt_is_matrix = [[0.000312, -0.000352],[0.001120, 0.000281]]
+sem.Echo("***Running X-Tilt LAFIS***")
+sem.Echo("DIAGNOSTIC MESSAGE: Current image shift:")
+sem.ReportImageShift()
+sem.Echo("DIAGNOSTIC MESSAGE: Current beam tilt:")
+sem.ReportBeamTilt()
+sem.Echo("script starts here")
+
+sem.SetImageShift(0,0)
+#sem.SetXLensDeflector(2, -0.001909, -0.001152) #Reset to original X-tilt values
+sem.L()
+sem.Pause("Checkt X-tilt at no Image Shift")
+
+def float_tuple(input_str_tuple):
+   return (float(input_str_tuple[0]), float(input_str_tuple[1]))
+
+def get_values():
+   image_shift = sem.ReportImageShift()
+   beam_tilt = sem.ReportBeamTilt()
+   xtilt = sem.ReportXLensDeflector(2)
+   return float_tuple(image_shift),float_tuple(beam_tilt), float_tuple(xtilt)
+
+def calc_xt_is(xt0, is_delta):
+   xt1 = [0.0,0.0]
+   xt1[0] = xt0[0]+is_delta[0]*xt_is_matrix[0][0]+is_delta[1]*xt_is_matrix[1][0]
+   xt1[1] = xt0[1]+is_delta[0]*xt_is_matrix[0][1]+is_delta[1]*xt_is_matrix[1][1]
+   return xt1
+
+is0, bt0, xt0 = get_values()
+
+for delta in image_shift_delta_um:
+   sem.SetImageShift(is0[0]+delta[0], is0[1]+delta[1])
+
+   sem.AdjustBeamTiltforIS()
+   is1, bt1, xt1 = get_values()
+ 
+   sem.Echo("xt adjusted")
+   xt = calc_xt_is(xt0, delta)
+   sem.SetXLensDeflector(2, xt[0], xt[1])
+   sem.L()
+   sem.Pause("Adjust X-tilt")
+
+   is2, bt2, xt2 = get_values()
+   sem.L()
+   for i in (0,1):
+      if delta[i]:
+         sem.Echo('-------%d-------' % i)
+         sem.Echo('xt_delta %.6f, %.6f' % ((xt2[0]-xt0[0])/delta[i],(xt2[1]-xt0[1])/delta[i]))
+
+sem.SetImageShift(is0[0],is0[1])
+sem.SetXLensDeflector(2,xt0[0],xt0[1])
+print(get_values())
+EndMacro
+Macro	3
+#!Python
+# ===================================================================
+# ScriptName     beam_tilt_autofocus
+# Purpose:       plot beam tilt image shift at different stage z height
+#                compared with CtfFind defocus.
+# Author:        Generated for PACEtomo workflow
+# ===================================================================
+
+import csv
+import time
+from datetime import datetime
+
+import matplotlib.pyplot as plt
+import numpy as np
+import serialem as sem
+
+############ SETTINGS ############
+
+# Beam tilt used for autofocus measurement [mrad]
+sc=1.7335
+tilt_angle_mrad_values = [-10.0,10.0]
+tilt_angle_mrad_values = list(map((lambda x: x*sc), tilt_angle_mrad_values))
+
+# Correction factors to beam tilt scale in conversion to defocus
+correction = 1
+
+
+# Defocus convergence settings for setting each target defocus
+target_stage_z_tolerance_um = 0.01
+max_defocus_adjust_iterations = 5
+
+# Number of autofocus cycles per test.
+# Delta is computed using the last cycle's autofocus value.
+autofocus_cycles = 1
+
+# Output file names (written in current SerialEM working directory)
+csv_measurements = "beam_tilt_autofocus_measurements.csv"
+csv_summary = "beam_tilt_autofocus_summary.csv"
+plot_file = "beam_tilt_autofocus_fits.png"
+
+########## END SETTINGS ##########
+
+xyz0 = sem.ReportStageXYZ()
+
+def run_autofocus_trial(tilt_angle_mrad):
+    """
+    Execute one autofocus-like measurement with a given beam tilt_angle.
+    Returns:
+      defocus_measured [microns], speed_x [nm/s], speed_y [nm/s]
+    """
+    beam_tilt = sem.ReportBeamTilt()
+    tilt_x_orig = float(beam_tilt[0])
+    tilt_y_orig = float(beam_tilt[1])
+    tilt_x_plus = tilt_x_orig + correction * tilt_angle_mrad
+
+    pixel_size_binned = float(sem.ReportCurrentPixelSize("R"))
+    binning = float(sem.ReportBinning("R"))
+    pixel_size_unbinned = pixel_size_binned / binning
+
+    # Positive tilt
+    sem.SetBeamTilt(tilt_x_plus, tilt_y_orig)
+    bt = sem.ReportBeamTilt()
+    sem.Echo(f"ActuralBeamTilt: {float(bt[0]):.5f} ")
+    sem.F() #acquire image with Focus preset
+    sem.ResetClock()
+    sem.Copy("A", "L")
+
+    # Zero tilt
+    sem.SetBeamTilt(tilt_x_orig, tilt_y_orig)
+    sem.F()
+    sem.AlignTo("L", 1)
+    align_shift_1 = sem.ReportAlignShift()
+    disp_x1_px = float(align_shift_1[0])
+    disp_y1_px = float(align_shift_1[1])
+
+    # Positive tilt again to correct for drift
+    sem.SetBeamTilt(tilt_x_plus, tilt_y_orig)
+    sem.F()
+    sem.AlignTo("L", 1)
+    align_shift_2 = sem.ReportAlignShift()
+    disp_x2_px = float(align_shift_2[0])
+    disp_y2_px = float(align_shift_2[1])
+    elapsed = float(sem.ReportClock())
+
+    # Align to origin
+    sem.SetBeamTilt(tilt_x_orig, tilt_y_orig)
+
+    drift_x = disp_x2_px * pixel_size_unbinned
+    drift_y = disp_y2_px * pixel_size_unbinned
+    speed_x = drift_x / elapsed if elapsed > 0 else 0.0
+    speed_y = drift_y / elapsed if elapsed > 0 else 0.0
+
+    displacement_from_tilt_x = (disp_x1_px - disp_x2_px / 2.0) * pixel_size_unbinned
+    displacement_from_tilt_y = (disp_y1_px - disp_y2_px / 2.0) * pixel_size_unbinned
+    displacement = np.sqrt(
+        displacement_from_tilt_x * displacement_from_tilt_x
+        + displacement_from_tilt_y * displacement_from_tilt_y
+    )
+
+    if displacement_from_tilt_x == 0:
+        sign = 1.0
+    else:
+        sign = displacement_from_tilt_x / abs(displacement_from_tilt_x)
+
+    defocus_measured = -1.0 * sign * displacement
+
+    return defocus_measured, speed_x, speed_y
+
+def fit_auto_focus(corrections, af_vals):
+    """Linear fit of delta vs correction; returns slope, intercept, root."""
+    result, residuals, rank, singular_values, rcond = np.polyfit(corrections, af_vals, 1, full=True)
+    slope = result[0]
+    intercept = result[1]
+    return slope, intercept, residuals
+
+def save_measurements_csv(path, rows):
+    fields = [
+        "target_stage_z_um",
+        "tilt_angle_mrad",
+        "autofocus_cycle_used",
+        "autofocus_defocus_cycle1_um",
+        "autofocus_defocus_cycle2_um",
+        "autofocus_defocus_um",
+        "ctf_defocus_um",
+        "delta_um",
+        "ctf_resolution_A",
+        "drift_speed_x_nm_per_s",
+        "drift_speed_y_nm_per_s",
+    ]
+    with open(path, "w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def save_summary_csv(path, rows):
+    fields = [
+        "target_stage_z_um",
+        "fit_slope",
+        "fit_intercept",
+        "fit_residuals",
+    ]
+    with open(path, "w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+        writer.writerow(
+            {
+                "target_stage_z_um": "MEAN",
+                "fit_slope": "",
+                "fit_intercept": "",
+                "fit_residuals": "",
+            }
+        )
+
+
+def make_plot(path, grouped_results):
+    n = len(grouped_results)
+    ncols = 2
+    nrows = int(np.ceil(n / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(12, 4 * nrows), tight_layout=True)
+    axes = np.atleast_1d(axes).ravel()
+
+    for i, res in enumerate(grouped_results):
+        ax = axes[i]
+        print(res)
+        x = np.array(res["tilt_angle_mrad_values"], dtype=float)
+        y = np.array(res["af_values"], dtype=float)
+        slope = res["slope"]
+        intercept = res["intercept"]
+        best = res["residuals"]
+
+        ax.scatter(x, y, label="measurements")
+        xfit = np.linspace(np.min(x), np.max(x), 200)
+        ax.plot(xfit, slope * xfit + intercept, label="linear fit")
+        ax.axhline(0, color="gray", linestyle="--", linewidth=1)
+        if np.isfinite(slope):
+            ax.axvline(slope, color="red", linestyle=":", linewidth=1)
+            title = f"Stage Z {res['target_stage_z']:.2f} um, slope={slope:.4f}, intercept={intercept:.4f}"
+        else:
+            title = f"Stage Z {res['target_stage_z']:.2f} um, slope=NaN"
+        ax.set_title(title)
+        ax.set_xlabel("Beam tilt (mrad)")
+        ax.set_ylabel("Autofocus value (?)")
+        ax.legend()
+
+    for j in range(i + 1, len(axes)):
+        axes[j].axis("off")
+
+    fig.savefig(path, dpi=150)
+    plt.show()
+
+
+def main():
+    sem.SuppressReports()
+    sem.Echo("##### Beam tilt autofocus #####")
+    sem.Echo(f"Timestamp: {datetime.now().isoformat(timespec='seconds')}")
+
+    measurement_rows = []
+    summary_rows = []
+    grouped_results = []
+    tilt_vals = []
+    af_vals = []
+    for tilt in tilt_angle_mrad_values:
+            tilt = float(tilt)
+            cycle_defocus = []
+            speed_x = 0.0
+            speed_y = 0.0
+            for _ in range(autofocus_cycles):
+                af_defocus, speed_x, speed_y = run_autofocus_trial(tilt)
+                cycle_defocus.append(af_defocus)
+            af_defocus_used = cycle_defocus[-1]
+            cycle1 = cycle_defocus[0] if len(cycle_defocus) >= 1 else np.nan
+            cycle2 = cycle_defocus[1] if len(cycle_defocus) >= 2 else np.nan
+
+            sem.L()
+            ctf_defocus, ctf_res = run_ctffind()
+            delta = af_defocus_used - ctf_defocus
+
+            sem.Echo(
+                f"target={target_stage_z:.3f} um, tilt={tilt:.4f}, "
+                f"AF(last of {autofocus_cycles})={af_defocus_used:.4f} um, "
+                f"CTF={ctf_defocus:.4f} um, delta={delta:.4f} um, "
+                f"drift=({speed_x:.3f}, {speed_y:.3f}) nm/s"
+            )
+
+            measurement_rows.append(
+                {
+                    "target_stage_z_um": target_stage_z,
+                    "tilt_angle_mrad": tilt,
+                    "autofocus_cycle_used": autofocus_cycles,
+                    "autofocus_defocus_cycle1_um": cycle1,
+                    "autofocus_defocus_cycle2_um": cycle2,
+                    "autofocus_defocus_um": af_defocus_used,
+                    "ctf_defocus_um": ctf_defocus,
+                    "delta_um": delta,
+                    "ctf_resolution_A": ctf_res,
+                    "drift_speed_x_nm_per_s": speed_x,
+                    "drift_speed_y_nm_per_s": speed_y,
+                }
+            )
+            tilt_vals.append(tilt)
+            af_vals.append(af_defocus_used)
+
+        slope, intercept, residuals = fit_auto_focus(tilt_vals, af_vals)
+        summary_rows.append(
+            {
+                "target_stage_z_um": target_stage_z,
+                "fit_slope": slope,
+                "fit_intercept": intercept,
+                "fit_residuals": residuals,
+            }
+        )
+        grouped_results.append(
+            {
+                "target_stage_z": target_stage_z,
+                "tilt_angle_mrad_values": tilt_vals,
+                "af_values": af_vals,
+                "slope": slope,
+                "intercept": intercept,
+                "residuals": residuals,
+            }
+        )
+        sem.Echo(
+            f"Fitted slope for defocus {target_stage_z:.3f} um: {slope:.6f}, "
+            f"Fitted intercept for defocus {target_stage_z:.3f} um: {intercept:.6f}"
+        )
+
+    sem.MoveStageTo(xyz0[0],xyz0[1],xyz0[2])
+
+    save_measurements_csv(csv_measurements, measurement_rows)
+    save_summary_csv(csv_summary, summary_rows)
+    make_plot(plot_file, grouped_results)
+
+    sem.Echo("------------------------------------------------")
+    sem.Echo("Fitted beam tilt correction values by target defocus:")
+    for row in summary_rows:
+        sem.Echo(
+            f"  defocus {float(row['target_stage_z_um']):.3f} um -> "
+        )
+    sem.Echo(f"Saved measurements CSV: {csv_measurements}")
+    sem.Echo(f"Saved summary CSV: {csv_summary}")
+    sem.Echo(f"Saved fit plot: {plot_file}")
+
+    sem.SuppressReports(0)
+    sem.Exit()
+
+
+if __name__ == "__main__":
+    main()
+EndMacro
+Macro	4
+#LAFIS in serialem scripting
+
+# calibrated matrix in 1D array form.  The first two are first row
+xt_is_matrix = { 0.000312 -0.00035 0.001120, 0.000281 }
+
+ReportBeamTilt bt0x bt0y
+ReportXLensDeflector 2 xt0x xt0y
+AdjustBeamTiltforIS
+
+Require variable1
+ReportImageShift is1x is1y
+ReportBeamTilt bt1x bt1y
+ReportXLensDeflector 2 xt1x xt1y
+xt1y = ReportedValue2
+Echo $xt1x
+xt = $xt1y + 0
+Echo xt
+EndMacro
+Macro	5
+IsFEGFlashingAdvised  1
+NextFEGFlashHighTemp 1
+LongOperation FF 0
+EndMacro
+Macro	6
+#!Python
+#ScriptName quick_ronchi
+#be step size 5 and two clicks down from on-plane
+print("=== Collecting Ronchigram ===")
+
+import sys
+import numpy as np
+import serialem as sem
+import matplotlib.pyplot as pltA
+import matplotlib.colors as colors
+
+c3offset = 0
+pixel_size = 0.98e-4 * 2 #um
+binning = 32
+
+target_phase_A= -1.51585241  # Vertical Laser
+target_phase_B = 2.66470197 # Horizontal Laser
+  
+
+c3_correction_factor = 20/9.3
+#correct_ks = np.array([[5.722, -0.389] ,  [0.623, 5.878]])
+correct_ks = np.array([[5.761, -0.467] ,  [11.833, -0.817]])
+
+def plot_complex_image(Fourier):
+    # 1. Amplitude and Phase calculation
+    amplitude = np.abs(Fourier) / np.max(np.abs(Fourier))  # Normalize to [0, 1]
+    phase = np.angle(Fourier)
+
+    # 2. Map Phase to Hue and Amplitude to Brightness
+    h = (phase + np.pi) / (2 * np.pi)
+    s = np.ones_like(amplitude) 
+    v = amplitude              
+
+    # 3. Convert HSV to RGB
+    hsv_image = np.dstack((h, s, v))
+    rgb_image = colors.hsv_to_rgb(hsv_image)
+
+    # 4. Plot the image
+    plt.imshow(rgb_image)
+
+    # Display the plot
+    plt.show()
+
+def bin_image(image, binning = 32):
+  bins = [image[i:(image.shape[0]//binning * binning):binning,j:(image.shape[1]//binning * binning):binning] for i in range(binning) for j in range(binning)]
+  binned = np.sum(bins,axis=0)
+  return binned
+
+def find_fourier(binned, size = 4096):
+  s = np.array([size,size])
+  fourier = np.fft.fftshift(np.fft.fft2(binned - np.mean(binned),s))
+  return fourier
+
+def find_fourier_centered(image, padded_size = 4096):
+    """
+    Computes Fourier Transform and reports phases as if they were centered on the image center, rather than the top left corner. This is done by applying a correction phase to the Fourier Transform.
+    """
+    Fourier = np.fft.fftshift(np.fft.fft2(image-np.mean(image), s=(padded_size, padded_size)))
+    center = np.array(image.shape) / 2 
+    grid_y, grid_x = np.indices((padded_size, padded_size), dtype=float)
+
+    shifted_y = grid_y-padded_size/2
+    shifted_x = grid_x-padded_size/2
+
+    correction_phase_x = np.exp(2j * np.pi * shifted_x/padded_size * center[1])
+    correction_phase_y = np.exp(2j * np.pi * shifted_y/padded_size * center[0])
+    correction_phase = correction_phase_x * correction_phase_y
+    Fourier_corrected = Fourier * correction_phase
+    return Fourier_corrected
+
+def find_peaks(fourier, radius = 100, npeaks = 4, verbose = False):
+  fourier_abs = np.abs(fourier).copy() # Work on a copy to avoid modifying the original
+  peak_locations = []
+  phases = []
+
+  size = np.shape(fourier_abs)[0]
+  #delete center
+  peak_coords = [size//2, size//2]
+  fourier_abs[(peak_coords[0]-radius):(peak_coords[0]+radius),(peak_coords[1]-radius):(peak_coords[1]+radius),] = 0
+
+  for i in range(npeaks):
+      # Find the index of the maximum value in the flattened array
+      max_idx = np.argmax(fourier_abs)
+
+      # Convert the flattened index to 2D coordinates
+      # np.shape(fourier_abs) gives (rows, cols)
+      peak_coords = np.unravel_index(max_idx, fourier_abs.shape)
+
+      # Store the coordinates
+      peak_locations.append(peak_coords)
+
+      # Set the found peak and region surrounding to zero to prevent re-selection in the next iteration
+      fourier_abs[(peak_coords[0]-radius):(peak_coords[0]+radius),(peak_coords[1]-radius):(peak_coords[1]+radius),] = 0
+
+      phase = np.angle(fourier[peak_coords])
+      phases.append(phase)
+
+  peak_locations_centered = np.array(peak_locations)-size/2
+
+  if verbose:
+    print(f"Coordinates of the {npeaks} highest peaks:")
+    for i, coords in enumerate(peak_locations):
+        print(f"Peak {i+1}: {coords}")
+
+  return peak_locations_centered, np.array(phases)
+
+def find_ks_phases(CorrectedFourier, pixel_size_um, npeaks = 2, radius = 100):
+  peaks, phases = find_peaks(CorrectedFourier, radius = radius, npeaks = npeaks*2) # We'll filter out the duplicates
+  angles = report_angles(peaks, start_angle=-135)
+  ordering = np.argsort(angles)
+  peaks = peaks[ordering]
+  phases = phases[ordering]
+  phases = phases[:npeaks]
+  peaks = peaks[:npeaks]
+  ks = convert_to_k(peaks, binning = 1, fourier_size = CorrectedFourier.shape[0], pixel_size_um = pixel_size_um)
+  return ks, phases
+
+def convert_to_k(peak_locations, binning = 1, fourier_size = 4096, pixel_size_um = 2.7/1e4):
+  ks = peak_locations / fourier_size * 1/(pixel_size_um * binning)
+  return ks
+
+def report_angles(ks, start_angle = -135):
+  angles = np.mod(np.arctan2(-ks[:,0],ks[:,1])*180/np.pi-start_angle,360)+start_angle
+  return angles
+
+def sort_ks(ks,start_angle = -135):
+  angles = report_angles(ks, start_angle)
+  ks_sorted = ks[np.argsort(angles)]
+  return ks_sorted
+
+def convert_to_plane_offset(ks, focal_length = 7):
+  offset = ks / (2/1064e-3) * focal_length # ks are in um^-1
+  return offset
+
+
+xtX, xtY = sem.ReportXLensDeflector(2)
+
+start_offset = sem.ReportImageDistanceOffset()
+new_offset = start_offset + c3offset
+print(new_offset)
+
+sem.SetImageDistanceOffset(new_offset)
+base = sem.ReportFrameBaseName()
+#sem.SetFrameBaseName(0, 1, 0,  base[1] + "_ronchi")
+sem.Delay(2, "s")
+sem.T()
+sem.SetImageDistanceOffset(start_offset)
+
+imageA = np.asarray(sem.bufferImage("A"))
+print(imageA.shape)
+binnedImage = bin_image(imageA, binning = binning)
+imageFFT = find_fourier_centered(binnedImage)
+ks, phases = find_ks_phases(imageFFT, pixel_size * binning)
+sem.Echo("A")
+sem.Echo("Measured Fringe Spacing")
+sem.Echo(np.array2string(ks, formatter = {'float_kind':lambda x: "%.3f" % x}))
+sem.Echo("Measured - Reference")
+ks_err = ks-correct_ks
+sem.Echo(np.array2string(ks_err,  formatter = {'float_kind':lambda x: "%.3f" % x}))
+sem.Echo("Measured Phase")
+sem.Echo(np.array2string(phases))
+
+phase_err_A = np.mod(phases[0] - target_phase_A + np.pi, 2*np.pi) - np.pi
+phase_err_B = np.mod(phases[1] - target_phase_B + np.pi, 2*np.pi) - np.pi
+
+sem.Echo(f"Phase Correction V = {phase_err_A:.2f} rad, H = {phase_err_B:.2f} rad")
+
+correction_x = 1e-5 * (phase_err_A * 0.212 + phase_err_B * 1.28)
+correction_y = 1e-5 * (phase_err_A * 1.22 + phase_err_B * -0.243)
+
+avg_err = (ks_err[0,0] + ks_err[1,1])/2
+c3_correction = avg_err * c3_correction_factor
+
+sem.Echo(f"C3 recommend correction: {c3_correction:.1f}")
+
+sem.Echo(f"X tilt correction X = {correction_x:.3e}, Y ={correction_y:.3e}")
+#sem.SetFrameBaseName(0, 1, 0,  base[1])
+EndMacro
+Macro	7
+#!Python
+#ScriptName quick_ronchi_correction
+
+print("=== Collecting Ronchigram ===")
+
+import sys
+import numpy as np
+import serialem as sem
+import matplotlib.pyplot as plt
+import matplotlib.colors as colors
+
+c3offset = -20
+pixel_size = 0.98e-4 * 2 #um
+binning = 32
+
+target_phase_A=-2.83297121   # Vertical Laser
+target_phase_B = 2.66010033 # Horizontal Laser
+
+
+c3_correction_factor = 20/7
+correct_ks = np.array([[6.462, -0.545]  , [0.662, 7.007]])
+
+
+def plot_complex_image(Fourier):
+    # 1. Amplitude and Phase calculation
+    amplitude = np.abs(Fourier) / np.max(np.abs(Fourier))  # Normalize to [0, 1]
+    phase = np.angle(Fourier)
+
+    # 2. Map Phase to Hue and Amplitude to Brightness
+    h = (phase + np.pi) / (2 * np.pi)
+    s = np.ones_like(amplitude) 
+    v = amplitude              
+
+    # 3. Convert HSV to RGB
+    hsv_image = np.dstack((h, s, v))
+    rgb_image = colors.hsv_to_rgb(hsv_image)
+
+    # 4. Plot the image
+    plt.imshow(rgb_image)
+
+    # Display the plot
+    plt.show()
+
+def bin_image(image, binning = 32):
+  bins = [image[i:(image.shape[0]//binning * binning):binning,j:(image.shape[1]//binning * binning):binning] for i in range(binning) for j in range(binning)]
+  binned = np.sum(bins,axis=0)
+  return binned
+
+def find_fourier(binned, size = 4096):
+  s = np.array([size,size])
+  fourier = np.fft.fftshift(np.fft.fft2(binned - np.mean(binned),s))
+  return fourier
+
+def find_fourier_centered(image, padded_size = 4096):
+    """
+    Computes Fourier Transform and reports phases as if they were centered on the image center, rather than the top left corner. This is done by applying a correction phase to the Fourier Transform.
+    """
+    Fourier = np.fft.fftshift(np.fft.fft2(image-np.mean(image), s=(padded_size, padded_size)))
+    center = np.array(image.shape) / 2 
+    grid_y, grid_x = np.indices((padded_size, padded_size), dtype=float)
+
+    shifted_y = grid_y-padded_size/2
+    shifted_x = grid_x-padded_size/2
+
+    correction_phase_x = np.exp(2j * np.pi * shifted_x/padded_size * center[1])
+    correction_phase_y = np.exp(2j * np.pi * shifted_y/padded_size * center[0])
+    correction_phase = correction_phase_x * correction_phase_y
+    Fourier_corrected = Fourier * correction_phase
+    return Fourier_corrected
+
+def find_peaks(fourier, radius = 100, npeaks = 4, verbose = False):
+  fourier_abs = np.abs(fourier).copy() # Work on a copy to avoid modifying the original
+  peak_locations = []
+  phases = []
+
+  size = np.shape(fourier_abs)[0]
+  #delete center
+  peak_coords = [size//2, size//2]
+  fourier_abs[(peak_coords[0]-radius):(peak_coords[0]+radius),(peak_coords[1]-radius):(peak_coords[1]+radius),] = 0
+
+  for i in range(npeaks):
+      # Find the index of the maximum value in the flattened array
+      max_idx = np.argmax(fourier_abs)
+
+      # Convert the flattened index to 2D coordinates
+      # np.shape(fourier_abs) gives (rows, cols)
+      peak_coords = np.unravel_index(max_idx, fourier_abs.shape)
+
+      # Store the coordinates
+      peak_locations.append(peak_coords)
+
+      # Set the found peak and region surrounding to zero to prevent re-selection in the next iteration
+      fourier_abs[(peak_coords[0]-radius):(peak_coords[0]+radius),(peak_coords[1]-radius):(peak_coords[1]+radius),] = 0
+
+      phase = np.angle(fourier[peak_coords])
+      phases.append(phase)
+
+  peak_locations_centered = np.array(peak_locations)-size/2
+
+  if verbose:
+    print(f"Coordinates of the {npeaks} highest peaks:")
+    for i, coords in enumerate(peak_locations):
+        print(f"Peak {i+1}: {coords}")
+
+  return peak_locations_centered, np.array(phases)
+
+def find_ks_phases(CorrectedFourier, pixel_size_um, npeaks = 2, radius = 100):
+  peaks, phases = find_peaks(CorrectedFourier, radius = radius, npeaks = npeaks*2) # We'll filter out the duplicates
+  angles = report_angles(peaks, start_angle=-135)
+  ordering = np.argsort(angles)
+  peaks = peaks[ordering]
+  phases = phases[ordering]
+  phases = phases[:npeaks]
+  peaks = peaks[:npeaks]
+  ks = convert_to_k(peaks, binning = 1, fourier_size = CorrectedFourier.shape[0], pixel_size_um = pixel_size_um)
+  return ks, phases
+
+def convert_to_k(peak_locations, binning = 1, fourier_size = 4096, pixel_size_um = 2.7/1e4):
+  ks = peak_locations / fourier_size * 1/(pixel_size_um * binning)
+  return ks
+
+def report_angles(ks, start_angle = -135):
+  angles = np.mod(np.arctan2(-ks[:,0],ks[:,1])*180/np.pi-start_angle,360)+start_angle
+  return angles
+
+def sort_ks(ks,start_angle = -135):
+  angles = report_angles(ks, start_angle)
+  ks_sorted = ks[np.argsort(angles)]
+  return ks_sorted
+
+def convert_to_plane_offset(ks, focal_length = 7):
+  offset = ks / (2/1064e-3) * focal_length # ks are in um^-1
+  return offset
+
+
+xtX, xtY = sem.ReportXLensDeflector(2)
+
+start_offset = sem.ReportImageDistanceOffset()
+new_offset = start_offset + c3offset
+print(new_offset)
+
+sem.SetImageDistanceOffset(new_offset)
+base = sem.ReportFrameBaseName()
+sem.SetFrameBaseName(0, 1, 0,  base[1] + "_ronchi")
+sem.Delay(2, "s")
+sem.T()
+sem.SetImageDistanceOffset(start_offset)
+
+imageA = np.asarray(sem.bufferImage("A"))
+print(imageA.shape)
+binnedImage = bin_image(imageA, binning = binning)
+imageFFT = find_fourier_centered(binnedImage)
+ks, phases = find_ks_phases(imageFFT, pixel_size * binning)
+sem.Echo("A")
+sem.Echo("Measured Fringe Spacing")
+sem.Echo(np.array2string(ks, formatter = {'float_kind':lambda x: "%.3f" % x}))
+sem.Echo("Measured - Reference")
+ks_err = ks-correct_ks
+sem.Echo(np.array2string(ks_err,  formatter = {'float_kind':lambda x: "%.3f" % x}))
+sem.Echo("Measured Phase")
+sem.Echo(np.array2string(phases))
+
+phase_err_A = np.mod(phases[0] - target_phase_A + np.pi, 2*np.pi) - np.pi
+phase_err_B = np.mod(phases[1] - target_phase_B + np.pi, 2*np.pi) - np.pi
+
+sem.Echo(f"Phase Correction V = {phase_err_A:.2f} rad, H = {phase_err_B:.2f} rad")
+
+correction_x = 1e-5 * (phase_err_A * 0.212 + phase_err_B * 1.28)
+correction_y = 1e-5 * (phase_err_A * 1.22 + phase_err_B * -0.243)
+
+avg_err = (ks_err[0,0] + ks_err[1,1])/2
+c3_correction = avg_err * c3_correction_factor
+
+sem.Echo(f"C3 recommend correction: {c3_correction:.1f}")
+
+sem.Echo(f"X tilt correction X = {correction_x:.3e}, Y ={correction_y:.3e}")
+
+c3offsetYN = 1 # sem.YesNoBox("Do You Want to Correct C3 offset?")
+
+if c3offsetYN:
+  sem.SetImageDistanceOffset(start_offset + c3_correction)
+  sem.Echo(f"c3 offest adjused by {c3_correction}")
+
+correctYN = 1 # sem.YesNoBox("Do You Want to Correct Phase?")
+
+if correctYN:
+   sem.SetXLensDeflector(2, xtX + correction_x, xtY + correction_y)
+   print("Phase Shift Corrected")
+EndMacro
+Macro	8
+# SerialEM Script for LAFIS
+EndMacro
+Macro	60
+SetImageShift 0 0
+EndMacro
+Macro	61
+SetXLensDeflector 2 0 0
+EndMacro
+Macro	62
+ReportXLensDeflector 2
+EndMacro
+Macro	63
+SetXLensDeflector 2 0.04 0.0
+EndMacro
+Macro	64
+ReportBeamTilt 
+EndMacro
+Macro	65
+FixComaByCTF 0 0
+EndMacro
