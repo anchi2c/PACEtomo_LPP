@@ -445,6 +445,7 @@ print(get_values())
 EndMacro
 Macro	3
 #!Python
+#ScriptName laser_image-shift_xtilt_correction
 # python for Laser Image-Shift XTilt correction only
 import serialem as sem
 
@@ -474,12 +475,11 @@ def main():
 
    delta = is1
    xt1 = calc_xt_is(xt0, delta)
-   sem.SetXLensDeflector(2, xt[0], xt[1])
+   sem.SetXLensDeflector(2, xt1[0], xt1[1])
    is2, bt2, xt2 = get_values()
 
-   sem.SetXLensDeflector(2,xt0[0],xt0[1])
 
-if __main__=='__main__':
+if __name__=='__main__':
     main()
 EndMacro
 Macro	4
@@ -1165,54 +1165,73 @@ if correctYN:
    print("Phase Shift Corrected")
 EndMacro
 Macro	8
-# LAFIS Test macro: calls script 3 and script 7
-number_of_iter = 5
-step = 1.0 # image shift step in um
-offset = ($number_of_iter - 1) * $step / 2
+#!Python
+# ScriptName save data in python
+import json
+import os
+from datetime import datetime
 
-CallScript 7   #Laser magic phase correction
-ReportImageShift
-ReportBeamTilt
-ReportXLensDeflector 2
-CallScript 9 #save xt value in python
+import serialem as sem
 
-Loop $number_of_iter i
-   isx = ($i - 1) * step + $offset
-   Loop $number_of_iter j
-      isy = ($j - 1) * step + $offset
-      SetImageShift $isx $isy
-      AdjustBeamTiltforIS
-      L
-      Echo ---AFIS applyed---
-      ReportXLensDeflector 2
-      Echo ---coma measurement with AFIS---
-      FixComaByCTF 1 1 0 1  #The last option suppress message box
+sem_params = SEMargStrings
 
-      Echo ---LAFIS applyed---
-      CallScript 3   #Laser image-shift Xtilt correction
-      L
-      ReportImageShift
-      ReportBeamTilt
-      ReportXLensDeflector 2
-      Echo ---coma measurement with LAFIS
-      FixComaByCTF 1 1 0 1  #The last option suppress message box
-      Echo ---Laser on-plane on-node correction---
-      CallScript 7   #Laser magic phase correction
-      ReportImageShift
-      ReportBeamTilt
-      ReportXLensDeflector 2
-      CallScript 10  # reset all values in python
-   EndLoop
-EndLoop
-CallScipt 10 #reset saved all values in python
+if sem_params:
+   filepath = sem_params[0]
+   coma = (sem_params[1], sem_params[2])
+else:
+   filepath = 'test.json'
+   coma = (0, 0)
+
+sem.Echo('--------Saving optical values to %s' % os.path.join(os.getcwd(), filepath))
+
+def float_tuple(input_str_tuple):
+   try:
+      return (float(input_str_tuple[0]), float(input_str_tuple[1]))
+   except Exception as e:
+      print('float conversion error: %s' %e)
+      return (0,0)
+
+def get_values():
+   image_shift = sem.ReportImageShift()
+   beam_tilt = sem.ReportBeamTilt()
+   x_tilt = sem.ReportXLensDeflector(2)
+   obj_stig = sem.ReportObjectiveStigmator()
+   measured_coma = float_tuple(coma)
+   print(measured_coma)
+   return {
+          'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+          'image_shift':float_tuple(image_shift),
+          'beam_tilt':float_tuple(beam_tilt),
+          'x_tilt':float_tuple(x_tilt),
+          'obj_stig':float_tuple(obj_stig),
+          'measured_coma':float_tuple(measured_coma),
+   }
+
+def main():
+   if os.path.isfile(filepath):
+      with open(filepath, "r") as f:
+         all_data = json.load(f)
+   else:
+      all_data =[]
+   data = get_values()
+   all_data.append(data)
+   with open(filepath, "w") as f:
+      json.dump(all_data, f, indent=2)
+   sem.Echo('Value saved')
+
+if __name__ == '__main__':
+   main()
 EndMacro
 Macro	9
 #!Python
-# Hack to save xt0 and other origin values in python
+# ScriptName Hack to save xt0 and other origin values in python
+
 import json
+import os
 import serialem as sem
 
 filepath = 'temp_xt0.json'
+sem.Echo('--------Saving optical values to %s' % os.path.join(os.getcwd(), filepath))
 
 def float_tuple(input_str_tuple):
    return (float(input_str_tuple[0]), float(input_str_tuple[1]))
@@ -1220,8 +1239,9 @@ def float_tuple(input_str_tuple):
 def get_values():
    image_shift = sem.ReportImageShift()
    beam_tilt = sem.ReportBeamTilt()
-   xtilt = sem.ReportXLensDeflector(2)
-   return float_tuple(image_shift),float_tuple(beam_tilt), float_tuple(xtilt)
+   x_tilt = sem.ReportXLensDeflector(2)
+   obj_stig = sem.ReportObjectiveStigmator()
+   return {'image_shift':float_tuple(image_shift),'beam_tilt':float_tuple(beam_tilt), 'x_tilt':float_tuple(x_tilt), 'obj_stig':float_tuple(obj_stig)}
 
 def main():
    data = get_values()
@@ -1234,18 +1254,97 @@ if __name__ == '__main__':
 EndMacro
 Macro	10
 #!Python
-# Hack to recall xt0 and other origin values in python
+# ScriptName Hack to recall xt0 and other origin values in python
 import json
+import os
 import serialem as sem
 
 filepath = 'temp_xt0.json'
+sem.Echo('-------- Loading optical values from %s' % os.path.join(os.getcwd(), filepath))
 
 with open(filepath, "r") as f:
-   data = json.load((f)
-sem.SetImageShift(data[0][0], data[0][1])
-sem.SetBeamTilt(data[1][0],data[1][1])
-sem.SetXlensDefector(2, data[2][0],data[2][1])
+   data = json.load(f)
+
+sem.SetImageShift(data['image_shift'][0], data['image_shift'][1])
+sem.SetBeamTilt(data['beam_tilt'][0],data['beam_tilt'][1])
+sem.SetXLensDeflector(2, data['x_tilt'][0],data['x_tilt'][1])
+# Do we need to do this ?
+sem.SetObjectiveStigmator(data['obj_stig'][0],data['obj_stig'][1])
+
 sem.Echo('Value reset')
+EndMacro
+Macro	11
+MacroName LAFIS coma test on multiple image shift
+#calls script 4 and script 8 as seen in SEM Script Editor (Base 1)
+
+#SETTINGS
+number_of_iter = 5
+step = 2.0 # image shift step in um
+with_laser = 0
+data_filename = 26jul16_coma1.json
+
+# END SETTINGS
+
+offset = ($number_of_iter - 1) * $step / 2
+
+if $with_laser
+   # start with good phase shift
+   CallScript 8   #Laser magic phase correction
+endif
+
+# write to file
+CallScript 9 $data_filename 0 0
+
+#CallScript 10 #save xt value in python (Base 1 in Script Editor but Base 0 in the script.txt file)
+
+Loop $number_of_iter i
+   isx = ($i - 1) * $step - $offset
+   Loop $number_of_iter j
+      isy = ($j - 1) * $step - $offset
+      SetImageShift $isx $isy
+      AdjustBeamTiltforIS
+      L
+      Echo ---AFIS applyed---
+      ReportXLensDeflector 2
+      Echo ---coma measurement with AFIS---
+      ReportBeamTilt afis_btx afis_bty
+      FixComaByCTF 0 1 0 1  #The last option suppress message box
+      ReportBeamTilt coma_freex coma_freey
+      comax = $coma_freex - $afis_btx
+      comay = $coma_freey - $afis_bty
+      SetBeamTilt $afis_btx $afis_bty
+      CallScript 9 $data_filename $comax $comay
+      Echo ---LAFIS applyed---
+      CallScript 4   #Laser image-shift Xtilt correction
+      L
+      ReportImageShift
+      ReportBeamTilt
+      ReportXLensDeflector 2
+
+      Echo ---coma measurement with LAFIS
+      ReportBeamTilt lafis_btx lafis_bty
+      FixComaByCTF 0 1 0 1  #The last option suppress message box
+      ReportBeamTilt coma_freex coma_freey
+      comax = $coma_freex - $lafis_btx
+      comay = $coma_freey - $lafis_bty
+      SetBeamTilt $lafis_btx $lafis_bty
+      CallScript 9 $data_filename $comax $comay
+
+      if $with_laser
+         Echo ---Laser on-plane on-node correction---
+         #Laser magic phase correction
+         CallScript 7   
+         ReportImageShift
+         ReportBeamTilt
+         ReportXLensDeflector 2
+      endif
+      #reset all values in python (Base 1 in Script Editor but Base 0 in the script.txt file)
+      CallScript 11 
+   EndLoop
+EndLoop
+
+#reset saved all values in python
+CallScript 11
 EndMacro
 Macro	60
 SetImageShift 0 0
