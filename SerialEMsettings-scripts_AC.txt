@@ -485,22 +485,26 @@ EndMacro
 Macro	4
 #LAFIS in serialem scripting TODO: FIX ME
 
-# calibrated matrix in 1D array form.  The first two are first row
-xt_is_matrix = { 0.000312 -0.00035 0.001120, 0.000281 }
-
-ReportBeamTilt bt0x bt0y
 # TODO: this gives xt0x as the y value, not x value.
+SetXLensDeflector 2 0.1 0.2
 ReportXLensDeflector 2 xt0x xt0y
-AdjustBeamTiltforIS
+Echo Direct assign through Report command
+Echo got_second_axis $xt0x
+#Error: Echo $xt0y fails as not defined
+#Echo $xt0y
 
-Require variable1
-ReportImageShift is1x is1y
-ReportBeamTilt bt1x bt1y
-ReportXLensDeflector 2 xt1x xt1y
+# assign through ReportedValues does not retain the value when another Report command is called.
+xt1x = ReportedValue1
 xt1y = ReportedValue2
 Echo $xt1x
-xt = $xt1y + 0
-Echo xt
+Echo $xt1y
+
+SetXLensDeflector 2 0 0
+ReportXLensDeflector 2 xt2x xt2y
+
+Echo sending_the_variable_assigned_got updated_by_the_new_report
+SetXLensDeflector 2 $xt1x $xt1y
+ReportXLensDeflector 2 xt2x xt2y
 EndMacro
 Macro	5
 #!Python
