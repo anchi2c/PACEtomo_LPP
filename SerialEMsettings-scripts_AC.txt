@@ -445,6 +445,63 @@ print(get_values())
 EndMacro
 Macro	3
 #!Python
+# python for Laser Image-Shift XTilt correction only
+xt_is_matrix = [[0.000312, -0.000352],[0.001120, 0.000281]]
+
+def float_tuple(input_str_tuple):
+   return (float(input_str_tuple[0]), float(input_str_tuple[1]))
+
+def get_values():
+   image_shift = sem.ReportImageShift()
+   beam_tilt = sem.ReportBeamTilt()
+   xtilt = sem.ReportXLensDeflector(2)
+   return float_tuple(image_shift),float_tuple(beam_tilt), float_tuple(xtilt)
+
+def calc_xt_is(xt0, is_delta):
+   xt1 = [0.0,0.0]
+   xt1[0] = xt0[0]+is_delta[0]*xt_is_matrix[0][0]+is_delta[1]*xt_is_matrix[1][0]
+   xt1[1] = xt0[1]+is_delta[0]*xt_is_matrix[0][1]+is_delta[1]*xt_is_matrix[1][1]
+   return xt1
+
+def main():
+   '''
+   Report xtilt and adjust according to image shift from 0,0
+   '''
+   # End result should be at is1==is2 and bt1==bt2
+   is1, bt1, xt0 = get_values()
+
+   delta = is1
+   xt1 = calc_xt_is(xt0, delta)
+   sem.SetXLensDeflector(2, xt[0], xt[1])
+   is2, bt2, xt2 = get_values()
+
+   sem.SetXLensDeflector(2,xt0[0],xt0[1])
+
+if __main__=='__main__':
+    main()
+EndMacro
+Macro	4
+#LAFIS in serialem scripting TODO: FIX ME
+
+# calibrated matrix in 1D array form.  The first two are first row
+xt_is_matrix = { 0.000312 -0.00035 0.001120, 0.000281 }
+
+ReportBeamTilt bt0x bt0y
+# TODO: this gives xt0x as the y value, not x value.
+ReportXLensDeflector 2 xt0x xt0y
+AdjustBeamTiltforIS
+
+Require variable1
+ReportImageShift is1x is1y
+ReportBeamTilt bt1x bt1y
+ReportXLensDeflector 2 xt1x xt1y
+xt1y = ReportedValue2
+Echo $xt1x
+xt = $xt1y + 0
+Echo xt
+EndMacro
+Macro	5
+#!Python
 # ===================================================================
 # ScriptName     beam_tilt_autofocus
 # Purpose:       plot beam tilt image shift at different stage z height
@@ -735,33 +792,9 @@ def main():
 if __name__ == "__main__":
     main()
 EndMacro
-Macro	4
-#LAFIS in serialem scripting
-
-# calibrated matrix in 1D array form.  The first two are first row
-xt_is_matrix = { 0.000312 -0.00035 0.001120, 0.000281 }
-
-ReportBeamTilt bt0x bt0y
-ReportXLensDeflector 2 xt0x xt0y
-AdjustBeamTiltforIS
-
-Require variable1
-ReportImageShift is1x is1y
-ReportBeamTilt bt1x bt1y
-ReportXLensDeflector 2 xt1x xt1y
-xt1y = ReportedValue2
-Echo $xt1x
-xt = $xt1y + 0
-Echo xt
-EndMacro
-Macro	5
-IsFEGFlashingAdvised  1
-NextFEGFlashHighTemp 1
-LongOperation FF 0
-EndMacro
 Macro	6
 #!Python
-#ScriptName quick_ronchi
+#ScriptName quick_ronchi_magic_phase_measurment
 #be step size 5 and two clicks down from on-plane
 print("=== Collecting Ronchigram ===")
 
@@ -954,6 +987,7 @@ c3offset = -20
 pixel_size = 0.98e-4 * 2 #um
 binning = 32
 
+# target_phase measured in ronchi_measure
 target_phase_A=-2.83297121   # Vertical Laser
 target_phase_B = 2.66010033 # Horizontal Laser
 
@@ -1129,7 +1163,77 @@ if correctYN:
    print("Phase Shift Corrected")
 EndMacro
 Macro	8
-# SerialEM Script for LAFIS
+# LAFIS Test macro: calls script 3 and script 7
+number_of_iter = 5
+step = 1.0 # image shift step in um
+offset = ($number_of_iter - 1) * $step / 2
+
+CallScript 7   #Laser magic phase correction
+ReportImageShift
+ReportBeamTilt
+ReportXLensDeflector 2
+CallScript 9 #save xt value in python
+
+ReportBeamTilt bt0x bt0y
+Loop $number_of_iter i
+   isx = ($i - 1) * step + $offset
+   Loop $number_of_iter j
+      isy = ($j - 1) * step + $offset
+      SetImageShift $isx $isy
+      AdjustBeamTiltforIS
+      L
+      Echo ---AFIS applyed---
+      ReportXLensDeflector 2
+      Echo ---coma measurement with AFIS---
+      FixComaByCTF 1 1 0 1  #The last option suppress message box
+
+      Echo ---LAFIS applyed---
+      CallScript 3   #Laser image-shift Xtilt correction
+      L
+      ReportImageShift
+      ReportBeamTilt
+      ReportXLensDeflector 2
+      Echo ---coma measurement with LAFIS
+      FixComaByCTF 1 1 0 1  #The last option suppress message box
+      Echo ---Laser on-plane on-node correction---
+      CallScript 7   #Laser magic phase correction
+      ReportImageShift
+      ReportBeamTilt
+      ReportXLensDeflector 2
+   EndLoop
+EndLoop
+SetImageShift 0 0
+SetBeamTilt $bt0x $bt0y
+CallScipt 10 #reset saved xt value in python
+EndMacro
+Macro	9
+#!Python
+import json
+filepath = 'temp_xt0.json'
+def float_tuple(input_str_tuple):
+   return (float(input_str_tuple[0]), float(input_str_tuple[1]))
+
+def get_values():
+   image_shift = sem.ReportImageShift()
+   beam_tilt = sem.ReportBeamTilt()
+   xtilt = sem.ReportXLensDeflector(2)
+   return float_tuple(image_shift),float_tuple(beam_tilt), float_tuple(xtilt)
+
+   data = get_values()
+with open(filepath, "w") as f:
+   json.dump((data, f, indent=2)
+sem.Echo('Value saved')
+EndMacro
+Macro	10
+#!Python
+import json
+filepath = 'temp_xt0.json'
+with open(filepath, "r") as f:
+   data = json.load((f)
+sem.SetImageShift(data[0][0], data[0][1])
+sem.SetBeamTilt(data[1][0],data[1][1])
+sem.SetXlensDefector(2, data[2][0],data[2][1])
+sem.Echo('Value reset')
 EndMacro
 Macro	60
 SetImageShift 0 0
