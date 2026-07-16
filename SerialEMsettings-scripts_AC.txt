@@ -446,6 +446,8 @@ EndMacro
 Macro	3
 #!Python
 # python for Laser Image-Shift XTilt correction only
+import serialem as sem
+
 xt_is_matrix = [[0.000312, -0.000352],[0.001120, 0.000281]]
 
 def float_tuple(input_str_tuple):
@@ -1174,7 +1176,6 @@ ReportBeamTilt
 ReportXLensDeflector 2
 CallScript 9 #save xt value in python
 
-ReportBeamTilt bt0x bt0y
 Loop $number_of_iter i
    isx = ($i - 1) * step + $offset
    Loop $number_of_iter j
@@ -1200,16 +1201,19 @@ Loop $number_of_iter i
       ReportImageShift
       ReportBeamTilt
       ReportXLensDeflector 2
+      CallScript 10  # reset all values in python
    EndLoop
 EndLoop
-SetImageShift 0 0
-SetBeamTilt $bt0x $bt0y
-CallScipt 10 #reset saved xt value in python
+CallScipt 10 #reset saved all values in python
 EndMacro
 Macro	9
 #!Python
+# Hack to save xt0 and other origin values in python
 import json
+import serialem as sem
+
 filepath = 'temp_xt0.json'
+
 def float_tuple(input_str_tuple):
    return (float(input_str_tuple[0]), float(input_str_tuple[1]))
 
@@ -1219,15 +1223,23 @@ def get_values():
    xtilt = sem.ReportXLensDeflector(2)
    return float_tuple(image_shift),float_tuple(beam_tilt), float_tuple(xtilt)
 
+def main():
    data = get_values()
-with open(filepath, "w") as f:
-   json.dump((data, f, indent=2)
-sem.Echo('Value saved')
+   with open(filepath, "w") as f:
+      json.dump(data, f, indent=2)
+   sem.Echo('Value saved')
+
+if __name__ == '__main__':
+   main()
 EndMacro
 Macro	10
 #!Python
+# Hack to recall xt0 and other origin values in python
 import json
+import serialem as sem
+
 filepath = 'temp_xt0.json'
+
 with open(filepath, "r") as f:
    data = json.load((f)
 sem.SetImageShift(data[0][0], data[0][1])
