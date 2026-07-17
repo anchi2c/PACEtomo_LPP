@@ -512,7 +512,7 @@ Macro	5
 # ScriptName     beam_tilt_autofocus
 # Purpose:       plot beam tilt image shift at different stage z height
 #                compared with CtfFind defocus.
-# Author:        Generated for PACEtomo workflow
+# Author:        Josh Dickerson; Generated from PACEtomo
 # ===================================================================
 
 import csv
@@ -801,7 +801,12 @@ EndMacro
 Macro	6
 #!Python
 #ScriptName quick_ronchi_magic_phase_measurment
-#be step size 5 and two clicks down from on-plane
+# Purpose:       Measure best ronchigram phase offset and standing wave periodicity correction scale.
+#                       Must be measured at C3 parallel illumination offset micromap step size 5 and two clicks down from on-plane
+# Author:        Josh Dickerson, Eric Cooper
+# Additional Documentation: Anchi Cheng
+# ===================================================================
+#be step size 5 and two clicks down from on-plane ( = 0.0020 logical unit in TFS micromap)
 print("=== Collecting Ronchigram ===")
 
 import sys
@@ -980,6 +985,11 @@ EndMacro
 Macro	7
 #!Python
 #ScriptName quick_ronchi_correction
+# Purpose:      Correct to on-node on-plane for xLPP based on ronchigram phase offset and standing wave periodicity
+#                       Starting condition should be close to on-plane and within +/- half of standing wave periodicity
+# Author:        Josh Dickerson, Eric Cooper
+# Additional Documentation: Anchi Cheng
+# ===================================================================
 
 print("=== Collecting Ronchigram ===")
 
@@ -993,14 +1003,16 @@ c3offset = -20
 pixel_size = 0.98e-4 * 2 #um
 binning = 32
 
-# target_phase measured in ronchi_measure
-target_phase_A=-2.83297121   # Vertical Laser
-target_phase_B = 2.66010033 # Horizontal Laser
+# target_phase measured in ronchi_measurement
+target_phase_A=1.95765565   # Vertical Laser
+target_phase_B = 1.97075624 # Horizontal Laser
+
+# target_ks 2D matrix measured in ronchi_measure
+correct_ks = np.array([[6.617, -0.584] ,  [0.311 ,6.501]])
 
 
-c3_correction_factor = 20/7
-correct_ks = np.array([[6.462, -0.545]  , [0.662, 7.007]])
-
+avg_norm = (np.linalg.norm(correct_ks[0]) + np.linalg.norm(correct_ks[1]))/2.0
+c3_correction_factor = 20 /avg_norm
 
 def plot_complex_image(Fourier):
     # 1. Amplitude and Phase calculation
@@ -1122,7 +1134,7 @@ print(new_offset)
 
 sem.SetImageDistanceOffset(new_offset)
 base = sem.ReportFrameBaseName()
-sem.SetFrameBaseName(0, 1, 0,  base[1] + "_ronchi")
+sem.SetFrameBaseName(0, 1, 0,  base[1])
 sem.Delay(2, "s")
 sem.T()
 sem.SetImageDistanceOffset(start_offset)
@@ -1172,7 +1184,7 @@ Macro	8
 #!Python
 # ScriptName save data in python
 import json
-import os
+import os, time
 from datetime import datetime
 
 import serialem as sem
@@ -1217,6 +1229,7 @@ def main():
          all_data = json.load(f)
    else:
       all_data =[]
+   time.sleep(1)
    data = get_values()
    all_data.append(data)
    with open(filepath, "w") as f:
@@ -1284,63 +1297,74 @@ MacroName LAFIS coma test on multiple image shift
 #SETTINGS
 number_of_iter = 5
 step = 2.0 # image shift step in um
-with_laser = 0
-data_filename = 26jul16_coma1.json
+with_laser = 1
+do_coma_measurement = 0
+data_filename = 26jul17_with_laser_x3_6.json
 
 # END SETTINGS
 
 offset = ($number_of_iter - 1) * $step / 2
 
-if $with_laser
+if $with_laser > 0
    # start with good phase shift
    CallScript 8   #Laser magic phase correction
 endif
 
 # write to file
-CallScript 9 $data_filename 0 0
+#CallScript 9 $data_filename 0 0
 
 #CallScript 10 #save xt value in python (Base 1 in Script Editor but Base 0 in the script.txt file)
 
+comax = 0.0
+comay = 0.0
 Loop $number_of_iter i
    isx = ($i - 1) * $step - $offset
    Loop $number_of_iter j
       isy = ($j - 1) * $step - $offset
       SetImageShift $isx $isy
       AdjustBeamTiltforIS
-      L
+      #L
       Echo ---AFIS applyed---
       ReportXLensDeflector 2
-      Echo ---coma measurement with AFIS---
-      ReportBeamTilt afis_btx afis_bty
-      FixComaByCTF 0 1 0 1  #The last option suppress message box
-      ReportBeamTilt coma_freex coma_freey
-      comax = $coma_freex - $afis_btx
-      comay = $coma_freey - $afis_bty
-      SetBeamTilt $afis_btx $afis_bty
+      if $do_coma_measurement > 0
+         Echo ---coma measurement with AFIS---
+         ReportBeamTilt afis_btx afis_bty
+         FixComaByCTF 0 1 0 1  #The last option suppress message box
+         ReportBeamTilt coma_freex coma_freey
+         comax = $coma_freex - $afis_btx
+         comay = $coma_freey - $afis_bty
+         SetBeamTilt $afis_btx $afis_bty
+      endif
       CallScript 9 $data_filename $comax $comay
       Echo ---LAFIS applyed---
       CallScript 4   #Laser image-shift Xtilt correction
-      L
+      # L
       ReportImageShift
       ReportBeamTilt
       ReportXLensDeflector 2
 
-      Echo ---coma measurement with LAFIS
-      ReportBeamTilt lafis_btx lafis_bty
-      FixComaByCTF 0 1 0 1  #The last option suppress message box
-      ReportBeamTilt coma_freex coma_freey
-      comax = $coma_freex - $lafis_btx
-      comay = $coma_freey - $lafis_bty
-      SetBeamTilt $lafis_btx $lafis_bty
+      if $do_coma_measurement > 0
+         Echo ---coma measurement with LAFIS
+         ReportBeamTilt lafis_btx lafis_bty
+         FixComaByCTF 0 1 0 1  #The last option suppress message box
+         ReportBeamTilt coma_freex coma_freey
+         comax = $coma_freex - $lafis_btx
+         comay = $coma_freey - $lafis_bty
+         SetBeamTilt $lafis_btx $lafis_bty
+      endif
       CallScript 9 $data_filename $comax $comay
 
-      if $with_laser
+      if $with_laser > 0
          Echo ---Laser on-plane on-node correction---
          #Laser magic phase correction
-         CallScript 7   
-         ReportImageShift
+         CallScript 8   
+         CallScript 8   
+         CallScript 8    
+        ReportImageShift
          ReportBeamTilt
          ReportXLensDeflector 2
+         CallScript 9 $data_filename $comax $comay
+         R
       endif
       #reset all values in python (Base 1 in Script Editor but Base 0 in the script.txt file)
       CallScript 11 
