@@ -483,7 +483,7 @@ if __name__=='__main__':
     main()
 EndMacro
 Macro	4
-#LAFIS in serialem scripting TODO: FIX ME
+#LAFIS in serialem scripting : Works now by using $ReportedValue1 $ReportedValue2
 
 # TODO: this gives xt0x as the y value, not x value.
 SetXLensDeflector 2 0.1 0.2
@@ -494,8 +494,8 @@ Echo got_second_axis $xt0x
 #Echo $xt0y
 
 # assign through ReportedValues does not retain the value when another Report command is called.
-xt1x = ReportedValue1
-xt1y = ReportedValue2
+xt1x = $ReportedValue1
+xt1y = $ReportedValue2
 Echo $xt1x
 Echo $xt1y
 
@@ -504,7 +504,7 @@ ReportXLensDeflector 2 xt2x xt2y
 
 Echo sending_the_variable_assigned_got updated_by_the_new_report
 SetXLensDeflector 2 $xt1x $xt1y
-ReportXLensDeflector 2 xt2x xt2y
+ReportXLensDeflector 2
 EndMacro
 Macro	5
 #!Python
@@ -1258,7 +1258,17 @@ def get_values():
    beam_tilt = sem.ReportBeamTilt()
    x_tilt = sem.ReportXLensDeflector(2)
    obj_stig = sem.ReportObjectiveStigmator()
-   return {'image_shift':float_tuple(image_shift),'beam_tilt':float_tuple(beam_tilt), 'x_tilt':float_tuple(x_tilt), 'obj_stig':float_tuple(obj_stig)}
+   abs_focus = sem.ReportAbsoluteFocus()
+   defocus = sem.ReportDefocus()
+   c3_offset = sem.ReportImageDistanceOffset()
+   return {'image_shift':float_tuple(image_shift),
+         'beam_tilt':float_tuple(beam_tilt),
+         'x_tilt':float_tuple(x_tilt),
+         'obj_stig':float_tuple(obj_stig),
+         'abs_focus':float(abs_focus),
+         'defocus':float(defocus),
+         'c3_offset':float(defocus),
+   }
 
 def main():
    data = get_values()
@@ -1285,9 +1295,9 @@ with open(filepath, "r") as f:
 sem.SetImageShift(data['image_shift'][0], data['image_shift'][1])
 sem.SetBeamTilt(data['beam_tilt'][0],data['beam_tilt'][1])
 sem.SetXLensDeflector(2, data['x_tilt'][0],data['x_tilt'][1])
-# Do we need to do this ?
 sem.SetObjectiveStigmator(data['obj_stig'][0],data['obj_stig'][1])
-
+sem.SetDefocus(data['defocus'])
+sem.SetImageDistanceOffset(data['c3_offset'])
 sem.Echo('Value reset')
 EndMacro
 Macro	11
