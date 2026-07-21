@@ -35,6 +35,8 @@ beam_tilt_correction = 1.73
 defocus_tilt_correction = beam_tilt_correction
 beam_tilt_xtilt_x = 0.0
 beam_tilt_xtilt_y = 0.0
+# False on scopes without XLensDeflector: skip all XLens Report/Set/Restore.
+hasXLens = True
 spherical_aberration_mm = 2.7     # Cs for defocus = -disp/(2*beta) - Cs*beta^2 [mm]
 autofocus_cycles = 2              # initial autofocus: correct focus to target_defocus (sem.G)
 measure_cycles = 1                # cycles per tilt-loop measurement
@@ -50,7 +52,7 @@ from scipy import optimize
 import matplotlib.pyplot as plt
 import PACEtomo_beamTiltDefocus as btdef
 
-btdef.configure(sem_module=sem)
+btdef.configure(sem_module=sem, has_x_lens=hasXLens)
 
 ########### FUNCTIONS ###########
 
@@ -60,21 +62,26 @@ def dZ(alpha, y0):
 
 def beam_tilt_measure_defocus():
     """Beam-tilt defocus via shared calibrated measurement."""
+    xt_x = beam_tilt_xtilt_x if hasXLens else None
+    xt_y = beam_tilt_xtilt_y if hasXLens else None
     return btdef.measure_defocus(
         tilt_angle_mrad=tilt_angle_mrad,
         beam_tilt_correction=beam_tilt_correction,
         defocus_tilt_correction=defocus_tilt_correction,
-        xtilt_x=beam_tilt_xtilt_x,
-        xtilt_y=beam_tilt_xtilt_y,
+        xtilt_x=xt_x,
+        xtilt_y=xt_y,
         cs_mm=spherical_aberration_mm,
     )
 
 
 def ctf_measure_defocus():
     """CTF defocus: set X-tilt, Focus, CtfFind (with retries), restore X-tilt."""
-    xtX, xtY = sem.ReportXLensDeflector(2)
+    xtX = xtY = None
+    if hasXLens:
+        xtX, xtY = sem.ReportXLensDeflector(2)
     try:
-        sem.SetXLensDeflector(2, ctfXtiltX, ctfXtiltY)
+        if hasXLens:
+            sem.SetXLensDeflector(2, ctfXtiltX, ctfXtiltY)
         cfind = []
         sem.NoMessageBoxOnError(1)
         try:
@@ -106,7 +113,8 @@ def ctf_measure_defocus():
         sem.Echo(f"CtfFind: {defocus:.4f} microns ({cfind[-1]} A)")
         return defocus
     finally:
-        sem.SetXLensDeflector(2, xtX, xtY)
+        if hasXLens and xtX is not None:
+            sem.SetXLensDeflector(2, xtX, xtY)
 
 
 def measure_defocus():

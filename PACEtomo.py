@@ -105,6 +105,9 @@ breakpoints     = False     # Waits at every debug output for user to press B ke
 # Defocus measure / autofocus (replaces sem.G / sem.G(-1))
 # ctf | beam_tilt (physics+calibration) | beam_tilt_sem (sem.G(-1)+calibration)
 defocusMethod = "beam_tilt"
+# False on scopes without XLensDeflector: skip all XLens Report/Set/Restore.
+# Requires doRonchigram = False.
+hasXLens = True
 ctfXtiltX = 0.002836
 ctfXtiltY = 0.003867
 ctfDefocusLo = -12.0            # CtfFind search range low [microns]
@@ -115,7 +118,7 @@ ctf_retry_delay_s = 5
 tilt_angle_mrad = 10.0            # match calibrate_beam_tilt_scaling.py
 beam_tilt_correction = 1.73       # SetBeamTilt scale; same value used in defocus beta
 defocus_tilt_correction = beam_tilt_correction
-beam_tilt_xtilt_x = 0.0           # X-tilt for beam-tilt defocus (scaling calib default)
+beam_tilt_xtilt_x = 0.0           # X-tilt for beam-tilt defocus (ignored when hasXLens is False)
 beam_tilt_xtilt_y = 0.0
 spherical_aberration_mm = 2.7     # Cs for defocus = -disp/(2*beta) - Cs*beta^2 [mm]
 autofocus_cycles = 2
@@ -125,6 +128,7 @@ autofocus_tolerance_um = 0.05
 ########## Ronchigram / laser alignment ##########
 # Trial LD area must match Record position; only exposure should differ.
 # Overridable from target file via _bset (e.g. _bset doRonchigram true).
+# Requires hasXLens = True.
 doRonchigram       = True
 ronchiBaseSuffix   = "_ronchi"         # appended to active frame base name for Trial saves only, then restored
 ronchiC3Offset     = -20          # added to ReportImageDistanceOffset before Trial shot
@@ -177,7 +181,7 @@ if sortByTilt:
     import mrcfile
     from pathlib import Path
 
-btdef.configure(sem_module=sem)
+btdef.configure(sem_module=sem, has_x_lens=hasXLens)
 
 # Per-run session state (initialized in run_one_nav_item; module defaults for helpers/linter)
 geo = [[], [], []]
@@ -267,29 +271,36 @@ def ensure_fixed_stage_tilt(when="", quiet=False):
 
 def serialEM_measure_defocus():
     """SerialEM sem.G(-1) defocus with optional scaling calibration."""
+    xt_x = beam_tilt_xtilt_x if hasXLens else None
+    xt_y = beam_tilt_xtilt_y if hasXLens else None
     return btdef.measure_serialEM_defocus(
-        xtilt_x=beam_tilt_xtilt_x,
-        xtilt_y=beam_tilt_xtilt_y,
+        xtilt_x=xt_x,
+        xtilt_y=xt_y,
     )
 
 
 def beam_tilt_measure_defocus():
     """Beam-tilt defocus via shared calibrated measurement."""
+    xt_x = beam_tilt_xtilt_x if hasXLens else None
+    xt_y = beam_tilt_xtilt_y if hasXLens else None
     return btdef.measure_defocus(
         tilt_angle_mrad=tilt_angle_mrad,
         beam_tilt_correction=beam_tilt_correction,
         defocus_tilt_correction=defocus_tilt_correction,
-        xtilt_x=beam_tilt_xtilt_x,
-        xtilt_y=beam_tilt_xtilt_y,
+        xtilt_x=xt_x,
+        xtilt_y=xt_y,
         cs_mm=spherical_aberration_mm,
     )
 
 
 def ctf_measure_defocus():
     """CTF defocus: set X-tilt, Focus, CtfFind (with retries), restore X-tilt."""
-    xtX, xtY = sem.ReportXLensDeflector(2)
+    xtX = xtY = None
+    if hasXLens:
+        xtX, xtY = sem.ReportXLensDeflector(2)
     try:
-        sem.SetXLensDeflector(2, ctfXtiltX, ctfXtiltY)
+        if hasXLens:
+            sem.SetXLensDeflector(2, ctfXtiltX, ctfXtiltY)
         cfind = []
         sem.NoMessageBoxOnError(1)
         try:
@@ -323,7 +334,8 @@ def ctf_measure_defocus():
         log(f"CtfFind: {defocus:.4f} microns ({float(cfind[-1]):.2f} A)")
         return defocus
     finally:
-        sem.SetXLensDeflector(2, xtX, xtY)
+        if hasXLens and xtX is not None:
+            sem.SetXLensDeflector(2, xtX, xtY)
 
 
 def measure_defocus():
@@ -469,6 +481,8 @@ def analyze_ronchigram(image, pixel_size_um, binning, target_phase_a, target_pha
 
 def applyRonchigramXtiltCorrection(correction_x, correction_y, lens_index=2):
     """Apply calculated shifts to the X lens deflector."""
+    if not hasXLens:
+        return
     xtX, xtY = sem.ReportXLensDeflector(lens_index)
     sem.SetXLensDeflector(lens_index, xtX + correction_x, xtY + correction_y)
 
@@ -476,7 +490,7 @@ def applyRonchigramXtiltCorrection(correction_x, correction_y, lens_index=2):
 def _reset_ronchi_xlens_if_out_of_tolerance(lens_index=2):
     """Reset XLensDeflector to session start if phase corrections have walked it too far."""
     global ronchiStartXLensX, ronchiStartXLensY
-    if ronchiStartXLensX is None or ronchiStartXLensY is None:
+    if not hasXLens or ronchiStartXLensX is None or ronchiStartXLensY is None:
         return
     xtX, xtY = sem.ReportXLensDeflector(lens_index)
     xtX, xtY = float(xtX), float(xtY)
@@ -533,11 +547,19 @@ def _restore_frame_basename(saved):
 
 def checkRonchigramSetup():
     """Startup checks when doRonchigram is enabled (called after parseTargets)."""
-    global ronchiStartXLensX, ronchiStartXLensY, ronchiStartC3Offset
+    global ronchiStartXLensX, ronchiStartXLensY, ronchiStartC3Offset, doRonchigram
+    if not hasXLens and doRonchigram:
+        sem.OKBox(
+            "ERROR: doRonchigram requires XLensDeflector. "
+            "Set hasXLens = True, or set doRonchigram = False."
+        )
+        sem.Exit()
     if doRonchigram and beamTiltComp:
         sem.OKBox("ERROR: doRonchigram and beamTiltComp together is not implemented. Set doRonchigram = False or beamTiltComp = False.")
         sem.Exit()
     if not doRonchigram:
+        if not hasXLens:
+            log("NOTE: hasXLens=False; all XLens Report/Set/Restore calls are skipped.")
         return
     if ronchiStartXLensX is None:
         ronchiStartXLensX, ronchiStartXLensY = [float(v) for v in sem.ReportXLensDeflector(2)[:2]]
@@ -1806,7 +1828,7 @@ def _reset_ronchi_to_session_start(when=""):
     if not doRonchigram:
         return
     suffix = f" {when}" if when else ""
-    if ronchiStartXLensX is not None and ronchiStartXLensY is not None:
+    if hasXLens and ronchiStartXLensX is not None and ronchiStartXLensY is not None:
         sem.SetXLensDeflector(2, ronchiStartXLensX, ronchiStartXLensY)
         log(
             f"NOTE: Reset XLensDeflector(2) to session start "

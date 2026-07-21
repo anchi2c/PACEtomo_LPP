@@ -39,6 +39,9 @@ debug           = False     # Enables additional output and plots for a few proc
 
 # Defocus measurement for measure geometry (sem.G(-1) replacement)
 defocusMethod = "ctf"       # ctf | beam_tilt
+# False on scopes without XLensDeflector: skip all XLens Report/Set/Restore.
+# Requires doRonchigram = False.
+hasXLens = True
 
 # X-tilt for CtfFind
 ctfXtiltX = 0.002836
@@ -60,6 +63,7 @@ measure_cycles = 1
 
 ########## Ronchigram / laser alignment (before Preview) ##########
 # Trial LD area must match Record position; only exposure should differ.
+# Requires hasXLens = True.
 doRonchigram       = True
 ronchiC3Offset     = -20
 ronchiDelay        = 2.0
@@ -106,7 +110,7 @@ except AttributeError:
     def listToSEMarray(values):
         return " ".join(str(v) for v in np.atleast_1d(values))
 
-btdef.configure(sem_module=sem)
+btdef.configure(sem_module=sem, has_x_lens=hasXLens)
 
 versionCheck = sem.IsVersionAtLeast("40100", "20230619")
 if not versionCheck and sem.IsVariableDefined("warningVersion") == 0:
@@ -115,6 +119,15 @@ if not versionCheck and sem.IsVariableDefined("warningVersion") == 0:
         sem.Exit()
     else:
         sem.SetPersistentVar("warningVersion", "")
+
+if not hasXLens and doRonchigram:
+    sem.OKBox(
+        "ERROR: doRonchigram requires XLensDeflector. "
+        "Set hasXLens = True, or set doRonchigram = False."
+    )
+    sem.Exit()
+if not hasXLens:
+    sem.Echo("NOTE: hasXLens=False; all XLens Report/Set/Restore calls are skipped.")
 
 ########### FUNCTIONS ###########
 
@@ -207,6 +220,8 @@ def analyze_ronchigram(image, pixel_size_um, binning, target_phase_a, target_pha
 
 
 def applyRonchigramXtiltCorrection(correction_x, correction_y, lens_index=2):
+    if not hasXLens:
+        return
     xtX, xtY = sem.ReportXLensDeflector(lens_index)
     sem.SetXLensDeflector(lens_index, xtX + correction_x, xtY + correction_y)
 
@@ -824,25 +839,30 @@ def vecByXcorr(diameter):
 
 def beam_tilt_measure_defocus():
     """Beam-tilt defocus via shared calibrated measurement."""
+    xt_x = beam_tilt_xtilt_x if hasXLens else None
+    xt_y = beam_tilt_xtilt_y if hasXLens else None
     return btdef.measure_defocus(
         tilt_angle_mrad=tilt_angle_mrad,
         beam_tilt_correction=beam_tilt_correction,
         defocus_tilt_correction=defocus_tilt_correction,
-        xtilt_x=beam_tilt_xtilt_x,
-        xtilt_y=beam_tilt_xtilt_y,
+        xtilt_x=xt_x,
+        xtilt_y=xt_y,
         cs_mm=spherical_aberration_mm,
     )
 
 
 def ctf_measure_defocus():
     """CTF defocus: set X-tilt, Focus, CtfFind (with retries), restore X-tilt."""
-    xtX, xtY = sem.ReportXLensDeflector(2)
+    xtX = xtY = None
+    if hasXLens:
+        xtX, xtY = sem.ReportXLensDeflector(2)
     is_x, is_y, *_ = sem.ReportImageShift()
     sem.GoToLowDoseArea("F")
     sem.SetImageShift(0, 0)
     sem.SetImageShift(is_x, is_y)
     try:
-        sem.SetXLensDeflector(2, ctfXtiltX, ctfXtiltY)
+        if hasXLens:
+            sem.SetXLensDeflector(2, ctfXtiltX, ctfXtiltY)
         cfind = []
         sem.NoMessageBoxOnError(1)
         try:
@@ -877,7 +897,8 @@ def ctf_measure_defocus():
         sem.Echo(f"CtfFind: {defocus:.4f} microns ({resolution:.2f} A)")
         return defocus, np.array([0.0, 0.0]), resolution
     finally:
-        sem.SetXLensDeflector(2, xtX, xtY)
+        if hasXLens and xtX is not None:
+            sem.SetXLensDeflector(2, xtX, xtY)
 
 
 def measure_defocus():

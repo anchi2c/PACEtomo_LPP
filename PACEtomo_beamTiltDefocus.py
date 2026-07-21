@@ -32,6 +32,10 @@ calibration = {
 # (matches calibrate_beam_tilt_scaling.py).
 spherical_aberration_mm = 2.7
 
+# Set False on scopes without XLensDeflector. Skips all Report/Set/Restore of XLens.
+# Callers that use ronchigram X-tilt must keep this True.
+hasXLens = True
+
 ########## END SETTINGS ##########
 
 _sem = sem
@@ -46,12 +50,29 @@ def _echo(text):
         _sem.Echo(text)
 
 
-def configure(sem_module=None, logger=None):
-    """Set SerialEM module/logger from the importing script."""
-    global _sem, _logger
+def configure(sem_module=None, logger=None, has_x_lens=None):
+    """Set SerialEM module/logger (and optional hasXLens) from the importing script."""
+    global _sem, _logger, hasXLens
     if sem_module is not None:
         _sem = sem_module
     _logger = logger
+    if has_x_lens is not None:
+        hasXLens = bool(has_x_lens)
+
+
+def _report_xtilt(lens_index=2):
+    """Return (x, y) or (nan, nan) when hasXLens is False."""
+    if not hasXLens:
+        return float("nan"), float("nan")
+    xtilt = _sem.ReportXLensDeflector(lens_index)
+    return float(xtilt[0]), float(xtilt[1])
+
+
+def _set_xtilt(lens_index, x, y):
+    """Set XLens only when hasXLens is True."""
+    if not hasXLens:
+        return
+    _sem.SetXLensDeflector(lens_index, float(x), float(y))
 
 
 def load_calibration(path):
@@ -338,7 +359,7 @@ def measure_raw(tilt_angle_mrad=5.0, beam_tilt_correction=1.0,
     # Drift-corrected +/- branch shifts about zero beam tilt (symmetric pair).
     plus_branch_shift_um = 0.5 * shift_axis_um
     minus_branch_shift_um = -0.5 * shift_axis_um
-    xtilt = _sem.ReportXLensDeflector(2)
+    xtilt_x_val, xtilt_y_val = _report_xtilt(2)
 
     return {
         "beam_tilt_x0": tilt_x_orig,
@@ -347,8 +368,8 @@ def measure_raw(tilt_angle_mrad=5.0, beam_tilt_correction=1.0,
         "tilt_step_y": tilt_step_y,
         "tilt_angle_mrad": float(tilt_angle_mrad),
         "beam_tilt_correction": float(beam_tilt_correction),
-        "xtilt_x": float(xtilt[0]),
-        "xtilt_y": float(xtilt[1]),
+        "xtilt_x": xtilt_x_val,
+        "xtilt_y": xtilt_y_val,
         "focus_camera": focus_camera,
         "focus_binning": focus_binning,
         "focus_pixel_size_binned_nm": pixel_size_binned_nm,
@@ -377,13 +398,13 @@ def measure_serialEM_defocus_with_diagnostics(xtilt_x=None, xtilt_y=None,
                                               lens_index=2,
                                               calibration_data=None):
     """Measure defocus with sem.G(-1) and optional scaling calibration."""
-    original_xtilt = _sem.ReportXLensDeflector(lens_index)
+    original_xtilt_x, original_xtilt_y = _report_xtilt(lens_index)
     try:
-        if xtilt_x is not None and xtilt_y is not None:
-            _sem.SetXLensDeflector(lens_index, float(xtilt_x), float(xtilt_y))
+        if hasXLens and xtilt_x is not None and xtilt_y is not None:
+            _set_xtilt(lens_index, xtilt_x, xtilt_y)
         _sem.G(-1)
         base_um = float(_sem.ReportAutoFocus()[0])
-        xtilt = _sem.ReportXLensDeflector(lens_index)
+        xtilt_x_val, xtilt_y_val = _report_xtilt(lens_index)
         calib = calibration_data if calibration_data is not None else get_calibration()
         correction_um = 0.0
         if calib and calib.get("model") in (
@@ -397,14 +418,15 @@ def measure_serialEM_defocus_with_diagnostics(xtilt_x=None, xtilt_y=None,
             "legacy_defocus_um": base_um,
             "calibration_correction_um": float(correction_um),
             "defocus_um": float(defocus),
-            "xtilt_x": float(xtilt[0]),
-            "xtilt_y": float(xtilt[1]),
+            "xtilt_x": xtilt_x_val,
+            "xtilt_y": xtilt_y_val,
             "drift_speed_x_nm_per_s": 0.0,
             "drift_speed_y_nm_per_s": 0.0,
         }
         return float(defocus), raw
     finally:
-        _sem.SetXLensDeflector(lens_index, float(original_xtilt[0]), float(original_xtilt[1]))
+        if hasXLens:
+            _set_xtilt(lens_index, original_xtilt_x, original_xtilt_y)
 
 
 def measure_serialEM_defocus(xtilt_x=None, xtilt_y=None, lens_index=2,
@@ -428,11 +450,11 @@ def measure_defocus_with_diagnostics(tilt_angle_mrad=5.0,
     """Measure defocus and return `(defocus, diagnostics)`."""
     if cs_mm is None:
         cs_mm = spherical_aberration_mm
-    original_xtilt = _sem.ReportXLensDeflector(lens_index)
+    original_xtilt_x, original_xtilt_y = _report_xtilt(lens_index)
     original_beam_tilt = _sem.ReportBeamTilt()
     try:
-        if xtilt_x is not None and xtilt_y is not None:
-            _sem.SetXLensDeflector(lens_index, float(xtilt_x), float(xtilt_y))
+        if hasXLens and xtilt_x is not None and xtilt_y is not None:
+            _set_xtilt(lens_index, xtilt_x, xtilt_y)
         raw = measure_raw(
             tilt_angle_mrad=tilt_angle_mrad,
             beam_tilt_correction=beam_tilt_correction,
@@ -476,7 +498,8 @@ def measure_defocus_with_diagnostics(tilt_angle_mrad=5.0,
         return float(defocus), raw
     finally:
         _sem.SetBeamTilt(float(original_beam_tilt[0]), float(original_beam_tilt[1]))
-        _sem.SetXLensDeflector(lens_index, float(original_xtilt[0]), float(original_xtilt[1]))
+        if hasXLens:
+            _set_xtilt(lens_index, original_xtilt_x, original_xtilt_y)
 
 
 def measure_defocus(tilt_angle_mrad=5.0, beam_tilt_correction=1.0,
