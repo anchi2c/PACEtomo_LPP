@@ -947,9 +947,12 @@ print(new_offset)
 
 sem.SetImageDistanceOffset(new_offset)
 base = sem.ReportFrameBaseName()
-#sem.SetFrameBaseName(0, 1, 0,  base[1] + "_ronchi")
+if not base[1].endswith('_ronchi'):
+    sem.SetFrameBaseName(0, 1, 0,  base[1] + "_ronchi")
 sem.Delay(2, "s")
 sem.T()
+# reset after taking trial image
+sem.SetFrameBaseName(0, 1, 0,  base[1])
 sem.SetImageDistanceOffset(start_offset)
 
 imageA = np.asarray(sem.bufferImage("A"))
@@ -980,7 +983,6 @@ c3_correction = avg_err * c3_correction_factor
 sem.Echo(f"C3 recommend correction: {c3_correction:.1f}")
 
 sem.Echo(f"X tilt correction X = {correction_x:.3e}, Y ={correction_y:.3e}")
-#sem.SetFrameBaseName(0, 1, 0,  base[1])
 EndMacro
 Macro	7
 #!Python
@@ -1136,8 +1138,12 @@ sem.SetImageDistanceOffset(new_offset)
 base = sem.ReportFrameBaseName()
 sem.SetFrameBaseName(0, 1, 0,  base[1])
 sem.Delay(2, "s")
+base = sem.ReportFrameBaseName()
+if not base[1].endswith('_ronchi'):
+    sem.SetFrameBaseName(0, 1, 0,  base[1] + "_ronchi")
 sem.T()
 sem.SetImageDistanceOffset(start_offset)
+sem.SetFrameBaseName(0, 1, 0,  base[1])
 
 imageA = np.asarray(sem.bufferImage("A"))
 print(imageA.shape)
@@ -1370,7 +1376,7 @@ Loop $number_of_iter i
          CallScript 8   
          CallScript 8   
          CallScript 8    
-        ReportImageShift
+         ReportImageShift
          ReportBeamTilt
          ReportXLensDeflector 2
          CallScript 9 $data_filename $comax $comay
