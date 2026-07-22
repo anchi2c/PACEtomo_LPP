@@ -388,9 +388,9 @@ import numpy as np
 import serialem as sem
 
 ############ SETTINGS ############
-image_shift_delta_um = [(-5.0,5.0),]
+image_shift_delta_um = [(-5.0,0.0)]
 
-xt_is_matrix = [[0.000312, -0.000352],[0.001120, 0.000281]]
+xt_is_matrix = [[0.000312, -0.000352],[0.001069, 0.000257]]
 sem.Echo("***Running X-Tilt LAFIS***")
 sem.Echo("DIAGNOSTIC MESSAGE: Current image shift:")
 sem.ReportImageShift()
@@ -438,7 +438,8 @@ for delta in image_shift_delta_um:
       if delta[i]:
          sem.Echo('-------%d-------' % i)
          sem.Echo('xt_delta %.6f, %.6f' % ((xt2[0]-xt0[0])/delta[i],(xt2[1]-xt0[1])/delta[i]))
-
+   sem.SetXLensDeflector(2,xt0[0],xt0[1])
+   sem.SetBeamTilt(bt0[0], bt0[1])
 sem.SetImageShift(is0[0],is0[1])
 sem.SetXLensDeflector(2,xt0[0],xt0[1])
 print(get_values())
@@ -449,7 +450,8 @@ Macro	3
 # python for Laser Image-Shift XTilt correction only
 import serialem as sem
 
-xt_is_matrix = [[0.000312, -0.000352],[0.001120, 0.000281]]
+#xt_is_matrix = [[0.000312, -0.000352],[0.001120, 0.000281]] #26jul16a
+xt_is_matrix = [[0.000312, -0.000352],[0.001069, 0.000257]]
 
 def float_tuple(input_str_tuple):
    return (float(input_str_tuple[0]), float(input_str_tuple[1]))
@@ -1143,7 +1145,7 @@ if not base[1].endswith('_ronchi'):
     sem.SetFrameBaseName(0, 1, 0,  base[1] + "_ronchi")
 sem.T()
 sem.SetImageDistanceOffset(start_offset)
-sem.SetFrameBaseName(0, 1, 0,  base[1])
+sem.SetFrameBaseName(1, 1, 0,  base[1])
 
 imageA = np.asarray(sem.bufferImage("A"))
 print(imageA.shape)
@@ -1302,8 +1304,8 @@ sem.SetImageShift(data['image_shift'][0], data['image_shift'][1])
 sem.SetBeamTilt(data['beam_tilt'][0],data['beam_tilt'][1])
 sem.SetXLensDeflector(2, data['x_tilt'][0],data['x_tilt'][1])
 sem.SetObjectiveStigmator(data['obj_stig'][0],data['obj_stig'][1])
-sem.SetDefocus(data['defocus'])
-sem.SetImageDistanceOffset(data['c3_offset'])
+#sem.SetDefocus(data['defocus'])
+#sem.SetImageDistanceOffset(data['c3_offset'])
 sem.Echo('Value reset')
 EndMacro
 Macro	11
@@ -1313,9 +1315,9 @@ MacroName LAFIS coma test on multiple image shift
 #SETTINGS
 number_of_iter = 5
 step = 2.0 # image shift step in um
-with_laser = 1
+with_laser = 0
 do_coma_measurement = 0
-data_filename = 26jul17_with_laser_x3_6.json
+data_filename = 26jul21b_vacumn.json
 
 # END SETTINGS
 
@@ -1354,7 +1356,7 @@ Loop $number_of_iter i
       CallScript 9 $data_filename $comax $comay
       Echo ---LAFIS applyed---
       CallScript 4   #Laser image-shift Xtilt correction
-      # L
+      R
       ReportImageShift
       ReportBeamTilt
       ReportXLensDeflector 2
@@ -1390,6 +1392,27 @@ EndLoop
 #reset saved all values in python
 CallScript 11
 EndMacro
+Macro	12
+#MacroName testing in workflow
+Echo ******Running Script****
+ReportDirectory
+ReportImageShift is0
+ReportBeamTilt bt0
+Echo ........is $is0
+ReportXLensDeflector 2
+xt0_x = $ReportedValue1
+xt0_y = $ReportedValue2
+Echo ......BEFORE XT $xt0_x $xt0_y
+R
+CallScript 4
+ReportXLensDeflector 2
+Echo ......AFTER XT $ReportedValue1 $ReportedValue2
+SetXLensDeflector 2 $xt0_x $xt0_y
+ReportXLensDeflector 2
+Echo ......Reset XT $ReportedValue1 $ReportedValue2
+
+Echo ******Done Script****
+EndMacro
 Macro	60
 SetImageShift 0 0
 EndMacro
@@ -1407,4 +1430,7 @@ ReportBeamTilt
 EndMacro
 Macro	65
 FixComaByCTF 0 0
+EndMacro
+Macro	66
+ReportDirectory
 EndMacro
