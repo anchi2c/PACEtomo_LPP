@@ -388,9 +388,10 @@ import numpy as np
 import serialem as sem
 
 ############ SETTINGS ############
-image_shift_delta_um = [(-5.0,0.0)]
+image_shift_delta_um = [(0.0,10.0)]
 
 xt_is_matrix = [[0.000312, -0.000352],[0.001069, 0.000257]]
+df_is_matrix = [[0.15555,0.129597], [0.15555,0.129597]]
 sem.Echo("***Running X-Tilt LAFIS***")
 sem.Echo("DIAGNOSTIC MESSAGE: Current image shift:")
 sem.ReportImageShift()
@@ -410,7 +411,9 @@ def get_values():
    image_shift = sem.ReportImageShift()
    beam_tilt = sem.ReportBeamTilt()
    xtilt = sem.ReportXLensDeflector(2)
-   return float_tuple(image_shift),float_tuple(beam_tilt), float_tuple(xtilt)
+   obj_stg = sem.ReportObjectiveStigmator()
+   defocus = sem.ReportDefocus()
+   return float_tuple(image_shift),float_tuple(beam_tilt), float_tuple(xtilt), float_tuple(obj_stg), float(defocus)
 
 def calc_xt_is(xt0, is_delta):
    xt1 = [0.0,0.0]
@@ -418,28 +421,43 @@ def calc_xt_is(xt0, is_delta):
    xt1[1] = xt0[1]+is_delta[0]*xt_is_matrix[0][1]+is_delta[1]*xt_is_matrix[1][1]
    return xt1
 
-is0, bt0, xt0 = get_values()
+def calc_df_is(df0, is_delta):
+   df1 = 0.0
+   df1 =df0+is_delta[0]*df_is_matrix[0][0]+is_delta[1]*df_is_matrix[1][1]
+   return df1
+
+is0, bt0, xt0, stg0, df0 = get_values()
 
 for delta in image_shift_delta_um:
    sem.SetImageShift(is0[0]+delta[0], is0[1]+delta[1])
 
    sem.AdjustBeamTiltforIS()
-   is1, bt1, xt1 = get_values()
+   is1, bt1, xt1, stg1, df1 = get_values()
  
    sem.Echo("xt adjusted")
    xt = calc_xt_is(xt0, delta)
+   df = calc_df_is(df0, delta)
    sem.SetXLensDeflector(2, xt[0], xt[1])
+   sem.SetDefocus(df)
    sem.L()
    sem.Pause("Adjust X-tilt")
 
-   is2, bt2, xt2 = get_values()
+   is2, bt2, xt2, stg2, df2 = get_values()
    sem.L()
    for i in (0,1):
       if delta[i]:
-         sem.Echo('-------%d-------' % i)
+         sem.Echo('----XT---%d-------' % i)
          sem.Echo('xt_delta %.6f, %.6f' % ((xt2[0]-xt0[0])/delta[i],(xt2[1]-xt0[1])/delta[i]))
+   for i in (0,1):
+      if delta[i]:
+         sem.Echo('---DEF----%d-------' % i)
+         sem.Echo('df_delta %.6f' % ((df2-df0)/delta[i]))
+   sem.SetDefocus(df0)
+   sem.SetObjectiveStigmator(stg0[0],stg0[1])
    sem.SetXLensDeflector(2,xt0[0],xt0[1])
    sem.SetBeamTilt(bt0[0], bt0[1])
+sem.SetDefocus(df0)
+sem.SetObjectiveStigmator(stg0[0],stg0[1])
 sem.SetImageShift(is0[0],is0[1])
 sem.SetXLensDeflector(2,xt0[0],xt0[1])
 print(get_values())
@@ -452,6 +470,7 @@ import serialem as sem
 
 #xt_is_matrix = [[0.000312, -0.000352],[0.001120, 0.000281]] #26jul16a
 xt_is_matrix = [[0.000312, -0.000352],[0.001069, 0.000257]]
+df_is_matrix = [[0.15555,0.129597], [0.15555,0.129597]]
 
 def float_tuple(input_str_tuple):
    return (float(input_str_tuple[0]), float(input_str_tuple[1]))
@@ -460,7 +479,9 @@ def get_values():
    image_shift = sem.ReportImageShift()
    beam_tilt = sem.ReportBeamTilt()
    xtilt = sem.ReportXLensDeflector(2)
-   return float_tuple(image_shift),float_tuple(beam_tilt), float_tuple(xtilt)
+   obj_stg = sem.ReportObjectiveStigmator()
+   defocus = sem.ReportDefocus()
+   return float_tuple(image_shift),float_tuple(beam_tilt), float_tuple(xtilt), float_tuple(obj_stg), float(defocus)
 
 def calc_xt_is(xt0, is_delta):
    xt1 = [0.0,0.0]
@@ -468,17 +489,26 @@ def calc_xt_is(xt0, is_delta):
    xt1[1] = xt0[1]+is_delta[0]*xt_is_matrix[0][1]+is_delta[1]*xt_is_matrix[1][1]
    return xt1
 
+def calc_df_is(df0, is_delta):
+   df1 = 0.0
+   df1 =df0+is_delta[0]*df_is_matrix[0][0]+is_delta[1]*df_is_matrix[1][1]
+   return df1
+
 def main():
    '''
    Report xtilt and adjust according to image shift from 0,0
    '''
    # End result should be at is1==is2 and bt1==bt2
-   is1, bt1, xt0 = get_values()
+   is1, bt1, xt0, stg0, df0 = get_values()
 
+   #sem.AdjustBeamTiltforIS()
    delta = is1
    xt1 = calc_xt_is(xt0, delta)
+   df1 = calc_df_is(df0, delta)
    sem.SetXLensDeflector(2, xt1[0], xt1[1])
-   is2, bt2, xt2 = get_values()
+   sem.SetDefocus(df1)
+   is2, bt2, xt2, stg2, df2 = get_values()
+   print(get_values())
 
 
 if __name__=='__main__':
@@ -821,13 +851,13 @@ c3offset = 0
 pixel_size = 0.98e-4 * 2 #um
 binning = 32
 
-target_phase_A= -1.51585241  # Vertical Laser
-target_phase_B = 2.66470197 # Horizontal Laser
+target_phase_A= 2.36725129   # Vertical Laser
+target_phase_B = 2.01327403 # Horizontal Laser
   
 
 c3_correction_factor = 20/9.3
 #correct_ks = np.array([[5.722, -0.389] ,  [0.623, 5.878]])
-correct_ks = np.array([[5.761, -0.467] ,  [11.833, -0.817]])
+correct_ks = np.array([[6.033, -0.311],  [1.012 ,5.800]])
 
 def plot_complex_image(Fourier):
     # 1. Amplitude and Phase calculation
@@ -1008,11 +1038,11 @@ pixel_size = 0.98e-4 * 2 #um
 binning = 32
 
 # target_phase measured in ronchi_measurement
-target_phase_A=1.95765565   # Vertical Laser
-target_phase_B = 1.97075624 # Horizontal Laser
+target_phase_A= 2.36725129   # Vertical Laser
+target_phase_B = 2.01327403 # Horizontal Laser
 
 # target_ks 2D matrix measured in ronchi_measure
-correct_ks = np.array([[6.617, -0.584] ,  [0.311 ,6.501]])
+correct_ks = np.array([[6.033, -0.311],  [1.012 ,5.800]])
 
 
 avg_norm = (np.linalg.norm(correct_ks[0]) + np.linalg.norm(correct_ks[1]))/2.0
@@ -1275,7 +1305,7 @@ def get_values():
          'obj_stig':float_tuple(obj_stig),
          'abs_focus':float(abs_focus),
          'defocus':float(defocus),
-         'c3_offset':float(defocus),
+         'c3_offset':float(c3_offset),
    }
 
 def main():
@@ -1304,8 +1334,8 @@ sem.SetImageShift(data['image_shift'][0], data['image_shift'][1])
 sem.SetBeamTilt(data['beam_tilt'][0],data['beam_tilt'][1])
 sem.SetXLensDeflector(2, data['x_tilt'][0],data['x_tilt'][1])
 sem.SetObjectiveStigmator(data['obj_stig'][0],data['obj_stig'][1])
-#sem.SetDefocus(data['defocus'])
-#sem.SetImageDistanceOffset(data['c3_offset'])
+sem.SetDefocus(data['defocus'])
+sem.SetImageDistanceOffset(data['c3_offset'])
 sem.Echo('Value reset')
 EndMacro
 Macro	11
@@ -1313,11 +1343,11 @@ MacroName LAFIS coma test on multiple image shift
 #calls script 4 and script 8 as seen in SEM Script Editor (Base 1)
 
 #SETTINGS
-number_of_iter = 5
+number_of_iter = 11
 step = 2.0 # image shift step in um
-with_laser = 0
+with_laser = 1
 do_coma_measurement = 0
-data_filename = 26jul21b_vacumn.json
+data_filename = 26jul22a_xg18_all.json
 
 # END SETTINGS
 
@@ -1332,12 +1362,21 @@ endif
 #CallScript 9 $data_filename 0 0
 
 #CallScript 10 #save xt value in python (Base 1 in Script Editor but Base 0 in the script.txt file)
+#reset saved all values in python
+CallScript 11
 
 comax = 0.0
 comay = 0.0
+
+ReportFrameBaseName
+base0 = $ReportedValue2
+
 Loop $number_of_iter i
    isx = ($i - 1) * $step - $offset
    Loop $number_of_iter j
+      ReportFrameBaseName     
+      base1 = $base0_$i_$j
+      SetFrameBaseName 1 1 0 $base1
       isy = ($j - 1) * $step - $offset
       SetImageShift $isx $isy
       AdjustBeamTiltforIS
@@ -1358,6 +1397,7 @@ Loop $number_of_iter i
       CallScript 4   #Laser image-shift Xtilt correction
       R
       ReportImageShift
+      Echo ****Adjusted Beam Tilt****
       ReportBeamTilt
       ReportXLensDeflector 2
 
@@ -1382,10 +1422,12 @@ Loop $number_of_iter i
          ReportBeamTilt
          ReportXLensDeflector 2
          CallScript 9 $data_filename $comax $comay
+         base_rip = $base1_rip
+         SetFrameBaseName 0 1 0 $base_rip
          R
       endif
       #reset all values in python (Base 1 in Script Editor but Base 0 in the script.txt file)
-      CallScript 11 
+      CallScript 11
    EndLoop
 EndLoop
 
@@ -1393,7 +1435,10 @@ EndLoop
 CallScript 11
 EndMacro
 Macro	12
-#MacroName testing in workflow
+MacroName testing LAFIS in Serialem native SPA workflow
+# 1. Activate and set script in gui tree: /SerialEM/Navigator/Nav. Options./Run Script in Multi-shot
+# 2. Set multi-shot pattern to use
+# 3. Select items to acquire
 Echo ******Running Script****
 ReportDirectory
 ReportImageShift is0
@@ -1413,6 +1458,12 @@ Echo ......Reset XT $ReportedValue1 $ReportedValue2
 
 Echo ******Done Script****
 EndMacro
+Macro	13
+ReportFrameBaseName
+base = $ReportedValue2
+base1 = $baserip
+Echo $base1
+EndMacro
 Macro	60
 SetImageShift 0 0
 EndMacro
@@ -1423,14 +1474,23 @@ Macro	62
 ReportXLensDeflector 2
 EndMacro
 Macro	63
-SetXLensDeflector 2 0.04 0.0
+SetBeamTilt 41.10 9.014
 EndMacro
 Macro	64
 ReportBeamTilt 
 EndMacro
 Macro	65
-FixComaByCTF 0 0
+ReportDefocus
 EndMacro
 Macro	66
-ReportDirectory
+SetObjectiveStigmator 0.00018159 0.031830
+EndMacro
+Macro	67
+ReportObjectiveStigmator
+EndMacro
+Macro	68
+SetImageShift 10 0
+EndMacro
+Macro	69
+AdjustBeamTiltforIS
 EndMacro
