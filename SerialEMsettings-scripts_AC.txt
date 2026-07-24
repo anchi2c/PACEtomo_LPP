@@ -388,10 +388,10 @@ import numpy as np
 import serialem as sem
 
 ############ SETTINGS ############
-image_shift_delta_um = [(0.0,10.0)]
-
-xt_is_matrix = [[0.000312, -0.000352],[0.001069, 0.000257]]
-df_is_matrix = [[0.15555,0.129597], [0.15555,0.129597]]
+image_shift_delta_um = [(0.0,-5.0)]
+c3offset = -20
+xt_is_matrix = [[0.000324, -0.000347],[0.001100, 0.0002815]]
+df_is_matrix = [[0.041381,0.012342], [0.041381,0.012342]]
 sem.Echo("***Running X-Tilt LAFIS***")
 sem.Echo("DIAGNOSTIC MESSAGE: Current image shift:")
 sem.ReportImageShift()
@@ -400,9 +400,13 @@ sem.ReportBeamTilt()
 sem.Echo("script starts here")
 
 sem.SetImageShift(0,0)
-#sem.SetXLensDeflector(2, -0.001909, -0.001152) #Reset to original X-tilt values
+#sem.SetXLensDeflector(2, -0.0005444, -0.001217) #Reset to original X-tilt values
+start_offset = sem.ReportImageDistanceOffset()
+
+sem.SetImageDistanceOffset(start_offset+c3offset)
 sem.L()
 sem.Pause("Checkt X-tilt at no Image Shift")
+
 
 def float_tuple(input_str_tuple):
    return (float(input_str_tuple[0]), float(input_str_tuple[1]))
@@ -439,6 +443,7 @@ for delta in image_shift_delta_um:
    df = calc_df_is(df0, delta)
    sem.SetXLensDeflector(2, xt[0], xt[1])
    sem.SetDefocus(df)
+   sem.SetImageDistanceOffset(start_offset+c3offset)
    sem.L()
    sem.Pause("Adjust X-tilt")
 
@@ -460,6 +465,7 @@ sem.SetDefocus(df0)
 sem.SetObjectiveStigmator(stg0[0],stg0[1])
 sem.SetImageShift(is0[0],is0[1])
 sem.SetXLensDeflector(2,xt0[0],xt0[1])
+sem.SetImageDistanceOffset(start_offset)
 print(get_values())
 EndMacro
 Macro	3
@@ -469,8 +475,9 @@ Macro	3
 import serialem as sem
 
 #xt_is_matrix = [[0.000312, -0.000352],[0.001120, 0.000281]] #26jul16a
-xt_is_matrix = [[0.000312, -0.000352],[0.001069, 0.000257]]
-df_is_matrix = [[0.15555,0.129597], [0.15555,0.129597]]
+#xt_is_matrix = [[0.000312, -0.000352],[0.001069, 0.000257]]
+xt_is_matrix = [[0.000324, -0.000347],[0.001100, 0.0002815]]  #26jul23
+df_is_matrix = [[0.041381,0.012342], [0.041381,0.012342]]
 
 def float_tuple(input_str_tuple):
    return (float(input_str_tuple[0]), float(input_str_tuple[1]))
@@ -1038,11 +1045,12 @@ pixel_size = 0.98e-4 * 2 #um
 binning = 32
 
 # target_phase measured in ronchi_measurement
-target_phase_A= 2.36725129   # Vertical Laser
-target_phase_B = 2.01327403 # Horizontal Laser
+target_phase_A= 2.04842553    # Vertical Laser
+target_phase_B = -2.09227946 # Horizontal Laser
+
 
 # target_ks 2D matrix measured in ronchi_measure
-correct_ks = np.array([[6.033, -0.311],  [1.012 ,5.800]])
+correct_ks = np.array([[6.033, -0.389] ,  [0.623 ,5.644]])
 
 
 avg_norm = (np.linalg.norm(correct_ks[0]) + np.linalg.norm(correct_ks[1]))/2.0
@@ -1279,7 +1287,7 @@ if __name__ == '__main__':
 EndMacro
 Macro	9
 #!Python
-# ScriptName Hack to save xt0 and other origin values in python
+# ScriptName Save xt0 and other origin values in temp_x0.json in current working directory
 
 import json
 import os
@@ -1319,7 +1327,7 @@ if __name__ == '__main__':
 EndMacro
 Macro	10
 #!Python
-# ScriptName Hack to recall xt0 and other origin values in python
+# ScriptName Script 11 Recall xt0 and other origin values from temp_xt0.json
 import json
 import os
 import serialem as sem
@@ -1343,11 +1351,13 @@ MacroName LAFIS coma test on multiple image shift
 #calls script 4 and script 8 as seen in SEM Script Editor (Base 1)
 
 #SETTINGS
-number_of_iter = 11
-step = 2.0 # image shift step in um
+number_of_iter = 5
+step = 2.5 # image shift step in um
 with_laser = 1
 do_coma_measurement = 0
-data_filename = 26jul22a_xg18_all.json
+data_pattern = p26jul23a_xg_all_test11
+data_filename = $data_pattern.json
+SetFrameBaseName 1 1 0 $data_pattern
 
 # END SETTINGS
 
@@ -1395,6 +1405,7 @@ Loop $number_of_iter i
       CallScript 9 $data_filename $comax $comay
       Echo ---LAFIS applyed---
       CallScript 4   #Laser image-shift Xtilt correction
+      CallScript 14
       R
       ReportImageShift
       Echo ****Adjusted Beam Tilt****
@@ -1424,6 +1435,7 @@ Loop $number_of_iter i
          CallScript 9 $data_filename $comax $comay
          base_rip = $base1_rip
          SetFrameBaseName 0 1 0 $base_rip
+         CallScript 14
          R
       endif
       #reset all values in python (Base 1 in Script Editor but Base 0 in the script.txt file)
@@ -1435,34 +1447,71 @@ EndLoop
 CallScript 11
 EndMacro
 Macro	12
-MacroName testing LAFIS in Serialem native SPA workflow
+MacroName Script13 Running LAFIS+rip in Serialem native SPA workflow
 # 1. Activate and set script in gui tree: /SerialEM/Navigator/Nav. Options./Run Script in Multi-shot
 # 2. Set multi-shot pattern to use
 # 3. Select items to acquire
+######Settings#####
+with_laser = 1
+######End Settings######
+
 Echo ******Running Script****
 ReportDirectory
+ReportFrameBaseName
+base0 = $ReportedValue2
+
 ReportImageShift is0
 ReportBeamTilt bt0
+ReportDefocus df0
 Echo ........is $is0
 ReportXLensDeflector 2
 xt0_x = $ReportedValue1
 xt0_y = $ReportedValue2
-Echo ......BEFORE XT $xt0_x $xt0_y
-R
+#Echo ......BEFORE XT $xt0_x $xt0_y
+
+# Optical Modification Part
+#L- part of LAFIS and defocus correction. Note: normal AFIS is already applied through the workflow calling this.
 CallScript 4
-ReportXLensDeflector 2
-Echo ......AFTER XT $ReportedValue1 $ReportedValue2
+#End LAFIS
+if $with_laser > 0
+   #RIP
+   CallScript 8
+   CallScript 8
+   CallScript 8
+   SetFrameBaseName 1 1 0 $base0
+endif
+# End Optical Modification
+
+CallScript 14    #save extra meta in mdoc
+R
+
+#ReportXLensDeflector 2
+#Echo ......AFTER XT $ReportedValue1 $ReportedValue2
 SetXLensDeflector 2 $xt0_x $xt0_y
+SetDefocus $df0
 ReportXLensDeflector 2
 Echo ......Reset XT $ReportedValue1 $ReportedValue2
 
 Echo ******Done Script****
 EndMacro
 Macro	13
-ReportFrameBaseName
-base = $ReportedValue2
-base1 = $baserip
-Echo $base1
+#!Python
+#ScriptName add meta to mdoc
+
+import serialem as sem
+for k,v in (
+        ('ImageDistanceOffset', sem.ReportImageDistanceOffset()),
+    ):
+    v_str = '%.12f' % (float(v))
+    sem.AddToNextFrameStackMdoc(k, v_str)
+
+for k,v in (
+        ('BeamTilt', sem.ReportBeamTilt()),
+        ('ObjectiveStig',sem.ReportObjectiveStigmator()),
+        ('XTilt', sem.ReportXLensDeflector(2)),):
+    print(k,v)
+    v_str = '%.6f        %.6f' % (float(v[0]), float(v[1]))
+    sem.AddToNextFrameStackMdoc(k, v_str)
 EndMacro
 Macro	60
 SetImageShift 0 0
@@ -1480,7 +1529,7 @@ Macro	64
 ReportBeamTilt 
 EndMacro
 Macro	65
-ReportDefocus
+ReportImageDistanceOffset
 EndMacro
 Macro	66
 SetObjectiveStigmator 0.00018159 0.031830
