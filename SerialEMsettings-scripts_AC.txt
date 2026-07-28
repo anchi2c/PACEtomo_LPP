@@ -1045,12 +1045,11 @@ pixel_size = 0.98e-4 * 2 #um
 binning = 32
 
 # target_phase measured in ronchi_measurement
-target_phase_A= 2.04842553    # Vertical Laser
-target_phase_B = -2.09227946 # Horizontal Laser
-
+target_phase_A=   1.30193957  # Vertical Laser
+target_phase_B =1.96950995 # Horizontal Laser
 
 # target_ks 2D matrix measured in ronchi_measure
-correct_ks = np.array([[6.033, -0.389] ,  [0.623 ,5.644]])
+correct_ks = np.array([[5.527, -0.350],   [0.545, 5.333]])
 
 
 avg_norm = (np.linalg.norm(correct_ks[0]) + np.linalg.norm(correct_ks[1]))/2.0
@@ -1513,6 +1512,18 @@ for k,v in (
     print(k,v)
     v_str = '%.6f        %.6f' % (float(v[0]), float(v[1]))
     sem.AddToNextFrameStackMdoc(k, v_str)
+EndMacro
+Macro	14
+MacroName Script15 Running Ron-IP iSerialem native SPA stage-shift workflow
+#run Ron-IP 3x
+   CallScript 8
+   CallScript 8
+   CallScript 8
+#record image, since this is replacing the serialEM acquisition routine
+R
+EndMacro
+Macro	15
+LongOperation FF 0
 EndMacro
 Macro	19
 #!Python
