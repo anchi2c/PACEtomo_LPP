@@ -1045,11 +1045,11 @@ pixel_size = 0.98e-4 * 2 #um
 binning = 32
 
 # target_phase measured in ronchi_measurement
-target_phase_A=   1.30193957  # Vertical Laser
-target_phase_B =1.96950995 # Horizontal Laser
+target_phase_A= 0.99344482  # Vertical Laser
+target_phase_B = -3.0850058  # Horizontal Laser
 
 # target_ks 2D matrix measured in ronchi_measure
-correct_ks = np.array([[5.527, -0.350],   [0.545, 5.333]])
+correct_ks = np.array([[5.566, -0.350],   [0.545, 5.294]])
 
 
 avg_norm = (np.linalg.norm(correct_ks[0]) + np.linalg.norm(correct_ks[1]))/2.0
@@ -1523,14 +1523,15 @@ MacroName Script15 Running Ron-IP iSerialem native SPA stage-shift workflow
 R
 EndMacro
 Macro	15
-#MacroName Cold FEG flashing with try catch and only if advised
+#MacroName Script16 Cold FEG flashing with try catch and only if advised
 # testing and run high T first if advised
-IsFEGFlashingAdvised 2 is_hi_t_flash_advised
+IsFEGFlashingAdvised 1 is_hi_t_flash_advised
+IsFEGFlashingAdvised 0 is_low_t_flash_advised
 some_advised = 1
 IF $is_hi_t_flash_advised > 0
    NextFEGFlashHighTemp 1
 
-ELIF $is_low_t_flash_advised > 0
+ELSEIF $is_low_t_flash_advised > 0
    NextFEGFlashHighTemp 0
 ELSE
    some_advised = 0
@@ -1540,19 +1541,20 @@ IF $some_advised > 0
       LongOperation FF 0
    CATCH
       Echo caught error in flashing
-      CallScript 17 60
+      CallScript 17 240
    ENDTRY
 ENDIF
 EndMacro
 Macro	16
 #!Python
 #ScriptName Sleeping
-sleep_time = float(SEMargStrings[0])
+sleep_time = max(1,float(SEMargStrings[0]))
 
 import time
 import serialem as sem
 sem.Echo('waiting for %.1f seconds ....' % sleep_time)
 time.sleep(sleep_time)
+sem.Echo('done waiting for %.1f seconds ....' % sleep_time)
 EndMacro
 Macro	19
 #!Python
