@@ -1523,7 +1523,36 @@ MacroName Script15 Running Ron-IP iSerialem native SPA stage-shift workflow
 R
 EndMacro
 Macro	15
-LongOperation FF 0
+#MacroName Cold FEG flashing with try catch and only if advised
+# testing and run high T first if advised
+IsFEGFlashingAdvised 2 is_hi_t_flash_advised
+some_advised = 1
+IF $is_hi_t_flash_advised > 0
+   NextFEGFlashHighTemp 1
+
+ELIF $is_low_t_flash_advised > 0
+   NextFEGFlashHighTemp 0
+ELSE
+   some_advised = 0
+ENDIF
+IF $some_advised > 0
+   TRY
+      LongOperation FF 0
+   CATCH
+      Echo caught error in flashing
+      CallScript 17 60
+   ENDTRY
+ENDIF
+EndMacro
+Macro	16
+#!Python
+#ScriptName Sleeping
+sleep_time = float(SEMargStrings[0])
+
+import time
+import serialem as sem
+sem.Echo('waiting for %.1f seconds ....' % sleep_time)
+time.sleep(sleep_time)
 EndMacro
 Macro	19
 #!Python
