@@ -67,6 +67,8 @@ extendedMdoc    = True      # saves additional info to .mdoc file
 
 # Hardware settings
 slowTilt        = False     # do backlash step for all tilt angles, on bad stages large tilt steps are less accurate
+fixedStageTilt  = False     # keep stage at fixedStageTiltAngle while running the full scheduled tilt series
+fixedStageTiltAngle = 0.0   # physical stage angle [degrees] when fixedStageTilt is True
 taOffsetPos     = 0         # additional tilt axis offset values [microns] applied to calculations for positive and...
 taOffsetNeg     = 0         # ...negative branch of the tilt series (possibly useful for side-entry holder systems)
 checkDewar      = True      # check if dewars are refilling before every acquisition
@@ -101,7 +103,11 @@ debug           = False     # Enables additional output for a few processes (e.g
 breakpoints     = False     # Waits at every debug output for user to press B key.
 
 # Defocus measure / autofocus (replaces sem.G / sem.G(-1))
-defocusMethod = "beam_tilt"     # ctf | beam_tilt - measure_defocus and autofocus_apply
+# ctf | beam_tilt (physics+calibration) | beam_tilt_sem (sem.G(-1)+calibration)
+defocusMethod = "beam_tilt"
+# False on scopes without XLensDeflector: skip all XLens Report/Set/Restore.
+# Requires doRonchigram = False.
+hasXLens = True
 ctfXtiltX = 0.002836
 ctfXtiltY = 0.003867
 ctfDefocusLo = -12.0            # CtfFind search range low [microns]
@@ -109,8 +115,12 @@ ctfDefocusHi = -0.2             # CtfFind search range high [microns]
 ctf_resolution_max_A = 20.0     # retry CtfFind if resolution [A] is above this
 ctf_max_attempts = 3
 ctf_retry_delay_s = 5
-tilt_angle_mrad = 5.0
-beam_tilt_correction = 3 / 6.7
+tilt_angle_mrad = 10.0            # match calibrate_beam_tilt_scaling.py
+beam_tilt_correction = 1.73       # SetBeamTilt scale; same value used in defocus beta
+defocus_tilt_correction = beam_tilt_correction
+beam_tilt_xtilt_x = 0.0           # X-tilt for beam-tilt defocus (ignored when hasXLens is False)
+beam_tilt_xtilt_y = 0.0
+spherical_aberration_mm = 2.7     # Cs for defocus = -disp/(2*beta) - Cs*beta^2 [mm]
 autofocus_cycles = 2
 measure_cycles = 1
 autofocus_tolerance_um = 0.05
@@ -118,6 +128,7 @@ autofocus_tolerance_um = 0.05
 ########## Ronchigram / laser alignment ##########
 # Trial LD area must match Record position; only exposure should differ.
 # Overridable from target file via _bset (e.g. _bset doRonchigram true).
+# Requires hasXLens = True.
 doRonchigram       = True
 ronchiBaseSuffix   = "_ronchi"         # appended to active frame base name for Trial saves only, then restored
 ronchiC3Offset     = -20          # added to ReportImageDistanceOffset before Trial shot
@@ -163,11 +174,14 @@ import glob
 from functools import wraps
 import numpy as np
 from scipy import optimize
+import PACEtomo_beamTiltDefocus as btdef
 
 if sortByTilt: 
     import subprocess
     import mrcfile
     from pathlib import Path
+
+btdef.configure(sem_module=sem, has_x_lens=hasXLens)
 
 # Per-run session state (initialized in run_one_nav_item; module defaults for helpers/linter)
 geo = [[], [], []]
@@ -241,66 +255,52 @@ def checkValves():
     if not int(sem.ReportColumnOrGunValve()):
         sem.SetColumnOrGunValve(1)
 
-def _beam_tilt_measure_defocus_core():
-    beam_tilt = sem.ReportBeamTilt()
-    tilt_x_orig = float(beam_tilt[0])
-    tilt_y_orig = float(beam_tilt[1])
-    tilt_x_plus = tilt_x_orig + beam_tilt_correction * tilt_angle_mrad
-    tilt_x_minus = tilt_x_orig - beam_tilt_correction * tilt_angle_mrad
-    pixel_size_binned = float(sem.ReportCurrentPixelSize("R"))
-    binning = float(sem.ReportBinning("R"))
-    pixel_size_unbinned = pixel_size_binned / binning
-    sem.SetBeamTilt(tilt_x_plus, tilt_y_orig)
-    sem.F()
-    sem.ResetClock()
-    sem.Copy("A", "L")
-    sem.SetBeamTilt(tilt_x_minus, tilt_y_orig)
-    sem.F()
-    sem.AlignTo("L", 1)
-    align_shift_1 = sem.ReportAlignShift()
-    disp_x1_px = float(align_shift_1[0])
-    disp_y1_px = float(align_shift_1[1])
-    sem.SetBeamTilt(tilt_x_plus, tilt_y_orig)
-    sem.F()
-    elapsed = float(sem.ReportClock())
-    sem.SetBeamTilt(tilt_x_orig, tilt_y_orig)
-    sem.AlignTo("L", 1)
-    align_shift_2 = sem.ReportAlignShift()
-    disp_x2_px = float(align_shift_2[0])
-    disp_y2_px = float(align_shift_2[1])
-    drift_x = disp_x2_px * pixel_size_unbinned
-    drift_y = disp_y2_px * pixel_size_unbinned
-    speed_x = drift_x / elapsed if elapsed > 0 else 0.0
-    speed_y = drift_y / elapsed if elapsed > 0 else 0.0
-    displacement_from_tilt_x = (disp_x1_px - disp_x2_px / 2.0) * pixel_size_unbinned
-    displacement_from_tilt_y = (disp_y1_px - disp_y2_px / 2.0) * pixel_size_unbinned
-    displacement = np.sqrt(
-        displacement_from_tilt_x * displacement_from_tilt_x
-        + displacement_from_tilt_y * displacement_from_tilt_y
+
+def ensure_fixed_stage_tilt(when="", quiet=False):
+    """Move stage to fixedStageTiltAngle when fixedStageTilt is enabled."""
+    if not fixedStageTilt:
+        return
+    target = float(fixedStageTiltAngle)
+    current = float(sem.ReportTiltAngle())
+    if abs(current - target) > 0.05:
+        sem.TiltTo(target)
+        if not quiet:
+            suffix = f" {when}" if when else ""
+            log(f"NOTE: fixedStageTilt: stage set to {target:.1f} deg{suffix}.")
+
+
+def serialEM_measure_defocus():
+    """SerialEM sem.G(-1) defocus with optional scaling calibration."""
+    xt_x = beam_tilt_xtilt_x if hasXLens else None
+    xt_y = beam_tilt_xtilt_y if hasXLens else None
+    return btdef.measure_serialEM_defocus(
+        xtilt_x=xt_x,
+        xtilt_y=xt_y,
     )
-    if displacement_from_tilt_x == 0:
-        sign = 1.0
-    else:
-        sign = displacement_from_tilt_x / abs(displacement_from_tilt_x)
-    defocus_measured = -1.0 * sign * displacement / tilt_angle_mrad
-    return defocus_measured, speed_x, speed_y
 
 
 def beam_tilt_measure_defocus():
-    """Beam-tilt defocus: set X-tilt, measure, restore X-tilt."""
-    xtX, xtY = sem.ReportXLensDeflector(2)
-    try:
-        sem.SetXLensDeflector(2, ctfXtiltX, ctfXtiltY)
-        return _beam_tilt_measure_defocus_core()
-    finally:
-        sem.SetXLensDeflector(2, xtX, xtY)
+    """Beam-tilt defocus via shared calibrated measurement."""
+    xt_x = beam_tilt_xtilt_x if hasXLens else None
+    xt_y = beam_tilt_xtilt_y if hasXLens else None
+    return btdef.measure_defocus(
+        tilt_angle_mrad=tilt_angle_mrad,
+        beam_tilt_correction=beam_tilt_correction,
+        defocus_tilt_correction=defocus_tilt_correction,
+        xtilt_x=xt_x,
+        xtilt_y=xt_y,
+        cs_mm=spherical_aberration_mm,
+    )
 
 
 def ctf_measure_defocus():
     """CTF defocus: set X-tilt, Focus, CtfFind (with retries), restore X-tilt."""
-    xtX, xtY = sem.ReportXLensDeflector(2)
+    xtX = xtY = None
+    if hasXLens:
+        xtX, xtY = sem.ReportXLensDeflector(2)
     try:
-        sem.SetXLensDeflector(2, ctfXtiltX, ctfXtiltY)
+        if hasXLens:
+            sem.SetXLensDeflector(2, ctfXtiltX, ctfXtiltY)
         cfind = []
         sem.NoMessageBoxOnError(1)
         try:
@@ -334,19 +334,28 @@ def ctf_measure_defocus():
         log(f"CtfFind: {defocus:.4f} microns ({float(cfind[-1]):.2f} A)")
         return defocus
     finally:
-        sem.SetXLensDeflector(2, xtX, xtY)
+        if hasXLens and xtX is not None:
+            sem.SetXLensDeflector(2, xtX, xtY)
 
 
 def measure_defocus():
     """sem.G(-1): measure defocus only, no focus change."""
-    if defocusMethod not in ("ctf", "beam_tilt"):
-        sem.OKBox(f"ERROR: Unknown defocusMethod '{defocusMethod}'. Use 'ctf' or 'beam_tilt'.")
+    if defocusMethod not in ("ctf", "beam_tilt", "beam_tilt_sem"):
+        sem.OKBox(
+            f"ERROR: Unknown defocusMethod '{defocusMethod}'. "
+            "Use 'ctf', 'beam_tilt', or 'beam_tilt_sem'."
+        )
         sem.Exit()
     if defocusMethod == "beam_tilt":
         defocus = np.nan
         speed_x = speed_y = 0.0
         for _ in range(measure_cycles):
             defocus, speed_x, speed_y = beam_tilt_measure_defocus()
+        return float(defocus), np.array([speed_x, speed_y])
+    if defocusMethod == "beam_tilt_sem":
+        defocus = np.nan
+        for _ in range(measure_cycles):
+            defocus, speed_x, speed_y = serialEM_measure_defocus()
         return float(defocus), np.array([speed_x, speed_y])
     defocus = ctf_measure_defocus()
     return float(defocus), np.array([0.0, 0.0])
@@ -358,13 +367,19 @@ def autofocus_apply(target):
     for cycle in range(1, autofocus_cycles + 1):
         if defocusMethod == "beam_tilt":
             defocus, speed_x, speed_y = beam_tilt_measure_defocus()
+        elif defocusMethod == "beam_tilt_sem":
+            defocus, speed_x, speed_y = serialEM_measure_defocus()
         else:
             defocus = ctf_measure_defocus()
+            speed_x = speed_y = 0.0
         if not np.isfinite(defocus):
             log(f"WARNING: Autofocus measurement failed on cycle {cycle}/{autofocus_cycles}.")
             return defocus
         error = target - defocus
-        log(f"Autofocus {cycle}/{autofocus_cycles}: measured={defocus:.4f} um, target={target:.3f} um, error={error:.3f} um")
+        log(
+            f"Autofocus {cycle}/{autofocus_cycles}: measured={defocus:.4f} um, "
+            f"target={target:.3f} um, error={error:.3f} um"
+        )
         if abs(error) <= autofocus_tolerance_um:
             return defocus
         sem.ChangeFocus(error)
@@ -466,6 +481,8 @@ def analyze_ronchigram(image, pixel_size_um, binning, target_phase_a, target_pha
 
 def applyRonchigramXtiltCorrection(correction_x, correction_y, lens_index=2):
     """Apply calculated shifts to the X lens deflector."""
+    if not hasXLens:
+        return
     xtX, xtY = sem.ReportXLensDeflector(lens_index)
     sem.SetXLensDeflector(lens_index, xtX + correction_x, xtY + correction_y)
 
@@ -473,7 +490,7 @@ def applyRonchigramXtiltCorrection(correction_x, correction_y, lens_index=2):
 def _reset_ronchi_xlens_if_out_of_tolerance(lens_index=2):
     """Reset XLensDeflector to session start if phase corrections have walked it too far."""
     global ronchiStartXLensX, ronchiStartXLensY
-    if ronchiStartXLensX is None or ronchiStartXLensY is None:
+    if not hasXLens or ronchiStartXLensX is None or ronchiStartXLensY is None:
         return
     xtX, xtY = sem.ReportXLensDeflector(lens_index)
     xtX, xtY = float(xtX), float(xtY)
@@ -530,11 +547,19 @@ def _restore_frame_basename(saved):
 
 def checkRonchigramSetup():
     """Startup checks when doRonchigram is enabled (called after parseTargets)."""
-    global ronchiStartXLensX, ronchiStartXLensY, ronchiStartC3Offset
+    global ronchiStartXLensX, ronchiStartXLensY, ronchiStartC3Offset, doRonchigram
+    if not hasXLens and doRonchigram:
+        sem.OKBox(
+            "ERROR: doRonchigram requires XLensDeflector. "
+            "Set hasXLens = True, or set doRonchigram = False."
+        )
+        sem.Exit()
     if doRonchigram and beamTiltComp:
         sem.OKBox("ERROR: doRonchigram and beamTiltComp together is not implemented. Set doRonchigram = False or beamTiltComp = False.")
         sem.Exit()
     if not doRonchigram:
+        if not hasXLens:
+            log("NOTE: hasXLens=False; all XLens Report/Set/Restore calls are skipped.")
         return
     if ronchiStartXLensX is None:
         ronchiStartXLensX, ronchiStartXLensY = [float(v) for v in sem.ReportXLensDeflector(2)[:2]]
@@ -1330,21 +1355,21 @@ def Tilt(tilt):
 
     # Tilt if within tilt range, skip branch if not
     if -tiltLimit <= tilt <= tiltLimit:
-        if tilt != startTilt:
-            sem.TiltTo(tilt)
         skip_branch = False
+        if not fixedStageTilt and tilt != startTilt:
+            sem.TiltTo(tilt)
     else:
         log(f"WARNING: Tilt angle [{tilt} degrees] could not be reached. This branch of the tilt series will be aborted.")
         skip_branch = True
 
     if tilt < startTilt:
         increment = -step
-        if tilt - step >= -tiltLimit:
+        if not fixedStageTilt and tilt - step >= -tiltLimit:
             sem.TiltBy(-step)
             sem.TiltTo(tilt)
         pn = 2
     else:
-        if slowTilt and startTilt < tilt <= tiltLimit:                                                       # on bad stages, better to do backlash as well to enhance accuracy
+        if not fixedStageTilt and slowTilt and startTilt < tilt <= tiltLimit:
             sem.TiltBy(-step)
             sem.TiltTo(tilt)
         increment = step
@@ -1356,8 +1381,11 @@ def Tilt(tilt):
             position[pos][pn]["skip"] = True
         return
 
+    if fixedStageTilt:
+        ensure_fixed_stage_tilt(quiet=True)
+
     sem.Delay(delayTilt, "s")
-    realTilt = float(sem.ReportTiltAngle())
+    realTilt = float(tilt) if fixedStageTilt else float(sem.ReportTiltAngle())
 
     if zeroExpTime > 0 and tilt == startTilt:
         sem.SetExposure("R", zeroExpTime)
@@ -1800,7 +1828,7 @@ def _reset_ronchi_to_session_start(when=""):
     if not doRonchigram:
         return
     suffix = f" {when}" if when else ""
-    if ronchiStartXLensX is not None and ronchiStartXLensY is not None:
+    if hasXLens and ronchiStartXLensX is not None and ronchiStartXLensY is not None:
         sem.SetXLensDeflector(2, ronchiStartXLensX, ronchiStartXLensY)
         log(
             f"NOTE: Reset XLensDeflector(2) to session start "
@@ -1941,6 +1969,11 @@ def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_acc
     log(f"Data points used: {dataPoints}")
     log(f"Target defocus range (min/max/step): {minDefocus}/{maxDefocus}/{stepDefocus}")
     log(f"Defocus method (measure / autofocus): {defocusMethod}")
+    if fixedStageTilt:
+        log(
+            f"fixedStageTilt: stage held at {fixedStageTiltAngle:.1f} deg; "
+            f"scheduled series {minTilt} to {maxTilt} deg ({step} deg step)"
+        )
     log(f"Sample pretilt (rotation): {pretilt} ({rotation})")
     log(f"Nav item start defocus: {get_nav_start_defocus(item_index):.2f} um")
     log(f"Tilt axis offset: {round(tiltAxisOffset, 3)}")
@@ -2065,7 +2098,9 @@ def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_acc
 
         if measureGeo:
             log("Measuring geometry...")
-            if int(round(float(sem.ReportTiltAngle()))) != 0:
+            if fixedStageTilt:
+                ensure_fixed_stage_tilt("for measureGeo")
+            elif int(round(float(sem.ReportTiltAngle()))) != 0:
                 sem.TiltTo(0)
             if len(geoPoints) > 0 and "SSX" in geoPoints[0].keys():                                 # if there are geo points in tgts file, adjust format from dict to list
                 geoPoints = [[point["SSX"], point["SSY"]] for point in geoPoints]
@@ -2087,7 +2122,10 @@ def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_acc
                 for i in range(len(geoPoints)):
                     sem.ImageShiftByMicrons(geoPoints[i][0], geoPoints[i][1])
                     defocus, drift = measure_defocus()
-                    drift_ok = defocusMethod == "ctf" or np.linalg.norm(drift) >= 0.01
+                    drift_ok = (
+                        defocusMethod in ("ctf", "beam_tilt_sem")
+                        or np.linalg.norm(drift) >= 0.01
+                    )
                     if abs(defocus) >= 0.01 and drift_ok:
                         geoXYZ[0].append(geoPoints[i][0])
                         geoXYZ[1].append(geoPoints[i][1])
@@ -2155,34 +2193,48 @@ def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_acc
         log(f"Tilt series: {total_tilt_steps} angles ({tilt_schedule[0]} to {tilt_schedule[-1]} deg)")
 
         first_tilt = tilt_schedule[0]
-        log("Tilting to start tilt angle...")
-        # backlash correction
-        is_x, is_y, *_ = sem.ReportImageShift()
-        sem.GoToLowDoseArea("V")
-        sem.SetImageShift(0, 0)
-        sem.SetImageShift(is_x, is_y)
-        sem.V()
-        sem.Copy("A", "O")
-
-        curTilt = int(round(float(sem.ReportTiltAngle())))
-
-        # Walk up if necessary
-        while abs(first_tilt - curTilt) > 10:
-            log(f"DEBUG: Doing walkup to {curTilt + (10 if first_tilt > curTilt else -10)}...")
-            sem.TiltTo(curTilt + (10 if first_tilt > curTilt else -10))
+        if fixedStageTilt:
+            log(
+                f"fixedStageTilt: skipping tilt-to-start; "
+                f"stage stays at {fixedStageTiltAngle:.1f} deg "
+                f"(first scheduled angle {first_tilt:.1f} deg)"
+            )
+            ensure_fixed_stage_tilt("before tilt series")
             is_x, is_y, *_ = sem.ReportImageShift()
             sem.GoToLowDoseArea("V")
             sem.SetImageShift(0, 0)
             sem.SetImageShift(is_x, is_y)
             sem.V()
-            alignTo("O", debug)
-
+            sem.Copy("A", "O")
+        else:
+            log("Tilting to start tilt angle...")
+            # backlash correction
+            is_x, is_y, *_ = sem.ReportImageShift()
+            sem.GoToLowDoseArea("V")
+            sem.SetImageShift(0, 0)
+            sem.SetImageShift(is_x, is_y)
             sem.V()
             sem.Copy("A", "O")
+
             curTilt = int(round(float(sem.ReportTiltAngle())))
 
-        sem.TiltTo(first_tilt - step)
-        sem.TiltTo(first_tilt)
+            # Walk up if necessary
+            while abs(first_tilt - curTilt) > 10:
+                log(f"DEBUG: Doing walkup to {curTilt + (10 if first_tilt > curTilt else -10)}...")
+                sem.TiltTo(curTilt + (10 if first_tilt > curTilt else -10))
+                is_x, is_y, *_ = sem.ReportImageShift()
+                sem.GoToLowDoseArea("V")
+                sem.SetImageShift(0, 0)
+                sem.SetImageShift(is_x, is_y)
+                sem.V()
+                alignTo("O", debug)
+
+                sem.V()
+                sem.Copy("A", "O")
+                curTilt = int(round(float(sem.ReportTiltAngle())))
+
+            sem.TiltTo(first_tilt - step)
+            sem.TiltTo(first_tilt)
 
         sem.V()
         alignTo("O", debug)

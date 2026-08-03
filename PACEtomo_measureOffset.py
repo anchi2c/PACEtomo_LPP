@@ -20,7 +20,7 @@ plot        = True  # plot measurements
 # Defocus measurement in tilt loop (sem.G(-1) replacement)
 defocusMethod = "ctf"       # ctf | beam_tilt
 
-# X-tilt for defocus measurement (CTF and beam-tilt)
+# X-tilt for CtfFind
 ctfXtiltX = 0.002836
 ctfXtiltY = 0.003867
 ctfDefocusLo = -10.0        # CtfFind search range low [microns]
@@ -29,9 +29,15 @@ ctf_resolution_max_A = 10.0 # retry CtfFind if resolution [A] is above this
 ctf_max_attempts = 3        # max CtfFind attempts per measurement
 ctf_retry_delay_s = 5       # delay before refocus shot on retry [s]
 
-# Beam-tilt (always used for initial autofocus; also for tilt loop if defocusMethod == beam_tilt)
-tilt_angle_mrad = 5.0
-beam_tilt_correction = 3 / 6.7
+# Beam-tilt (match calibrate_beam_tilt_scaling.py)
+tilt_angle_mrad = 10.0
+beam_tilt_correction = 1.73
+defocus_tilt_correction = beam_tilt_correction
+beam_tilt_xtilt_x = 0.0
+beam_tilt_xtilt_y = 0.0
+# False on scopes without XLensDeflector: skip all XLens Report/Set/Restore.
+hasXLens = True
+spherical_aberration_mm = 2.7     # Cs for defocus = -disp/(2*beta) - Cs*beta^2 [mm]
 autofocus_cycles = 2              # initial autofocus: correct focus to target_defocus (sem.G)
 measure_cycles = 1                # cycles per tilt-loop measurement
 
@@ -44,6 +50,9 @@ import serialem as sem
 import numpy as np
 from scipy import optimize
 import matplotlib.pyplot as plt
+import PACEtomo_beamTiltDefocus as btdef
+
+btdef.configure(sem_module=sem, has_x_lens=hasXLens)
 
 ########### FUNCTIONS ###########
 
@@ -51,76 +60,28 @@ def dZ(alpha, y0):
     return y0 * np.tan(np.radians(-alpha))
 
 
-def _beam_tilt_measure_defocus_core():
-    """Beam-tilt defocus measurement with X-tilt already set."""
-    beam_tilt = sem.ReportBeamTilt()
-    tilt_x_orig = float(beam_tilt[0])
-    tilt_y_orig = float(beam_tilt[1])
-    tilt_x_plus = tilt_x_orig + beam_tilt_correction * tilt_angle_mrad
-    tilt_x_minus = tilt_x_orig - beam_tilt_correction * tilt_angle_mrad
-
-    pixel_size_binned = float(sem.ReportCurrentPixelSize("R"))
-    binning = float(sem.ReportBinning("R"))
-    pixel_size_unbinned = pixel_size_binned / binning
-
-    sem.SetBeamTilt(tilt_x_plus, tilt_y_orig)
-    sem.F()
-    sem.ResetClock()
-    sem.Copy("A", "L")
-
-    sem.SetBeamTilt(tilt_x_minus, tilt_y_orig)
-    sem.F()
-    sem.AlignTo("L", 1)
-    align_shift_1 = sem.ReportAlignShift()
-    disp_x1_px = float(align_shift_1[0])
-    disp_y1_px = float(align_shift_1[1])
-
-    sem.SetBeamTilt(tilt_x_plus, tilt_y_orig)
-    sem.F()
-    elapsed = float(sem.ReportClock())
-
-    sem.SetBeamTilt(tilt_x_orig, tilt_y_orig)
-    sem.AlignTo("L", 1)
-    align_shift_2 = sem.ReportAlignShift()
-    disp_x2_px = float(align_shift_2[0])
-    disp_y2_px = float(align_shift_2[1])
-
-    drift_x = disp_x2_px * pixel_size_unbinned
-    drift_y = disp_y2_px * pixel_size_unbinned
-    speed_x = drift_x / elapsed if elapsed > 0 else 0.0
-    speed_y = drift_y / elapsed if elapsed > 0 else 0.0
-
-    displacement_from_tilt_x = (disp_x1_px - disp_x2_px / 2.0) * pixel_size_unbinned
-    displacement_from_tilt_y = (disp_y1_px - disp_y2_px / 2.0) * pixel_size_unbinned
-    displacement = np.sqrt(
-        displacement_from_tilt_x * displacement_from_tilt_x
-        + displacement_from_tilt_y * displacement_from_tilt_y
-    )
-
-    if displacement_from_tilt_x == 0:
-        sign = 1.0
-    else:
-        sign = displacement_from_tilt_x / abs(displacement_from_tilt_x)
-
-    defocus_measured = -1.0 * sign * displacement / tilt_angle_mrad
-    return defocus_measured, speed_x, speed_y
-
-
 def beam_tilt_measure_defocus():
-    """Beam-tilt defocus: set X-tilt, measure, restore X-tilt."""
-    xtX, xtY = sem.ReportXLensDeflector(2)
-    try:
-        sem.SetXLensDeflector(2, ctfXtiltX, ctfXtiltY)
-        return _beam_tilt_measure_defocus_core()
-    finally:
-        sem.SetXLensDeflector(2, xtX, xtY)
+    """Beam-tilt defocus via shared calibrated measurement."""
+    xt_x = beam_tilt_xtilt_x if hasXLens else None
+    xt_y = beam_tilt_xtilt_y if hasXLens else None
+    return btdef.measure_defocus(
+        tilt_angle_mrad=tilt_angle_mrad,
+        beam_tilt_correction=beam_tilt_correction,
+        defocus_tilt_correction=defocus_tilt_correction,
+        xtilt_x=xt_x,
+        xtilt_y=xt_y,
+        cs_mm=spherical_aberration_mm,
+    )
 
 
 def ctf_measure_defocus():
     """CTF defocus: set X-tilt, Focus, CtfFind (with retries), restore X-tilt."""
-    xtX, xtY = sem.ReportXLensDeflector(2)
+    xtX = xtY = None
+    if hasXLens:
+        xtX, xtY = sem.ReportXLensDeflector(2)
     try:
-        sem.SetXLensDeflector(2, ctfXtiltX, ctfXtiltY)
+        if hasXLens:
+            sem.SetXLensDeflector(2, ctfXtiltX, ctfXtiltY)
         cfind = []
         sem.NoMessageBoxOnError(1)
         try:
@@ -152,7 +113,8 @@ def ctf_measure_defocus():
         sem.Echo(f"CtfFind: {defocus:.4f} microns ({cfind[-1]} A)")
         return defocus
     finally:
-        sem.SetXLensDeflector(2, xtX, xtY)
+        if hasXLens and xtX is not None:
+            sem.SetXLensDeflector(2, xtX, xtY)
 
 
 def measure_defocus():
