@@ -219,7 +219,7 @@ def checkFilling():
         if cryoARM:                                                                             # make sure both tanks are being filled on cryoARM
             sem.LongOperation("RS", "0", "RT", "0")
         if coldFEG:                                                                             # flash gun while dewars refill
-            sem.LongOperation("FF", "0")
+            checkColdFEG()
     while filling >= 1:
         log("Dewars are still filling...")
         sem.Delay(60, "s")
@@ -239,9 +239,11 @@ def checkColdFEG():
             sem.NextFEGFlashHighTemp(0)
         if flashLow == 1 or flashHigh ==1:
             try:
+                log("Flashing cold feg....")
                 sem.LongOperation("FF", "0")
             except Exception as e:
                 time.sleep(flashErrorWaitTime)
+            log("Flashing cold feg done")
     else:
             sem.LongOperation("FF", str(flashInterval))
 
