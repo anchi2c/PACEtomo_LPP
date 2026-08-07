@@ -26,7 +26,7 @@ focusSlope      = 0.0       # [DEPRECATED] empirical linear focus correction [mi
 delayIS         = 2.0      # delay [s] between applying image shift and Record
 delayTilt       = 2.0       # delay [s] after stage tilt
 zeroExpTime     = 0         # set to exposure time [s] used for start tilt image, if 0: use same exposure time for all tilt images
-zeroDefocus	    = 0 		# set to defocus [microns] used for start tilt image, if 0: use same defocus for all tilt images
+zeroDefocus        = 0         # set to defocus [microns] used for start tilt image, if 0: use same defocus for all tilt images
 
 nav_item_list   = []        # e.g. [5, 10, 15]; empty = current nav item only (SetSelectedNavItem, SerialEM 4.2+)
 nav_pretilt_list = []       # parallel to nav_item_list; fall back to global pretilt when empty
@@ -75,6 +75,7 @@ checkDewar      = True      # check if dewars are refilling before every acquisi
 cryoARM         = False     # if you use a JEOL cryoARM TEM, this will keep the dewar refilling in sync
 coldFEG         = False     # if you use a cold FEG, this will flash the gun whenever the dewars are being refilled
 flashInterval   = -1        # time in hours between cold FEG flashes, -1: flash only during dewar refill (interval is ignored on Krios, uses FlashingAdvised function instead)
+flashErrorWaitTime = 180    # wait time if error occurs in flashing
 slitInterval    = 0         # time in minutes between centering the energy filter slit using RefineZLP, ONLY works with tgtPattern (needs pattern vectors to find good position for alignment)
 
 # Advanced settings
@@ -104,7 +105,7 @@ breakpoints     = False     # Waits at every debug output for user to press B ke
 
 # Defocus measure / autofocus (replaces sem.G / sem.G(-1))
 # ctf | beam_tilt (physics+calibration) | beam_tilt_sem (sem.G(-1)+calibration)
-defocusMethod = "beam_tilt"
+defocusMethod = "beam_tilt_sem"
 # False on scopes without XLensDeflector: skip all XLens Report/Set/Restore.
 # Requires doRonchigram = False.
 hasXLens = True
@@ -229,14 +230,18 @@ def checkFilling():
 
 def checkColdFEG():
     if not cryoARM:                                                                             # Routine for Krios CFEG with Advanced scripting >4
-        flashLow = 0
+        flashLow = sem.IsFEGFlashingAdvised(0)
         flashHigh = sem.IsFEGFlashingAdvised(1)
         if flashHigh == 1:
             sem.NextFEGFlashHighTemp(1)
         else:
             flashLow = sem.IsFEGFlashingAdvised(0)
+            sem.NextFEGFlashHighTemp(0)
         if flashLow == 1 or flashHigh ==1:
-            sem.LongOperation("FF", "0")
+            try:
+                sem.LongOperation("FF", "0")
+            except Exception as e:
+                time.sleep(flashErrorWaitTime)
     else:
             sem.LongOperation("FF", str(flashInterval))
 
