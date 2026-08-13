@@ -18,8 +18,8 @@ maxTilt         = 45        # maximum absolute tilt angle [degrees]
 step            = 3         # tilt step [degrees]
 groupSize       = 2         # group size for dose_symmetric scheme (contiguous images per side before switching)
 tiltScheme      = "dose_symmetric"  # dose_symmetric | bidirectional | continuous
-minDefocus      = -5        # minimum defocus [microns] of target range (low defocus)
-maxDefocus      = -5        # maximum defocus [microns] of target range (high defocus)
+minDefocus      = -0.5        # minimum defocus [microns] of target range (low defocus)
+maxDefocus      = -1.5        # maximum defocus [microns] of target range (high defocus)
 stepDefocus     = 0.5       # step [microns] between target defoci (between TS)
 
 focusSlope      = 0.0       # [DEPRECATED] empirical linear focus correction [microns per degree] (obtained by linear regression of CTF fitted defoci over tilt series; microscope stage dependent)
@@ -28,7 +28,7 @@ delayTilt       = 2.0       # delay [s] after stage tilt
 zeroExpTime     = 0         # set to exposure time [s] used for start tilt image, if 0: use same exposure time for all tilt images
 zeroDefocus     = 0         # set to defocus [microns] used for start tilt image, if 0: use same defocus for all tilt images
 
-nav_item_list   = []        # e.g. [5, 10, 15]; empty = current nav item only (SetSelectedNavItem, SerialEM 4.2+)
+nav_item_list   = [649]        # e.g. [5, 10, 15]; empty = current nav item only (SetSelectedNavItem, SerialEM 4.2+)
 nav_pretilt_list = []       # parallel to nav_item_list; fall back to global pretilt when empty
 nav_rotation_list = []      # parallel to nav_item_list; fall back to global rotation when empty
 nav_start_defocus_list = [] # parallel to nav_item_list; objective defocus [um] before autofocus; else default_nav_start_defocus
@@ -52,10 +52,10 @@ refineVec       = False     # refine tgt pattern for local stage position by ali
 refineGeo       = False     # uses on-the-fly CtfFind results of first image to refine geometry before tilting (only use when CTF fits on your sample seem reliable)
 
 # Session settings
-beamTiltComp    = False      # use beam tilt compensation (uses coma vs image shift calibrations)
+beamTiltComp    = True      # use beam tilt compensation (uses coma vs image shift calibrations)
 addAF           = False     # does autofocus at the start of every tilt group, increases exposure on tracking TS drastically
-previewAli      = True      # adds initial dose, but makes sure start tilt image is on target (uses view image and aligns to buffer P if alignToP == True)
-viewAli         = False     # adds an alignment step with a View image if it was saved during the target selection (only if previewAli is activated)
+previewAli      = False      # adds initial dose, but makes sure start tilt image is on target (uses view image and aligns to buffer P if alignToP == True)
+viewAli         = True     # adds an alignment step with a View image if it was saved during the target selection (only if previewAli is activated)
 
 # Output settings
 sortByTilt      = True      # sorts tilt series by tilt angle after acquisition is completed (takes additional time), requires mrcfile module
@@ -69,12 +69,12 @@ extendedMdoc    = True      # saves additional info to .mdoc file
 slowTilt        = False     # do backlash step for all tilt angles, on bad stages large tilt steps are less accurate
 fixedStageTilt  = False     # keep stage at fixedStageTiltAngle while running the full scheduled tilt series
 fixedStageTiltAngle = 0.0   # physical stage angle [degrees] when fixedStageTilt is True
-taOffsetPos     = 0         # additional tilt axis offset values [microns] applied to calculations for positive and...
-taOffsetNeg     = 0         # ...negative branch of the tilt series (possibly useful for side-entry holder systems)
+taOffsetPos     = -1.71         # additional tilt axis offset values [microns] applied to calculations for positive and...
+taOffsetNeg     = -1.71         # ...negative branch of the tilt series (possibly useful for side-entry holder systems)
 checkDewar      = True      # check if dewars are refilling before every acquisition
 cryoARM         = False     # if you use a JEOL cryoARM TEM, this will keep the dewar refilling in sync
-coldFEG         = False     # if you use a cold FEG, this will flash the gun whenever the dewars are being refilled
-flashInterval   = -1        # time in hours between cold FEG flashes, -1: flash only during dewar refill (interval is ignored on Krios, uses FlashingAdvised function instead)
+coldFEG         = True     # if you use a cold FEG, this will flash the gun whenever the dewars are being refilled
+flashInterval   = 0        # time in hours between cold FEG flashes, -1: flash only during dewar refill (interval is ignored on Krios, uses FlashingAdvised function instead)
 flashErrorWaitTime = 180    # wait time if error occurs in flashing
 slitInterval    = 0         # time in minutes between centering the energy filter slit using RefineZLP, ONLY works with tgtPattern (needs pattern vectors to find good position for alignment)
 
@@ -138,14 +138,14 @@ ronchiC3Offset     = -20          # added to ReportImageDistanceOffset before Tr
 ronchiDelay        = 1.0          # seconds after C3 offset change
 ronchiBinning      = 32
 ronchiPixelSize    = 0.98e-4 * 2 # um (unbinned; multiplied by binning in analysis)
-ronchiTargetPhaseA = 2.40223          # vertical laser (rad)
-ronchiTargetPhaseB = 0.31999          # horizontal laser (rad)
-ronchiCorrectKs    = [[11.056, -0.470], [1.333, 10.389]]
+ronchiTargetPhaseA =  0.606253           # vertical laser (rad)
+ronchiTargetPhaseB = 2.93388         # horizontal laser (rad)
+ronchiCorrectKs    = [[9.109, -0.701],   [0.779, 8.641]]
 ronchiPeakRadius   = 100
 ronchiMontage      = True         # also run before montage tile Record shots
 ronchiCorrMatrix   = [[0.212, 1.28], [1.22, -0.243]]  # phase-to-deflector coupling, scaled by 1e-5
 ronchiCorrectC3    = True         # apply C3 correction from mean ks error (diagonal fringe spacing)
-ronchiC3CorrectionFactor = 20 / 10.7  # um offset per um^-1 mean ks error
+ronchiC3CorrectionFactor = 20 / 9.1  # um offset per um^-1 mean ks error
 ronchiMinErrForC3Correction   = 0.3          # apply C3 on 1st Trial only if |c3 correction| exceeds this (um)
 ronchiMinErrForC3CorrectionRedo = 0.5        # apply C3 on 2nd Trial only if |c3 correction| exceeds this (um)
 redo_ronchi_after_C3 = True       # up to 3 Trials: 1st C3, 2nd optional C3 + 3rd phase-only if 2nd C3 applied
@@ -156,6 +156,7 @@ ronchiStartXLensY = None
 ronchiStartC3Offset = None      # set from ReportImageDistanceOffset at startup when doRonchigram
 lafisZeroImageShiftDefocus = None            # set from saveZeroImageShiftDefocusXLens before doLafis
 lafisZeroImageShiftXLens = None            # set from saveZeroImageShiftDefocusXLens before doLafis
+lafisIsDone = False            # set from saveZeroImageShiftDefocusXLens before doLafis
 
 ########## END Ronchigram settings ##########
 
@@ -762,7 +763,8 @@ def saveZeroImageShiftDefocusXLens():
         lafisZeroImageShiftXLens = None
 
 def doLafis(is_x, is_y):
-       saveZeroImageShiftDefocusXLens()
+    global lafisIsDone
+    saveZeroImageShiftDefocusXLens()
     sem.AdjustBeamTiltforIS()
     df0 = lafisZeroImageShiftDefocus
     xt0 = lafisZeroImageShiftXLens
@@ -772,13 +774,19 @@ def doLafis(is_x, is_y):
     if hasXLens:
         xt1 = calc_xt_is(xt0,is_delta)
         sem.SetXLensDeflector(2, xt1[0], xt1[1])
+    lafistIsDone = True
 
 def restoreLafis():
+    global lafisIsDone
+    if not lafisIsDone:
+        log("Warning: LAFIS not done, can not restore")
+        return
     sem.RestoreBeamTilt()
     sem.SetDefocus(lafisZeroImageShiftDefocus)
     if hasXLens and lafisZeroImageShiftXLens is not None:
         xt_x, xt_y = lafisZeroImageShiftXLens
         sem.SetXLensDeflector(2, xt_x, xt_y)
+    lafistIsDone = False
 
 def doRonchigramCorrection(set_track_fn=None, pos=None, pn=None):
     """Trial shot + analyze_ronchigram + C3 and/or laser correction; return to Record area."""
@@ -1599,8 +1607,8 @@ def Tilt(tilt):
 
         sem.ImageShiftByUnits(position[pos][pn]["ISXali"], position[pos][pn]["ISYali"])         # remove accumulated buffer shifts to calculate alignment to initial startTilt image
 
-           if beamTiltComp:
-               restoreLafis()
+        if beamTiltComp:
+            restoreLafis()
 
         position[pos][pn]["ISXset"], position[pos][pn]["ISYset"], *_ = sem.ReportImageShift()
         position[pos][pn]["SSX"], position[pos][pn]["SSY"] = sem.ReportSpecimenShift()
@@ -1633,9 +1641,9 @@ def Tilt(tilt):
                         # Without sample geometry
                         #correctedFocus = position[pos][pn]["focus"] - np.tan(np.radians(realTilt)) * montSSY
 
-                        sem.SetDefocus(correctedFocus)
+                    sem.SetDefocus(correctedFocus)
                     if beamTiltComp:
-                        is_x,is_y,_* = sem.ReportImageShift()
+                        is_x,is_y,*_ = sem.ReportImageShift()
                         doLafis(is_x,is_y)
                     recordWithRonchi(
                         set_track_fn=setTrack if pos == 0 else None,
@@ -2323,8 +2331,8 @@ def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_acc
 
         if not tgtPattern and previewAli:
             sem.SetImageShift(is_x, is_y)
-               if beamTiltComp:
-                   doLafis(is_x,is_y)
+            if beamTiltComp:
+                doLafis(is_x,is_y)
             ronchi_before_preview_align("tracking target map preview alignment")
             sem.LoadOtherMap(navID, "O")                                                            # preview ali before first tilt image is taken
             #TODO AcquiteToMatchBuffer forces the scope params, including xt
@@ -2399,10 +2407,10 @@ def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_acc
             if (previewAli or viewAli):                                                             # adds initial dose, but makes sure start tilt image is on target
                 if alignToP:
                     is_x, is_y, *_ = sem.ReportImageShift()
-                       if beamTiltComp:
-                           saveZeroImageShiftDefocusXLens()
+                    if beamTiltComp:
+                        saveZeroImageShiftDefocusXLens()
                         doLafis(is_x,is_y)
-                       ronchi_before_preview_align(f"target {i + 1} preview alignment (alignToP)", pos=i, pn=0)
+                        ronchi_before_preview_align(f"target {i + 1} preview alignment (alignToP)", pos=i, pn=0)
                     if beamTiltComp:
                         restoreLafis()
                     x, y, binning, exp, *_ = sem.ImageProperties("P")
@@ -2435,7 +2443,7 @@ def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_acc
                         sem.SetImageShift(is_x, is_y)
                         if beamTiltComp:
                             saveZeroImageShiftDefocusXLens()
-                            doLafis((s_x,is_y)
+                            doLafis(is_x,is_y)
                         ronchi_before_preview_align(f"target {i + 1} preview alignment (tgtfile)", pos=i, pn=0)
                         tem.L()
                         if beamTiltComp:
