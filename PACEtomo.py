@@ -26,7 +26,7 @@ focusSlope      = 0.0       # [DEPRECATED] empirical linear focus correction [mi
 delayIS         = 2.0      # delay [s] between applying image shift and Record
 delayTilt       = 2.0       # delay [s] after stage tilt
 zeroExpTime     = 0         # set to exposure time [s] used for start tilt image, if 0: use same exposure time for all tilt images
-zeroDefocus        = 0         # set to defocus [microns] used for start tilt image, if 0: use same defocus for all tilt images
+zeroDefocus     = 0         # set to defocus [microns] used for start tilt image, if 0: use same defocus for all tilt images
 
 nav_item_list   = []        # e.g. [5, 10, 15]; empty = current nav item only (SetSelectedNavItem, SerialEM 4.2+)
 nav_pretilt_list = []       # parallel to nav_item_list; fall back to global pretilt when empty
@@ -117,7 +117,7 @@ ctf_resolution_max_A = 20.0     # retry CtfFind if resolution [A] is above this
 ctf_max_attempts = 3
 ctf_retry_delay_s = 5
 tilt_angle_mrad = 10.0            # match calibrate_beam_tilt_scaling.py
-beam_tilt_correction = 1.73       # SetBeamTilt scale; same value used in defocus beta
+beam_tilt_correction = None       # SetBeamTilt scale; same value used in defocus beta
 defocus_tilt_correction = beam_tilt_correction
 beam_tilt_xtilt_x = 0.0           # X-tilt for beam-tilt defocus (ignored when hasXLens is False)
 beam_tilt_xtilt_y = 0.0
@@ -125,6 +125,8 @@ spherical_aberration_mm = 2.7     # Cs for defocus = -disp/(2*beta) - Cs*beta^2 
 autofocus_cycles = 2
 measure_cycles = 1
 autofocus_tolerance_um = 0.05
+xt_is_matrix = [[0.000324, -0.000347],[0.001100, 0.0002815]]  #26jul23
+df_is_matrix = [[0.041381,0.012342], [0.041381,0.012342]]
 
 ########## Ronchigram / laser alignment ##########
 # Trial LD area must match Record position; only exposure should differ.
@@ -152,6 +154,9 @@ ronchiXLensTolerance = 0.000125     # reset XLensDeflector(2) to start if |x-x0|
 ronchiStartXLensX = None          # set from ReportXLensDeflector(2) at startup when doRonchigram
 ronchiStartXLensY = None
 ronchiStartC3Offset = None      # set from ReportImageDistanceOffset at startup when doRonchigram
+lafisZeroImageShiftDefocus = None            # set from saveZeroImageShiftDefocusXLens before doLafis
+lafisZeroImageShiftXLens = None            # set from saveZeroImageShiftDefocusXLens before doLafis
+
 ########## END Ronchigram settings ##########
 
 ########## END SETTINGS ########## 
@@ -561,9 +566,6 @@ def checkRonchigramSetup():
             "Set hasXLens = True, or set doRonchigram = False."
         )
         sem.Exit()
-    if doRonchigram and beamTiltComp:
-        sem.OKBox("ERROR: doRonchigram and beamTiltComp together is not implemented. Set doRonchigram = False or beamTiltComp = False.")
-        sem.Exit()
     if not doRonchigram:
         if not hasXLens:
             log("NOTE: hasXLens=False; all XLens Report/Set/Restore calls are skipped.")
@@ -681,6 +683,7 @@ def _acquire_ronchi_trial(trial_offset_baseline, pass_label=""):
     saved_basename = _set_ronchi_trial_frame_basename()
     try:
         sem.Delay(ronchiDelay, "s")
+        add_lpp_meta_to_next_mdoc()
         sem.T()
     finally:
         sem.SetImageDistanceOffset(trial_offset_baseline)
@@ -724,6 +727,58 @@ def _apply_ronchi_phase(result, pass_label=""):
     _log_ronchi_phases(result, pass_label=pass_label)
     applyRonchigramXtiltCorrection(result["correction_x"], result["correction_y"])
 
+def calc_xt_is(xt0, is_delta):
+   xt1 = [0.0,0.0]
+   xt1[0] = xt0[0]+is_delta[0]*xt_is_matrix[0][0]+is_delta[1]*xt_is_matrix[1][0]
+   xt1[1] = xt0[1]+is_delta[0]*xt_is_matrix[0][1]+is_delta[1]*xt_is_matrix[1][1]
+   return xt1
+
+def calc_df_is(df0, is_delta):
+   df1 = 0.0
+   df1 =df0+is_delta[0]*df_is_matrix[0][0]+is_delta[1]*df_is_matrix[1][1]
+   return df1
+
+def add_lpp_meta_to_next_mdoc():
+    for k,v in (
+            ('ImageDistanceOffset', sem.ReportImageDistanceOffset()),
+        ):
+        v_str = '%.12f' % (float(v))
+        sem.AddToNextFrameStackMdoc(k, v_str)
+
+    for k,v in (
+            ('BeamTilt', sem.ReportBeamTilt()),
+            ('ObjectiveStig',sem.ReportObjectiveStigmator()),
+            ('XTilt', sem.ReportXLensDeflector(2)),):
+        v_str = '%.6f        %.6f' % (float(v[0]), float(v[1]))
+        sem.AddToNextFrameStackMdoc(k, v_str)
+
+def saveZeroImageShiftDefocusXLens():
+    global lafisZeroImageShiftDefocus
+    global lafisZeroImageShiftXLens
+    lafisZeroImageShiftDefocus = sem.ReportDefocus()
+    if hasXLens:
+        lafisZeroImageShiftXLens = sem.ReportXLensDeflector(2)
+    else:
+        lafisZeroImageShiftXLens = None
+
+def doLafis(is_x, is_y):
+       saveZeroImageShiftDefocusXLens()
+    sem.AdjustBeamTiltforIS()
+    df0 = lafisZeroImageShiftDefocus
+    xt0 = lafisZeroImageShiftXLens
+    is_delta = (is_x, is_y)
+    df1 = calc_df_is(df0,is_delta)
+    sem.SetDefocus(df1)
+    if hasXLens:
+        xt1 = calc_xt_is(xt0,is_delta)
+        sem.SetXLensDeflector(2, xt1[0], xt1[1])
+
+def restoreLafis():
+    sem.RestoreBeamTilt()
+    sem.SetDefocus(lafisZeroImageShiftDefocus)
+    if hasXLens and lafisZeroImageShiftXLens is not None:
+        xt_x, xt_y = lafisZeroImageShiftXLens
+        sem.SetXLensDeflector(2, xt_x, xt_y)
 
 def doRonchigramCorrection(set_track_fn=None, pos=None, pn=None):
     """Trial shot + analyze_ronchigram + C3 and/or laser correction; return to Record area."""
@@ -778,8 +833,6 @@ def doRonchigramCorrection(set_track_fn=None, pos=None, pn=None):
     sem.GoToLowDoseArea("R")
     if set_track_fn is not None:
         set_track_fn()
-    if beamTiltComp: # This is unreachable for now as beamTiltComp is not implemented with ronchi
-        sem.RestoreBeamTilt()
 
 
 def ronchi_before_preview_align(acquire_label="preview alignment", pos=None, pn=None):
@@ -792,7 +845,8 @@ def ronchi_before_preview_align(acquire_label="preview alignment", pos=None, pn=
     sem.SetImageShift(0, 0)
     sem.SetImageShift(is_x, is_y)
     doRonchigramCorrection(set_track_fn=None, pos=pos, pn=pn)
-
+    if beamTiltComp:
+        log("Ronchigram: We should not resotre the value here?.")
 
 def recordWithRonchi(set_track_fn=None, run_ronchi=True, acquire_label="Record", pos=None, pn=None):
     """Optional ronchigram correction, then standard Record acquire (sem.R / sem.S)."""
@@ -805,12 +859,10 @@ def recordWithRonchi(set_track_fn=None, run_ronchi=True, acquire_label="Record",
         log(f"NOTE: {acquire_label} - Record only (ronchigram skipped for this shot).")
     else:
         log(f"NOTE: {acquire_label} - Record acquire.")
-    if beamTiltComp:
-        sem.AdjustBeamTiltforIS()
     sem.Delay(delayIS, "s")
+    add_lpp_meta_to_next_mdoc()
     sem.R()
     sem.S()
-
 
 ########### PACEtomo functions (non-ronchigram) ###########
 
@@ -1173,8 +1225,12 @@ def realignTo(nav_id=None, target=None):
             sem.GoToLowDoseArea("R")
             sem.SetImageShift(0, 0)
             sem.SetImageShift(is_x, is_y)
+            if beamTiltComp:
+                doLafis(is_x,is_y)
             ronchi_before_preview_align("initial realign preview (tgtfile)")
             sem.L()
+            if beamTiltComp:
+                restoreLafis()
             alignTo("O", debug)
             AISX, AISY, ASX, ASY = sem.ReportAlignShift()[2:6]
             log(f"Alignment (Prev) error in X | Y: {round(ASX, 0)} nm | {round(ASY, 0)} nm")
@@ -1191,12 +1247,16 @@ def realignTo(nav_id=None, target=None):
             is_x, is_y, *_ = sem.ReportImageShift()
             sem.GoToLowDoseArea("R") # Switch to R before applying defocus offset to not mess with potential mP/nP offsets between View and Rec
             sem.SetImageShift(0, 0)
-            sem.SetImageShift(is_x, is_y)
             defocus_offset = max(-10, sem.ReportLDDefocusOffset("V"))
             if defocus_offset != 0:
                 sem.ChangeFocus(defocus_offset) # Higher defocus for better correlation, but max at 10 to avoid major distortions
+            sem.SetImageShift(is_x, is_y)
+            if beamTiltComp:
+                doLafis(is_x,is_y)
             ronchi_before_preview_align("initial realign preview (view to Record)")
             sem.L()
+            if beamTiltComp:
+                restoreLafis()
             sem.AlignBetweenMags("O", -1, -1, -1)
             AISX, AISY, ASX, ASY = sem.ReportAlignShift()[2:6]
             if defocus_offset != 0:
@@ -1410,8 +1470,13 @@ def Tilt(tilt):
         sem.GoToLowDoseArea("R")
         sem.SetImageShift(0, 0)
         sem.SetImageShift(is_x, is_y)
+        if beamTiltComp:
+            doLafis(is_x,is_y)
         ronchi_before_preview_align("recovery preview alignment to tracking TS", pos=0, pn=pn)
         sem.L()
+        if beamTiltComp:
+            restoreLafis()
+
         alignTo("O", debug)
         bufISX, bufISY = sem.ReportISforBufferShift()
         sem.ImageShiftByUnits(position[0][pn]["ISXali"], position[0][pn]["ISYali"])             # remove accumulated buffer shifts to calculate alignment to initial startTilt image
@@ -1448,7 +1513,7 @@ def Tilt(tilt):
                     temp_ref = os.path.splitext(targets[pos]["tgtfile"])[0] + "_tempref.mrc"
                     if os.path.exists(temp_ref) and "prevASX" in targets[pos].keys():
                         sem.ReadOtherFile(0, "O", temp_ref)                                     # reads temp reference from previewAli instead
-
+                # BUG ? The next line overwrite what O buffer
                 sem.ReadOtherFile(0, "O", targets[pos]["tgtfile"])                              # reads tgt file for first AlignTo instead
 
         sem.AreaForCumulRecordDose(pos + 1)                                                     # set area to accumulate record dose (counting from 1)
@@ -1498,6 +1563,9 @@ def Tilt(tilt):
         sem.SetFrameNameFormat(0, 0, 0x40)                                                      # turn off Sequential number
         sem.SetFrameNameFormat(0, 1, 0x400)                                                     # turn on tilt angle
         sem.SetFrameBaseName(0, 1, 0, os.path.splitext(targets[pos]["tsfile"])[0] + f"_tilt_{str(tiltStepCounter).zfill(3)}_angle")  # include collection order and tilt angle in frame name
+        if beamTiltComp:
+            is_x, is_y, *_ = sem.ReportImageShift()
+            doLafis(is_x,is_y)
         recordWithRonchi(
             set_track_fn=setTrack if pos == 0 else None,
             acquire_label=f"Tilt {tilt:.1f} deg step {tiltStepCounter} target {pos + 1}/{len(targets)}",
@@ -1531,8 +1599,8 @@ def Tilt(tilt):
 
         sem.ImageShiftByUnits(position[pos][pn]["ISXali"], position[pos][pn]["ISYali"])         # remove accumulated buffer shifts to calculate alignment to initial startTilt image
 
-        if beamTiltComp: 
-            sem.RestoreBeamTilt()
+           if beamTiltComp:
+               restoreLafis()
 
         position[pos][pn]["ISXset"], position[pos][pn]["ISYset"], *_ = sem.ReportImageShift()
         position[pos][pn]["SSX"], position[pos][pn]["SSY"] = sem.ReportSpecimenShift()
@@ -1566,6 +1634,9 @@ def Tilt(tilt):
                         #correctedFocus = position[pos][pn]["focus"] - np.tan(np.radians(realTilt)) * montSSY
 
                         sem.SetDefocus(correctedFocus)
+                    if beamTiltComp:
+                        is_x,is_y,_* = sem.ReportImageShift()
+                        doLafis(is_x,is_y)
                     recordWithRonchi(
                         set_track_fn=setTrack if pos == 0 else None,
                         run_ronchi=ronchiMontage,
@@ -1577,8 +1648,8 @@ def Tilt(tilt):
                     mont_SSX, mont_SSY = sem.ReportSpecimenShift()
 
                     sem.ImageShiftByPixels(-montX, -montY)
-                    if beamTiltComp: 
-                        sem.RestoreBeamTilt()
+                    if beamTiltComp:
+                        restoreLafis()
 
                     # Add shift to all montage tilt series mdoc files for auto stitching
                     if extendedMdoc:
@@ -2251,9 +2322,16 @@ def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_acc
         sem.SetImageShift(is_x, is_y)
 
         if not tgtPattern and previewAli:
+            sem.SetImageShift(is_x, is_y)
+               if beamTiltComp:
+                   doLafis(is_x,is_y)
             ronchi_before_preview_align("tracking target map preview alignment")
             sem.LoadOtherMap(navID, "O")                                                            # preview ali before first tilt image is taken
+            #TODO AcquiteToMatchBuffer forces the scope params, including xt
+            # to be the same as the one in the buffer (???).  If so, would restore pre-lafis
             sem.AcquireToMatchBuffer("O")                                                           # in case view image was saved for tracking target
+            if beamTiltComp:
+                restoreLafis()
             alignTo("O", debug)
 
         ISX0, ISY0, *_ = sem.ReportImageShift()
@@ -2320,7 +2398,13 @@ def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_acc
             sem.ImageShiftByMicrons(float(tgt["SSX"]), float(tgt["SSY"]) * tiltScaling)             # apply relative shifts to find out absolute IS after realign to item
             if (previewAli or viewAli):                                                             # adds initial dose, but makes sure start tilt image is on target
                 if alignToP:
-                    ronchi_before_preview_align(f"target {i + 1} preview alignment (alignToP)", pos=i, pn=0)
+                    is_x, is_y, *_ = sem.ReportImageShift()
+                       if beamTiltComp:
+                           saveZeroImageShiftDefocusXLens()
+                        doLafis(is_x,is_y)
+                       ronchi_before_preview_align(f"target {i + 1} preview alignment (alignToP)", pos=i, pn=0)
+                    if beamTiltComp:
+                        restoreLafis()
                     x, y, binning, exp, *_ = sem.ImageProperties("P")
                     sem.SetExposure("V", exp)
                     sem.SetBinning("V", int(binning))
@@ -2349,8 +2433,13 @@ def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_acc
                         sem.GoToLowDoseArea("R")
                         sem.SetImageShift(0, 0)
                         sem.SetImageShift(is_x, is_y)
+                        if beamTiltComp:
+                            saveZeroImageShiftDefocusXLens()
+                            doLafis((s_x,is_y)
                         ronchi_before_preview_align(f"target {i + 1} preview alignment (tgtfile)", pos=i, pn=0)
-                        sem.L()
+                        tem.L()
+                        if beamTiltComp:
+                            restoreLafis()
                         alignTo("O", debug)
                         AISX, AISY, ASX, ASY = sem.ReportAlignShift()[2:6]
                         log(f"Target alignment (Prev) error in X | Y: {round(ASX, 0)} nm | {round(ASY, 0)} nm")
@@ -2375,8 +2464,13 @@ def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_acc
                         defocus_offset = max(-10, sem.ReportLDDefocusOffset("V"))
                         if defocus_offset != 0:
                             sem.ChangeFocus(defocus_offset)                                             # Higher defocus for better correlation, but max at 10 to avoid major distortions
+                        if beamTiltComp:
+                            doLafis(is_x,is_y)
+                        add_lpp_meta_to_next_mdoc()
                         ronchi_before_preview_align(f"target {i + 1} preview alignment (view to Record)", pos=i, pn=0)
                         sem.L()
+                        if beamTiltComp:
+                            restoreLafis()
                         sem.AlignBetweenMags("O", -1, -1, -1)
                         AISX, AISY, ASX, ASY = sem.ReportAlignShift()[2:6]
                         if defocus_offset != 0:
