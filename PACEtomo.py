@@ -125,8 +125,6 @@ spherical_aberration_mm = 2.7     # Cs for defocus = -disp/(2*beta) - Cs*beta^2 
 autofocus_cycles = 2
 measure_cycles = 1
 autofocus_tolerance_um = 0.05
-xt_is_matrix = [[0.000324, -0.000347],[0.001100, 0.0002815]]  #26jul23
-df_is_matrix = [[0.041381,0.012342], [0.041381,0.012342]]
 
 ########## Ronchigram / laser alignment ##########
 # Trial LD area must match Record position; only exposure should differ.
@@ -138,9 +136,9 @@ ronchiC3Offset     = -20          # added to ReportImageDistanceOffset before Tr
 ronchiDelay        = 1.0          # seconds after C3 offset change
 ronchiBinning      = 32
 ronchiPixelSize    = 0.98e-4 * 2 # um (unbinned; multiplied by binning in analysis)
-ronchiTargetPhaseA =  0.606253           # vertical laser (rad)
-ronchiTargetPhaseB = 2.93388         # horizontal laser (rad)
-ronchiCorrectKs    = [[9.109, -0.701],   [0.779, 8.641]]
+ronchiTargetPhaseA = -1.93941993           # vertical laser (rad)
+ronchiTargetPhaseB = 1.67658165        # horizontal laser (rad)
+ronchiCorrectKs    = [[9.303, -0.662] ,  [0.856 ,8.680]]
 ronchiPeakRadius   = 100
 ronchiMontage      = True         # also run before montage tile Record shots
 ronchiCorrMatrix   = [[0.212, 1.28], [1.22, -0.243]]  # phase-to-deflector coupling, scaled by 1e-5
@@ -154,13 +152,21 @@ ronchiXLensTolerance = 0.000125     # reset XLensDeflector(2) to start if |x-x0|
 ronchiStartXLensX = None          # set from ReportXLensDeflector(2) at startup when doRonchigram
 ronchiStartXLensY = None
 ronchiStartC3Offset = None      # set from ReportImageDistanceOffset at startup when doRonchigram
+########## END Ronchigram settings ##########
+
+######### LAFIS: lpp afis correction #########
+# calibration matrix applied when beamTiltComp == True on xlpp
+# Requires hasXLens = True and beamTiltComp = True to be meaningful.
+
+xt_is_matrix = [[0.000324, -0.000347],[0.001100, 0.00028125]]  #26jul23
+df_is_matrix = [[0.041381,0.012342], [0.041381,0.012342]]
+
 lafisZeroImageShiftDefocus = None            # set from saveZeroImageShiftDefocusXLens before doLafis
 lafisZeroImageShiftXLens = None            # set from saveZeroImageShiftDefocusXLens before doLafis
 lafisIsDone = False            # set from saveZeroImageShiftDefocusXLens before doLafis
 lafisXtCorrectionX = 0.0       # set from doLafis as the correction made on XLens
 lafisXtCorrectionY = 0.0       # set from doLafis as the correction made on XLens
-
-########## END Ronchigram settings ##########
+########## END Lafis settings ##########
 
 ########## END SETTINGS ########## 
 
@@ -768,7 +774,7 @@ def saveZeroImageShiftDefocusXLens():
 
 def doLafis(is_x, is_y):
     global lafisIsDone, lafisXtCorrectionX, lafisXtCorrectionY
-    log("WARNING: ***********doing LAFIS.")
+    log(f"WARNING: ***********doing LAFIS for image shift {is_x:.3f}, {is_y:.3f}")
     saveZeroImageShiftDefocusXLens()
     sem.AdjustBeamTiltforIS()
     df0 = lafisZeroImageShiftDefocus
