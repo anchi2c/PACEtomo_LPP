@@ -28,7 +28,7 @@ delayTilt       = 2.0       # delay [s] after stage tilt
 zeroExpTime     = 0         # set to exposure time [s] used for start tilt image, if 0: use same exposure time for all tilt images
 zeroDefocus     = 0         # set to defocus [microns] used for start tilt image, if 0: use same defocus for all tilt images
 
-nav_item_list   = [649]        # e.g. [5, 10, 15]; empty = current nav item only (SetSelectedNavItem, SerialEM 4.2+)
+nav_item_list   = [1]        # e.g. [5, 10, 15]; empty = current nav item only (SetSelectedNavItem, SerialEM 4.2+)
 nav_pretilt_list = []       # parallel to nav_item_list; fall back to global pretilt when empty
 nav_rotation_list = []      # parallel to nav_item_list; fall back to global rotation when empty
 nav_start_defocus_list = [] # parallel to nav_item_list; objective defocus [um] before autofocus; else default_nav_start_defocus
@@ -157,6 +157,8 @@ ronchiStartC3Offset = None      # set from ReportImageDistanceOffset at startup 
 lafisZeroImageShiftDefocus = None            # set from saveZeroImageShiftDefocusXLens before doLafis
 lafisZeroImageShiftXLens = None            # set from saveZeroImageShiftDefocusXLens before doLafis
 lafisIsDone = False            # set from saveZeroImageShiftDefocusXLens before doLafis
+lafisXtCorrectionX = 0.0       # set from doLafis as the correction made on XLens
+lafisXtCorrectionY = 0.0       # set from doLafis as the correction made on XLens
 
 ########## END Ronchigram settings ##########
 
@@ -507,13 +509,15 @@ def _reset_ronchi_xlens_if_out_of_tolerance(lens_index=2):
         return
     xtX, xtY = sem.ReportXLensDeflector(lens_index)
     xtX, xtY = float(xtX), float(xtY)
-    if (abs(xtX - ronchiStartXLensX) > ronchiXLensTolerance
-            or abs(xtY - ronchiStartXLensY) > ronchiXLensTolerance):
+    xtX_delta = xtX - lafisXtCorrectionX - ronchiStartXLensX
+    xtY_delta = xtY - lafisXtCorrectionY - ronchiStartXLensY
+    if (abs(xtX_delta) > ronchiXLensTolerance
+            or abs(xtY_delta) > ronchiXLensTolerance):
         log(
             f"WARNING: Ronchigram X lens deflector ({xtX:.6f}, {xtY:.6f}) beyond tolerance "
             f"{ronchiXLensTolerance} from start ({ronchiStartXLensX:.6f}, {ronchiStartXLensY:.6f}); resetting."
         )
-        sem.SetXLensDeflector(lens_index, ronchiStartXLensX, ronchiStartXLensY)
+        sem.SetXLensDeflector(lens_index, ronchiStartXLensX+lafisXtCorrectionX, ronchiStartXLensY+lafisXtCorrectionY)
 
 
 def applyRonchigramC3Correction(c3_correction, baseline_offset):
@@ -763,7 +767,7 @@ def saveZeroImageShiftDefocusXLens():
         lafisZeroImageShiftXLens = None
 
 def doLafis(is_x, is_y):
-    global lafisIsDone
+    global lafisIsDone, lafisXtCorrectionX, lafisXtCorrectionY
     saveZeroImageShiftDefocusXLens()
     sem.AdjustBeamTiltforIS()
     df0 = lafisZeroImageShiftDefocus
@@ -774,18 +778,22 @@ def doLafis(is_x, is_y):
     if hasXLens:
         xt1 = calc_xt_is(xt0,is_delta)
         sem.SetXLensDeflector(2, xt1[0], xt1[1])
+        lafisXtCorrectionX = xt1[0] - xt0[0]
+        lafisXtCorrectionY = xt1[1] - xt0[1]
     lafistIsDone = True
 
 def restoreLafis():
-    global lafisIsDone
+    global lafisIsDone, lafisXtCorrectionX, lafisXtCorrectionY
     if not lafisIsDone:
-        log("Warning: LAFIS not done, can not restore")
+        log("WARNING: LAFIS not done, can not restore")
         return
     sem.RestoreBeamTilt()
     sem.SetDefocus(lafisZeroImageShiftDefocus)
     if hasXLens and lafisZeroImageShiftXLens is not None:
         xt_x, xt_y = lafisZeroImageShiftXLens
         sem.SetXLensDeflector(2, xt_x, xt_y)
+        lafisXtCorrectionX = 0.0
+        lafisXtCorrectionY = 0.0
     lafistIsDone = False
 
 def doRonchigramCorrection(set_track_fn=None, pos=None, pn=None):
