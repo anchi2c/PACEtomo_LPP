@@ -768,6 +768,7 @@ def saveZeroImageShiftDefocusXLens():
 
 def doLafis(is_x, is_y):
     global lafisIsDone, lafisXtCorrectionX, lafisXtCorrectionY
+    log("WARNING: ***********doing LAFIS.")
     saveZeroImageShiftDefocusXLens()
     sem.AdjustBeamTiltforIS()
     df0 = lafisZeroImageShiftDefocus
@@ -780,7 +781,7 @@ def doLafis(is_x, is_y):
         sem.SetXLensDeflector(2, xt1[0], xt1[1])
         lafisXtCorrectionX = xt1[0] - xt0[0]
         lafisXtCorrectionY = xt1[1] - xt0[1]
-    lafistIsDone = True
+    lafisIsDone = True
 
 def restoreLafis():
     global lafisIsDone, lafisXtCorrectionX, lafisXtCorrectionY
@@ -794,7 +795,8 @@ def restoreLafis():
         sem.SetXLensDeflector(2, xt_x, xt_y)
         lafisXtCorrectionX = 0.0
         lafisXtCorrectionY = 0.0
-    lafistIsDone = False
+    lafisIsDone = False
+    log('WARNING: Lafis restored')
 
 def doRonchigramCorrection(set_track_fn=None, pos=None, pn=None):
     """Trial shot + analyze_ronchigram + C3 and/or laser correction; return to Record area."""
@@ -844,6 +846,7 @@ def doRonchigramCorrection(set_track_fn=None, pos=None, pn=None):
             _save_c3_offset_for_target(pos, pn)
     except Exception as e:
         log(f"WARNING: Ronchigram analysis failed: {e}. Continuing without laser correction.")
+        sem.SetImageDistanceOffset(ronchiStartC3Offset)
         if ronchiPerPositionC3 and pos is not None and pn is not None:
             _save_c3_offset_for_target(pos, pn)
     sem.GoToLowDoseArea("R")
