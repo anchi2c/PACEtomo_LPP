@@ -389,8 +389,8 @@ import serialem as sem
 
 ############ SETTINGS ############
 image_shift_delta_um = [(0.0,-5.0)]
-c3offset = -20
-xt_is_matrix = [[0.000324, -0.000347],[0.001100, 0.0002815]]
+c3offset = -30
+xt_is_matrix = [[0.000219, -0.000259],[0.000902, 0.000264]] #26aug18, 110kx, 1.4um 
 df_is_matrix = [[0.041381,0.012342], [0.041381,0.012342]]
 sem.Echo("***Running X-Tilt LAFIS***")
 sem.Echo("DIAGNOSTIC MESSAGE: Current image shift:")
@@ -476,8 +476,10 @@ import serialem as sem
 
 #xt_is_matrix = [[0.000312, -0.000352],[0.001120, 0.000281]] #26jul16a
 #xt_is_matrix = [[0.000312, -0.000352],[0.001069, 0.000257]]
-xt_is_matrix = [[0.000324, -0.000347],[0.001100, 0.0002815]]  #26jul23
-df_is_matrix = [[0.041381,0.012342], [0.041381,0.012342]]
+#xt_is_matrix = [[0.000324, -0.000347],[0.001100, 0.0002815]]  #26jul23
+xt_is_matrix = [[0.000219, -0.000259],[0.000902, 0.000264]] #26aug18, 110kx, 1.4um 
+
+df_is_matrix = [[0.041381,0.012342],[ 0.041381,0.012342]]
 
 def float_tuple(input_str_tuple):
    return (float(input_str_tuple[0]), float(input_str_tuple[1]))
@@ -508,6 +510,7 @@ def main():
    # End result should be at is1==is2 and bt1==bt2
    is1, bt1, xt0, stg0, df0 = get_values()
 
+   #Enable the next line if testing directly.
    #sem.AdjustBeamTiltforIS()
    delta = is1
    xt1 = calc_xt_is(xt0, delta)
@@ -516,7 +519,8 @@ def main():
    sem.SetXLensDeflector(2, xt1[0], xt1[1])
    sem.SetDefocus(df1)
    is2, bt2, xt2, stg2, df2 = get_values()
- 
+   #Enable the next line so the AjustBeamTiltforIS is still applied before script ends.
+   #sem.L()
 
 if __name__=='__main__':
     main()
@@ -1041,20 +1045,20 @@ import serialem as sem
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 
-c3offset = -20
+c3offset = -30
 pixel_size = 0.98e-4 * 2 #um
 binning = 32
 
 # target_phase measured in ronchi_measurement
-target_phase_A= 1.46451949   # Vertical Laser
-target_phase_B = 1.28042625  # Horizontal Laser
+target_phase_A=  1.60508713     # Vertical Laser
+target_phase_B =-1.77394337  # Horizontal Laser
 
 
 # target_ks 2D matrix measured in ronchi_measure
-correct_ks = np.array([[5.761, -0.350],   [0.623, 5.411]])
+correct_ks = np.array([[7.318, -0.662],   [0.623, 7.007]])
 
 avg_norm = (np.linalg.norm(correct_ks[0]) + np.linalg.norm(correct_ks[1]))/2.0
-c3_correction_factor = 20 /avg_norm
+c3_correction_factor = 30 /avg_norm
 
 def plot_complex_image(Fourier):
     # 1. Amplitude and Phase calculation
@@ -1621,6 +1625,16 @@ sem.SetImageDistanceOffset(data['c3_offset'])
 
 sem.Echo('XT and defocus value reset')
 EndMacro
+Macro	19
+MacroName changecolor
+Loop 177 i
+idx = $i + 514
+#ReportNavItem $ind
+echo $idx
+ChangeItemColor  $idx 4
+
+EndLoop 
+EndMacro
 Macro	20
 #!Python
 #ScriptName Script21 quick_ronchi_magic_phase_measurment with SEARCH preset
@@ -1773,8 +1787,8 @@ base = sem.ReportFrameBaseName()
 if not base[1].endswith('_ronchi'):
     sem.SetFrameBaseName(0, 1, 0,  base[1] + "_ronchi")
 sem.Delay(2, "s")
-sem.Preview()
-#sem.Search()
+#sem.Preview()
+sem.Search()
 #sem.T()
 # reset after taking trial image
 sem.SetFrameBaseName(0, 1, 0,  base[1])
@@ -1833,11 +1847,11 @@ pixel_size = 0.98e-4 * 2 #um
 binning = 32
 
 # target_phase measured in ronchi_measurement
-target_phase_A=-0.61555163    # Vertical Laser
-target_phase_B =  -2.78703036  # Horizontal Laser
+target_phase_A=1.25748    # Vertical Laser
+target_phase_B =  1.38547  # Horizontal Laser
 
 # target_ks 2D matrix measured in ronchi_measure
-correct_ks = np.array([[5.800, -0.350] ,  [0.584, 5.488]])
+correct_ks = np.array([[5.683, -0.350],   [0.662, 5.411]])
 
 
 avg_norm = (np.linalg.norm(correct_ks[0]) + np.linalg.norm(correct_ks[1]))/2.0
@@ -1968,9 +1982,9 @@ sem.Delay(2, "s")
 base = sem.ReportFrameBaseName()
 if not base[1].endswith('_ronchi'):
     sem.SetFrameBaseName(0, 1, 0,  base[1] + "_ronchi")
-#sem.Search()
+sem.Search()
 sem.Echo('*****acquire with Preview*****')
-sem.Preview()
+#sem.Preview()
 sem.SetImageDistanceOffset(start_offset)
 sem.SetFrameBaseName(1, 1, 0,  base[1])
 
@@ -2063,7 +2077,7 @@ if $with_laser > 0
 endif
 # End Optical Modification
 
-CallScript 14    #save extra meta in mdoc
+CallScript 14    #tell sem to save extra meta in mdoc for the next acquired image
 #R removed record here, since TS routine will do record on its own
 
 #This should be moved to happen after record - replaced with scripts 18 and 19
@@ -2076,17 +2090,86 @@ CallScript 14    #save extra meta in mdoc
 
 Echo ******Done Script****
 EndMacro
+Macro	23
+MacroName test meta saving
+
+ReportXLensDeflector 2
+xt0_x = $ReportedValue1
+xt0_y = $ReportedValue2
+Echo ......Original XT $xt0_x $xt0_y
+CallScript 14    #save extra meta in mdoc
+R
+xt_delta = 0.001
+Loop 3 i
+   ReportXLensDeflector 2
+   xt1_x = $ReportedValue1 + $i * $xt_delta
+   xt1_y = $ReportedValue2
+   SetXLensDeflector 2 $xt1_x $xt1_y
+   Echo ....BEFORE XT $xt1_x $xt1_y
+   CallScript 14    #save extra meta in mdoc
+   R
+   Echo ***AFTER $i ***
+   ReportXLensDeflector 2
+   xt2_x = $ReportedValue1
+   xt2_y = $ReportedValue2
+   Echo ......AFTER XT $xt2_x $xt2_y
+EndLoop
+SetXLensDeflector 2 $xt0_x $xt0_y
+EndMacro
+Macro	24
+#!Python
+#ScriptName Array test
+import serialem as sem
+import numpy as np
+
+test_list = [1.0,2.0,3.0]
+try:
+    a=sem.listToSEMarray(test_list)
+except AttributeError:
+    def listToSEMarray(values):
+         return "\n".join(str(v) for v in np.atleast_1d(values))
+    a=listToSEMarray(test_list)
+sem.SetVariable('ptsX', a)
+sem.SetVariable('ptsY', a)
+sem.AddStagePointsAsPolygon('ptsX','ptsY',0)
+EndMacro
+Macro	25
+ScriptName DefocusSeries
+
+base = lppons4
+step = 0.1
+nimg = 31
+
+ReportDefocus
+startDef = $reportedValue1
+
+Loop $nimg i
+   idx = $i + 100
+   OpenNewFile $base-$idx.mrc
+   CallScript 8
+   CallScript 8
+   CallScript 8
+   Record
+   SetXLensDeflector 2 -0.000944 -0.000011
+   Save
+   CloseFile
+   ChangeFocus $step
+EndLoop
+
+SetDefocus $startDef
+Echo Series $base done - $nimg images, defocus restored to $startDef
+EndMacro
 Macro	60
 SetImageShift -0.063 -0.23
 EndMacro
 Macro	61
-SetXLensDeflector 2 0 0
+SetXLensDeflector 2 -0.000944 -0.000011
 EndMacro
 Macro	62
 ReportXLensDeflector 2
 EndMacro
 Macro	63
-SetBeamTilt 41.10 9.014
+ReportComaVsISmatrix
 EndMacro
 Macro	64
 ReportBeamTilt 
