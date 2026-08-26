@@ -5,6 +5,8 @@
 ##############################################################################
 import os
 import numpy as np
+import sys
+sys.path.insert(0, 'C:\Program Files\SerialEM\PythonModules')
 import ronchi_lib
 import ronchi_sem_lib
 import cal_util
@@ -12,6 +14,7 @@ import serialem as sem
 
 is_simu = False
 count = 0
+
 
 def measure_ronchigram_ks_phases(pixel_size_um, binning,
                        peak_radius=100, corr_scale=1e-5, pass_label=''):
@@ -109,14 +112,16 @@ if __name__=='__main__':
         corr_scale = 3e-3
         ronchi_binning = 1
         pixel_size_um = 1.5
-    
+
     corr_matrix = calibrate_ronchigram_phase_correction_matrix(pixel_size_um, ronchi_binning,
                        xt_tilt, peak_radius=100, corr_scale=corr_scale,
                        c3_correction_factor=20 / 6.85)
     print(ronchi_sem_lib.ronchiCorrMatrix)
  
+    """
     # ronchiStartC3 calibration
     new_ronchi_start_c3 = calibrate_ronchigram_start_c3(pixel_size_um, ronchi_binning,
                        xt_tilt, peak_radius=100, corr_scale=corr_scale,
                        c3_correction_factor=20 / 6.85)
     print(ronchi_sem_lib.ronchiStartC3)
+    """
