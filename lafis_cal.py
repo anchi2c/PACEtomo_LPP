@@ -26,14 +26,15 @@ import os
 import copy
 import time
 import struct
+import platform
 from datetime import datetime, timezone
 import json
 import glob
 import numpy as np
 from scipy import optimize, ndimage
 import ronchi_sem_lib
-print(ronchi_sem_lib)
 import cal_util
+import display_util
 
 ######### LAFIS: lpp afis correction #########
 # calibration matrix applied when beamTiltComp == True on xlpp
@@ -54,12 +55,15 @@ lafisXtCorrectionY = 0.0       # set from doLafis as the correction made on XLen
 # ScriptName Script 11 Recall xt0 and other origin values from temp_xt0.json
 
 def resetOptics():
-    filepath = 'X:\\k3f_serialem\\p25aug25a\\temp_xt0.json'
+    if platform.system() == 'Windows':
+		# TODO: should use working directory
+        filepath = 'X:\\k3f_serialem\\p25aug25a\\temp_xt0.json'
+    else:
+        filepath = './temp_xt0.json'
     sem.Echo('-------- Loading optical values from %s' % os.path.join(os.getcwd(), filepath))
 
     with open(filepath, "r") as f:
         data = json.load(f)
-
     sem.SetImageShift(data['image_shift'][0], data['image_shift'][1])
     sem.SetBeamTilt(data['beam_tilt'][0],data['beam_tilt'][1])
     sem.SetXLensDeflector(2, data['x_tilt'][0],data['x_tilt'][1])
@@ -138,15 +142,17 @@ def checkRonchigramSetup():
     #ronchi_sem_lib.ronchiC3Offset = float(sem.ReportImageDistanceOffset()) - ronchi_sem_lib.ronchiStartC3Offset
 
 def calc_xt_is(xt0, is_delta):
-   xt1 = [0.0,0.0]
-   xt1[0] = xt0[0]+is_delta[0]*xt_is_matrix[0][0]+is_delta[1]*xt_is_matrix[1][0]
-   xt1[1] = xt0[1]+is_delta[0]*xt_is_matrix[0][1]+is_delta[1]*xt_is_matrix[1][1]
-   return xt1
+	# This form works for both array and list of list
+    xt1 = [0.0,0.0]
+    xt1[0] = xt0[0]+is_delta[0]*xt_is_matrix[0][0]+is_delta[1]*xt_is_matrix[1][0]
+    xt1[1] = xt0[1]+is_delta[0]*xt_is_matrix[0][1]+is_delta[1]*xt_is_matrix[1][1]
+    return xt1
 
 def calc_df_is(df0, is_delta):
-   df1 = 0.0
-   df1 =df0+is_delta[0]*df_is_matrix[0][0]+is_delta[1]*df_is_matrix[1][1]
-   return df1
+	# This form works for both array and list of list
+    df1 = 0.0
+    df1 =df0+is_delta[0]*df_is_matrix[0][0]+is_delta[1]*df_is_matrix[1][1]
+    return df1
 
 def saveZeroImageShiftDefocusXLens():
     global lafisZeroImageShiftDefocus
@@ -196,7 +202,10 @@ def _acquire_ronchi_image(trial_offset_baseline, ronchi_offset, pass_label=''):
     import mrcfile
     global count
     with mrcfile.new(f"ronchi{count:02d}.mrc", overwrite=True) as mrc:
-        mrc.set_data(full_ronchi)
+        if np.issubdtype(full_ronchi.dtype, np.integer):
+            mrc.set_data(full_ronchi.astype(np.float32))
+        else:
+            mrc.set_data(full_ronchi)
     count += 1
     return full_ronchi[:,int(0.25*full_shape[1]):]
 
@@ -223,10 +232,10 @@ def xlpp_center_finding(shifted_corr_arr, threshold_factor=0.5):
     # estimate of cc peak we should use.
     laser_threshold = my_mean+(my_max-my_mean)*threshold_factor
     laser=np.where(shifted_corr_arr > laser_threshold, 1, 0)
-    cal_util.addImage(laser)
     laser_center = np.array(ndimage.center_of_mass(laser))
-    # unshifted
+    # peak shift np array 
     corr_shift = np.array(c_center) - laser_center
+    display_util.addImage(laser, corr_shift)
     return corr_shift
 
 def find_shift(img0, img1):
@@ -236,11 +245,6 @@ def find_shift(img0, img1):
     cor_image = cross_correlate(img0,img1, shift=True)
     peak = xlpp_center_finding(cor_image, threshold_factor=0.8)
     print('shift on image', peak)
-    a = 20
-    b = 100
-    c = np.array(cor_image.shape)//2
-    cal_util.image_buffer[-1][int(c[0]-a):int(c[0]+a),int(c[1]-a):int(c[1]+a)] = 2 
-    cal_util.image_buffer[-1][int(-peak[0]+c[0]-b):int(-peak[0]+c[0]+b),int(-peak[1]+c[1]-b):int(-peak[1]+c[1]+b)] = 2
     return peak
 
 def _measureLafisResidual(image_shift_scale, trial_offset_baseline, ronchi_offset):
@@ -253,7 +257,7 @@ def _measureLafisResidual(image_shift_scale, trial_offset_baseline, ronchi_offse
         sem.SetImageShift(my_is[0],my_is[1])
         doLafis(my_is[0],my_is[1])
         img_array = _acquire_ronchi_image(trial_offset_baseline, ronchi_offset)
-        cal_util.addImage(img_array)
+        display_util.addImage(img_array)
         residual = find_shift(img0_array, img_array)
         residual_shifts[axis] = np.array(residual)
         sem.SetImageShift(0,0)
@@ -263,7 +267,6 @@ def _measureLafisResidual(image_shift_scale, trial_offset_baseline, ronchi_offse
 
 def update_xt_is_matrix(xt_residual_arr, image_shift_scale):
     global xt_is_matrix
-    print('befor_xt_is_matrix', xt_is_matrix)
     xt_is_arr = np.array(xt_is_matrix) - xt_residual_arr / image_shift_scale
     xt_is_matrix = xt_is_arr.tolist()
     print('updated_xt_is_matrix', xt_is_matrix)
@@ -337,8 +340,7 @@ def testXtPixel():
     xt0 = np.array((xt0_x, xt0_y))
     print('xt_pixel_matrix', xt_pixel_matrix)
     xt_delta = pixel_shifts @ np.array(xt_pixel_matrix)
-    print('delta',xt_delta)
-    print('total',xt0 + xt_delta)
+    print('total xt values will be applied',xt0 + xt_delta)
     xt_total = xt0 + xt_delta
     sem.SetXLensDeflector(2,xt_total[1][0],xt_total[1][1])
     img1_array = _acquire_ronchi_image(trial_offset_baseline, ronchi_c3_value)
@@ -360,7 +362,7 @@ if __name__=='__main__':
     #saveCalibrations()
     checkRonchigramSetup()
     saveZeroImageShiftDefocusXLens()
-    readCalibrations()
+    #readCalibrations()
     # calibrate ronchiCorrMatrix
     calibrateXtPixelMatrix()
     testXtPixel()
@@ -369,5 +371,5 @@ if __name__=='__main__':
     #testLafis()
     print(f'xt_pixel_matrix: {xt_pixel_matrix}')
     print(f'xt_is_matrix: {xt_is_matrix}')
-    if cal_util.image_buffer:
-        cal_util.showImages()
+    if display_util.image_buffer:
+        display_util.showImages()

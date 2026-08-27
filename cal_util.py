@@ -12,12 +12,6 @@ import serialem as sem
 
 timestampFormat = "%Y-%m-%d %H:%M:%S %Z"
 
-image_buffer = []
-
-def addImage(arr):
-    global image_buffer
-    image_buffer.append(arr.copy())
-
 def saveCalibration(cal_type, cal_dir, session_name, data):
     cal_path = os.path.join(cal_dir, cal_type+'.jsonl')
     print(cal_path)
@@ -85,17 +79,8 @@ def solveTransform(scope_changes, observed_shifts):
     try:
         params, residuals, rank, sv = np.linalg.lstsq(data_src, data_results, rcond=None)
         m11,m12,m21,m22 = params
-        return np.array([[m11,m12],[m21,m22]]).T
+        scope_to_observed = np.array([[m11,m12],[m21,m22]])
+        return np.linalg.inv(scope_to_observed)
     except Exception as e:
         raise ValueError(f'Can not solve transform matrix. {e}')
 
-def showImages():
-    import matplotlib.pyplot as plt
-    number_of_buffer_images = len(image_buffer)
-    print(number_of_buffer_images)
-    width = number_of_buffer_images * 5
-    fig, ax = plt.subplots(1,number_of_buffer_images, figsize=(width,4))
-    for i in range(number_of_buffer_images):
-        ax[i].imshow(image_buffer[i])
-    plt.tight_layout()
-    plt.show()
