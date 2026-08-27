@@ -136,7 +136,7 @@ def add_lpp_meta_to_next_mdoc():
 def checkRonchigramSetup():
     ronchi_sem_lib.checkRonchigramSetup()
     #ronchi_sem_lib.ronchiC3Offset = -173.0 # xt_pixel xt_is 88000 1.5 um
-    ronchi_sem_lib.ronchiC3Offset = -130.0 # xt_pixel xt_is
+    ronchi_sem_lib.ronchiC3Offset = -100.0 # xt_pixel xt_is
     #ronchi_sem_lib.ronchiC3Offset = -30.0
     #sem.Pause('Please set C3 offset to where you can clearly see the global xLPP center')
     #ronchi_sem_lib.ronchiC3Offset = float(sem.ReportImageDistanceOffset()) - ronchi_sem_lib.ronchiStartC3Offset
@@ -251,7 +251,7 @@ def _measureLafisResidual(image_shift_scale, trial_offset_baseline, ronchi_offse
     img0_array = _acquire_ronchi_image(trial_offset_baseline, ronchi_offset)
     residual_shifts = np.array([[0.0,0.0],[0.0,0.0]])
     cal_image_shifts = np.array([[image_shift_scale,0.0],[0.0,image_shift_scale]])
-    cal_util.addImage(img0_array)
+    display_util.addImage(img0_array)
     for axis in (0,1):
         my_is = cal_image_shifts[axis]
         sem.SetImageShift(my_is[0],my_is[1])
@@ -277,29 +277,29 @@ def _refineLafisMatrix(image_shift_scale, trial_offset_baseline, ronchi_offset):
     update_xt_is_matrix(xt_residuals_arr, image_shift_scale)
     return xt_residuals_arr
 
-def update_xt_pixel_matrix(transform_arrx, shift_scale):
+def update_xt_pixel_matrix(transform_arr, shift_scale):
     global xt_pixel_matrix
-    xt_pixel_arr = np.array(xt_pixel_matrix) + xt_residual_arr / shift_scale
-    xt_pixel_matrix = xt_pixel_arr.tolist()
+    xt_pixel_matrix = transform_arr.tolist()
 
 def _calibrate_xt_pixel_matrix(xt_scale, trial_offset_baseline, ronchi_c3_value):
     img0_array = _acquire_ronchi_image(trial_offset_baseline, ronchi_c3_value)
-    pixel_shifts = np.array([[0.0,0.0],[0.0,0.0]])
-    cal_xt_shifts = np.array([[xt_scale,xt_scale],[-xt_scale,xt_scale]])
+    changes = np.array([[1.0,1.0],[1.0,-1.0],[-1,-1],[-1,1]])
+    cal_xt_changes = xt_scale * changes
+    pixel_shifts = changes * 0
     xt0 = np.array([float(v) for v in sem.ReportXLensDeflector(2)[:2]])
-    for axis in (0,1):
-        my_xt = cal_xt_shifts[axis]
-        sem.SetXLensDeflector(2, my_xt[0]+xt0[0], my_xt[1]+xt0[1])
+    for i, my_change in enumerate(cal_xt_changes):
+        my_xt = my_change + xt0
+        sem.SetXLensDeflector(2, my_xt[0], my_xt[1])
         print(sem.ReportXLensDeflector(2))
         img_array = _acquire_ronchi_image(trial_offset_baseline, ronchi_c3_value)
         my_shift = find_shift(img0_array, img_array)
-        pixel_shifts[axis] = np.array(my_shift)
+        pixel_shifts[i] = np.array(my_shift)
         sem.SetXLensDeflector(2, xt0[0], xt0[1])
     try:
-        transform_matrix = cal_util.solveTransform(cal_xt_shifts, pixel_shifts)
+        transform_matrix = cal_util.solveTransform(cal_xt_changes, pixel_shifts)
         update_xt_pixel_matrix(transform_matrix, 1)
     except Exception as e:
-        print('Error: Calibration not updated {e} Bad pixel shift measured {pixel_shifts}')
+        print(f'Error: Calibration not updated {e} Bad pixel shift measured {pixel_shifts}')
     return
 
 def calibrateXtPixelMatrix():
@@ -335,12 +335,13 @@ def testXtPixel():
 
     img0_array = _acquire_ronchi_image(trial_offset_baseline, ronchi_c3_value)
     pixel_shifts = np.array([[0.0,0.0],[0.0,0.0]])
-    quarter_x = img0_array.shape[1]//4
+    quarter_x = img0_array.shape[0]//8
     pixel_shifts[1][1] = quarter_x
     xt0 = np.array((xt0_x, xt0_y))
     print('xt_pixel_matrix', xt_pixel_matrix)
+    print('pixel_shift required',pixel_shifts)
     xt_delta = pixel_shifts @ np.array(xt_pixel_matrix)
-    print('total xt values will be applied',xt0 + xt_delta)
+    print('delta xt values will be applied',xt_delta)
     xt_total = xt0 + xt_delta
     sem.SetXLensDeflector(2,xt_total[1][0],xt_total[1][1])
     img1_array = _acquire_ronchi_image(trial_offset_baseline, ronchi_c3_value)
@@ -362,11 +363,11 @@ if __name__=='__main__':
     #saveCalibrations()
     checkRonchigramSetup()
     saveZeroImageShiftDefocusXLens()
-    #readCalibrations()
+    readCalibrations()
     # calibrate ronchiCorrMatrix
-    calibrateXtPixelMatrix()
+    #calibrateXtPixelMatrix()
     testXtPixel()
-    #calibrateLafis()  
+    calibrateLafis()  
     saveCalibrations()
     #testLafis()
     print(f'xt_pixel_matrix: {xt_pixel_matrix}')

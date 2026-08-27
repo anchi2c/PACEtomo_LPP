@@ -24,8 +24,8 @@ def addImage(arr, peak=None):
     print(peak is not None)
     if peak is not None:
         arr_min_shape = min(arr.shape)
-        a = 0.02 * arr_min_shape
-        b = 0.1 * arr_min_shape
+        a = 0.01 * arr_min_shape
+        b = 0.04 * arr_min_shape
         c = np.array(arr.shape)//2
         fill = (arr.max()-arr.min())*2 + arr.max()
         image_buffer[-1][int(c[0]-a):int(c[0]+a),int(c[1]-a):int(c[1]+a)] = fill 
