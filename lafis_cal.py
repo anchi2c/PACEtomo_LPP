@@ -56,7 +56,7 @@ lafisXtCorrectionY = 0.0       # set from doLafis as the correction made on XLen
 
 def resetOptics():
     if platform.system() == 'Windows':
-		# TODO: should use working directory
+        # TODO: should use working directory
         filepath = 'X:\\k3f_serialem\\p25aug25a\\temp_xt0.json'
     else:
         filepath = './temp_xt0.json'
@@ -142,14 +142,14 @@ def checkRonchigramSetup():
     #ronchi_sem_lib.ronchiC3Offset = float(sem.ReportImageDistanceOffset()) - ronchi_sem_lib.ronchiStartC3Offset
 
 def calc_xt_is(xt0, is_delta):
-	# This form works for both array and list of list
+    # This form works for both array and list of list
     xt1 = [0.0,0.0]
     xt1[0] = xt0[0]+is_delta[0]*xt_is_matrix[0][0]+is_delta[1]*xt_is_matrix[1][0]
     xt1[1] = xt0[1]+is_delta[0]*xt_is_matrix[0][1]+is_delta[1]*xt_is_matrix[1][1]
     return xt1
 
 def calc_df_is(df0, is_delta):
-	# This form works for both array and list of list
+    # This form works for both array and list of list
     df1 = 0.0
     df1 =df0+is_delta[0]*df_is_matrix[0][0]+is_delta[1]*df_is_matrix[1][1]
     return df1
@@ -274,13 +274,13 @@ def update_xt_is_matrix(xt_residual_arr, image_shift_scale):
 def _refineLafisMatrix(image_shift_scale, trial_offset_baseline, ronchi_offset):
     residuals = _measureLafisResidual(image_shift_scale, trial_offset_baseline, ronchi_offset)
     xt_residuals_arr = residuals @ np.linalg.inv(np.array(xt_pixel_matrix))
-    #update_xt_is_matrix(xt_residuals_arr, image_shift_scale)
+    update_xt_is_matrix(xt_residuals_arr, image_shift_scale)
     return xt_residuals_arr
 
 def update_xt_pixel_matrix(transform_arrx, shift_scale):
     global xt_pixel_matrix
-    xt_is_arr = np.array(xt_pixel_matrix) + xt_residual_arr / shift_scale
-    xt_is_matrix = xt_is_arr.tolist()
+    xt_pixel_arr = np.array(xt_pixel_matrix) + xt_residual_arr / shift_scale
+    xt_pixel_matrix = xt_pixel_arr.tolist()
 
 def _calibrate_xt_pixel_matrix(xt_scale, trial_offset_baseline, ronchi_c3_value):
     img0_array = _acquire_ronchi_image(trial_offset_baseline, ronchi_c3_value)
@@ -295,9 +295,9 @@ def _calibrate_xt_pixel_matrix(xt_scale, trial_offset_baseline, ronchi_c3_value)
         my_shift = find_shift(img0_array, img_array)
         pixel_shifts[axis] = np.array(my_shift)
         sem.SetXLensDeflector(2, xt0[0], xt0[1])
-    global xt_pixel_matrix
     try:
-        xt_pixel_matrix = cal_util.solveTransform(cal_xt_shifts, pixel_shifts)
+        transform_matrix = cal_util.solveTransform(cal_xt_shifts, pixel_shifts)
+        update_xt_pixel_matrix(transform_matrix, 1)
     except Exception as e:
         print('Error: Calibration not updated {e} Bad pixel shift measured {pixel_shifts}')
     return
@@ -309,7 +309,7 @@ def calibrateXtPixelMatrix():
     ronchi_offset = ronchi_sem_lib.ronchiC3Offset
     cal_image_shift_scale = 0.5    #in um
 
-    # Step 1 do xt_pixel_matrix calibration using an estimated xt_scale
+    # Do xt_pixel_matrix calibration using an estimated xt_scale
     # based on the xt_is_matrix and cal_image_shift_scale
     xt_scale = np.array(xt_is_matrix).mean() * cal_image_shift_scale
     print(f'calibrating xt_pixel_matrix with xt change of {xt_scale} rad')
