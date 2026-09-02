@@ -143,8 +143,6 @@ ronchiPeakRadius   = 100
 ronchiMontage      = True         # also run before montage tile Record shots
 ronchiCorrMatrix   = [[0.212, 1.28], [1.22, -0.243]]  # phase-to-deflector coupling, scaled by 1e-5
 ronchiCorrectC3    = True         # apply C3 correction from mean ks error (diagonal fringe spacing)
-avg_norm = (np.linalg.norm(ronchiCorrectKs[0]) + np.linalg.norm(ronchiCorrectKs[1]))/2.0
-ronchiC3CorrectionFactor = abs(ronchiC3Offset) / avg_norm  # um offset per um^-1 mean ks error
 ronchiMinErrForC3Correction   = 0.3          # apply C3 on 1st Trial only if |c3 correction| exceeds this (um)
 ronchiMinErrForC3CorrectionRedo = 0.5        # apply C3 on 2nd Trial only if |c3 correction| exceeds this (um)
 redo_ronchi_after_C3 = True       # up to 3 Trials: 1st C3, 2nd optional C3 + 3rd phase-only if 2nd C3 applied
@@ -153,6 +151,11 @@ ronchiXLensTolerance = 0.000125     # reset XLensDeflector(2) to start if |x-x0|
 ronchiStartXLensX = None          # set from ReportXLensDeflector(2) at startup when doRonchigram
 ronchiStartXLensY = None
 ronchiStartC3Offset = None      # set from ReportImageDistanceOffset at startup when doRonchigram
+
+### settings derived from other settings
+import numpy as np
+avg_norm = (np.linalg.norm(ronchiCorrectKs[0]) + np.linalg.norm(ronchiCorrectKs[1]))/2.0
+ronchiC3CorrectionFactor = abs(ronchiC3Offset) / avg_norm  # um offset per um^-1 mean ks error
 ########## END Ronchigram settings ##########
 
 ######### LAFIS: lpp afis correction #########
@@ -188,7 +191,6 @@ import struct
 from datetime import datetime
 import glob
 from functools import wraps
-import numpy as np
 from scipy import optimize
 import PACEtomo_beamTiltDefocus as btdef
 
