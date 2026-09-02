@@ -108,7 +108,7 @@ try:
     listToSEMarray = sem.listToSEMarray
 except AttributeError:
     def listToSEMarray(values):
-        return " ".join(str(v) for v in np.atleast_1d(values))
+        return "\n".join(str(v) for v in np.atleast_1d(values))
 
 btdef.configure(sem_module=sem, has_x_lens=hasXLens)
 
