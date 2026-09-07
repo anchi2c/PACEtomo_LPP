@@ -12,9 +12,13 @@ import serialem as sem
 
 timestampFormat = "%Y-%m-%d %H:%M:%S %Z"
 
+def log(*args):
+	print(args)
+	pass
+
 def saveCalibration(cal_type, cal_dir, session_name, data):
     cal_path = os.path.join(cal_dir, cal_type+'.jsonl')
-    print(cal_path)
+    log(cal_path)
     if isinstance(data, np.ndarray):
         data = data.tolist()
     cal_data = {}
@@ -31,7 +35,7 @@ def readCalibration(cal_type, cal_dir):
     Read the most recent calibration value from file.
     """
     cal_path = os.path.join(cal_dir, cal_type+'.jsonl')
-    print('reading', cal_path)
+    log('reading', cal_path)
     if not os.path.exists(cal_path):
         return None
     # read from backward to get most recent entry
@@ -79,7 +83,7 @@ def solveTransform(scope_changes, observed_shifts):
     try:
         params, residuals, rank, sv = np.linalg.lstsq(data_src, data_results, rcond=None)
         m11,m12,m21,m22 = params
-        scope_to_observed = np.array([[m11,m12],[m21,m22]])
+        scope_to_observed = np.array([[m11,m12],[m21,m22]]).T
         return np.linalg.inv(scope_to_observed)
     except Exception as e:
         raise ValueError(f'Can not solve transform matrix. {e}')

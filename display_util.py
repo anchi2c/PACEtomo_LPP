@@ -11,18 +11,15 @@ image_buffer = []
 def addImage(arr, peak=None):
     """
     Add image to image_buffer for display
-    # peak is correlation shift with 0,0 unshifted.
+    # peak is correlation shift with 0,0 unshifted in numpy convention
     # when peak is specified. arr is wrapped correlation image with unshifted
     # at the center of the correlation image
     """
     global image_buffer
-    print(arr.shape)
     image_buffer.append(arr.copy())
 
-    print(len(image_buffer))
-    print(peak)
-    print(peak is not None)
     if peak is not None:
+        print('correlation peak (y,x)',peak)
         arr_min_shape = min(arr.shape)
         a = 0.01 * arr_min_shape
         b = 0.04 * arr_min_shape
