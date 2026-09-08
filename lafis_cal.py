@@ -49,9 +49,10 @@ count = 0
 # all transform matrix are to be used with [x,y] as in SerialEM convention
 is_xt_matrix = [[0.000324, -0.000347],[0.001100, 0.00028125]]  #26jul23
 is_xt_matrix = [[0.00028763286791300477, -0.00012083706524300338], [0.0009948701965659995, 0.00014791197022821008]]  #simu_testing
+is_xt_matrix = [[0.00024180881486977201, -0.00042928950183638887], [0.0010020323076790395, 0.0002672870290525659]]
 df_is_matrix = [[0.041381,0.012342], [0.041381,0.012342]]
-pixel_xt_matrix = [[1.115e-6, 1.2858e-6],[5.903e-6, -3.3343e-7]]  #starting guess mrad/pixel
-pixel_xt_matrix = [[1.2222131189880566e-06, 1.229534919171198e-05], [7.267709879720959e-06, -1.3397917944027512e-06]] #simu_testing
+
+pixel_xt_matrix = [[1.0866279077999436e-06, -1.7905014130717222e-07], [2.861300907326552e-07, 1.8702918955272723e-06]] #starting guess mrad/pixel
 
 lafisZeroImageShiftDefocus = None            # set from saveZeroImageShiftDefocusXLens before doLafis
 lafisZeroImageShiftXLens = None            # set from saveZeroImageShiftDefocusXLens before doLafis
@@ -65,7 +66,7 @@ lafisXtCorrectionY = 0.0       # set from doLafis as the correction made on XLen
 def resetOptics():
     if platform.system() == 'Windows':
         # TODO: should use working directory
-        filepath = 'X:\\k3f_serialem\\p25aug25a\\temp_xt0.json'
+        filepath = 'X:\\k3f_serialem\\p26sep07a\\temp_xt0.json'
     else:
         filepath = './temp_xt0.json'
     sem.Echo('-------- Loading optical values from %s' % os.path.join(os.getcwd(), filepath))
@@ -144,7 +145,7 @@ def add_lpp_meta_to_next_mdoc():
 def checkRonchigramSetup():
     ronchi_sem_lib.checkRonchigramSetup()
     #ronchi_sem_lib.ronchiC3Offset = -173.0 # xt_pixel xt_is 88000 1.5 um
-    ronchi_sem_lib.ronchiC3Offset = -100.0 # xt_pixel xt_is
+    ronchi_sem_lib.ronchiC3Offset = -100.0 # xt_pixel xt_is 54000 1.5 um
     #ronchi_sem_lib.ronchiC3Offset = -30.0
     #sem.Pause('Please set C3 offset to where you can clearly see the global xLPP center')
     #ronchi_sem_lib.ronchiC3Offset = float(sem.ReportImageDistanceOffset()) - ronchi_sem_lib.ronchiStartC3Offset
@@ -328,7 +329,7 @@ def _calibrate_pixel_xt_matrix(xt_scale, trial_offset_baseline, ronchi_c3_value)
         sem.SetXLensDeflector(2, xt0[0], xt0[1])
     try:
         transform_matrix = cal_util.solveTransform(cal_xt_changes, pixel_shifts)
-        update_pixel_xt_matrix(transform_matrix, 1)
+        update_pixel_xt_matrix(transform_matrix)
     except Exception as e:
         log(f'Error: Calibration not updated {e} Bad pixel shift measured {pixel_shifts}')
     return
@@ -351,7 +352,7 @@ def calibrateLafis():
     saveZeroImageShiftDefocusXLens()
     trial_offset_baseline = ronchi_sem_lib.ronchiStartC3Offset
     ronchi_offset = ronchi_sem_lib.ronchiC3Offset
-    cal_image_shift_scale = -10    #in um
+    cal_image_shift_scale = 5    #in um
     # Step 2 do a refinement of the existing is_xt_matrix
     log(f'calibrating lafis_matrix with image shift of {cal_image_shift_scale} um')
     _refineLafisMatrix(cal_image_shift_scale, trial_offset_baseline, ronchi_offset)
@@ -396,12 +397,12 @@ if __name__=='__main__':
     saveZeroImageShiftDefocusXLens()
     readCalibrations()
     ##### calibrate ronchiCorrMatrix
-    #calibrateXtPixelMatrix()
-    #testXtPixel()
+    calibrateXtPixelMatrix()
+    testXtPixel()
     ##### lafis
-    calibrateLafis()  
+    #calibrateLafis()
     saveCalibrations()
-    testLafis()
+    #testLafis()
     print(f'pixel_xt_matrix: {pixel_xt_matrix}')
     print(f'is_xt_matrix: {is_xt_matrix}')
     if display_util.image_buffer:

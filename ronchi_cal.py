@@ -31,10 +31,15 @@ def measure_ronchigram_ks_phases(pixel_size_um, binning,
     binned = ronchi_lib._ronchi_bin_image(np.asarray(image), binning=binning)
     image_fft = ronchi_lib._ronchi_find_fourier_centered(binned)
     if is_simu:
+        import mrcfile
         global count
-        from pyami import mrc
-        mrc.write(image,f'image{count:d}.mrc')
-        mrc.write(np.abs(image_fft),f'power{count}.mrc')
+        for my_tuple in (('ronchi_cal',image),('ronchi_cal_pow', np.abs(image_fft)**2)):
+            my_name, my_arr = my_tuple
+            with mrcfile.new(f"{my_name}{count:02d}.mrc", overwrite=True) as mrc:
+                if np.issubdtype(my_arr.dtype, np.integer) or np.issubdtype(my_arr.dtype, np.float64):
+                    mrc.set_data(my_arr.astype(np.float32))
+                else:
+                    mrc.set_data(my_arr)
         count += 1
     return ronchi_lib._ronchi_find_ks_phases(image_fft, pixel_size_um * binning, npeaks=2, radius=peak_radius, binning=1,
                                        fourier_size=image_fft.shape[0])
@@ -66,6 +71,7 @@ def calibrate_ronchigram_phase_correction_matrix(pixel_size_um, binning,
         print(f'ks, phases for axis {axis:d}: {ks}, {phases}')
     print(f'phase_shifts {phase_shifts}')
     corr = cal_util.solveTransform(scope_changes, phase_shifts)
+    print('correction by xt matrix', corr)
     #global ronchi_sem_lib.ronchiCorrMatrix
     if input('Is this a good matrix ? (Y/N/y/n)').lower() == 'y':
         ronchi_sem_lib.ronchiCorrMatrix = corr.tolist()
