@@ -1054,13 +1054,12 @@ binning = 32
 
 # target_phase measured in ronchi_measurement
 
-target_phase_A=  2.97216944   # Vertical Laser
-target_phase_B = 0.50032219  # Horizontal Laser
+target_phase_A=  2.3 # Vertical Laser
+target_phase_B = 2.3# Horizontal Laser
 
 
 # target_ks 2D matrix measured in ronchi_measure
-correct_ks = np.array([[10.004, -0.779] ,  [0.895 ,9.459]])
-
+correct_ks = np.array([[9.264, -0.779] ,  [0.856, 8.914]])
 avg_norm = (np.linalg.norm(correct_ks[0]) + np.linalg.norm(correct_ks[1]))/2.0
 c3_correction_factor = 30 /avg_norm
 
@@ -2157,11 +2156,294 @@ EndLoop
 SetDefocus $startDef
 Echo Series $base done - $nimg images, defocus restored to $startDef
 EndMacro
+Macro	26
+ScriptName Color Group 1 Blue
+
+SuspendNavRedraw
+
+ChangeItemColor 70 2
+ChangeItemColor 36 2
+ChangeItemColor 53 2
+ChangeItemColor 67 2
+ChangeItemColor 89 2
+ChangeItemColor 59 2
+ChangeItemColor 66 2
+ChangeItemColor 44 2
+ChangeItemColor 84 2
+ChangeItemColor 90 2
+ChangeItemColor 38 2
+ChangeItemColor 40 2
+ChangeItemColor 86 2
+ChangeItemColor 49 2
+ChangeItemColor 81 2
+ChangeItemColor 64 2
+ChangeItemColor 33 2
+ChangeItemColor 42 2
+ChangeItemColor 88 2
+ChangeItemColor 96 2
+ChangeItemColor 78 2
+ChangeItemColor 57 2
+ChangeItemColor 61 2
+ChangeItemColor 62 2
+ChangeItemColor 63 2
+ChangeItemColor 82 2
+ChangeItemColor 93 2
+ChangeItemColor 54 2
+ChangeItemColor 35 2
+ChangeItemColor 79 2
+ChangeItemColor 37 2
+ChangeItemColor 52 2
+ChangeItemColor 45 2
+
+SuspendNavRedraw 0
+Echo Changed 33 Navigator items to blue
+EndMacro
+Macro	27
+ScriptName Make Off Items Magenta and Drawn
+
+# Change every Off Navigator item to magenta and enable drawing
+SuspendNavRedraw
+
+ChangeItemColor 32 4
+ChangeItemDraw 32 1
+ChangeItemColor 34 4
+ChangeItemDraw 34 1
+ChangeItemColor 39 4
+ChangeItemDraw 39 1
+ChangeItemColor 41 4
+ChangeItemDraw 41 1
+ChangeItemColor 43 4
+ChangeItemDraw 43 1
+ChangeItemColor 47 4
+ChangeItemDraw 47 1
+ChangeItemColor 48 4
+ChangeItemDraw 48 1
+ChangeItemColor 50 4
+ChangeItemDraw 50 1
+ChangeItemColor 51 4
+ChangeItemDraw 51 1
+ChangeItemColor 55 4
+ChangeItemDraw 55 1
+ChangeItemColor 56 4
+ChangeItemDraw 56 1
+ChangeItemColor 58 4
+ChangeItemDraw 58 1
+ChangeItemColor 60 4
+ChangeItemDraw 60 1
+ChangeItemColor 65 4
+ChangeItemDraw 65 1
+ChangeItemColor 68 4
+ChangeItemDraw 68 1
+ChangeItemColor 69 4
+ChangeItemDraw 69 1
+ChangeItemColor 71 4
+ChangeItemDraw 71 1
+ChangeItemColor 73 4
+ChangeItemDraw 73 1
+ChangeItemColor 74 4
+ChangeItemDraw 74 1
+ChangeItemColor 75 4
+ChangeItemDraw 75 1
+ChangeItemColor 76 4
+ChangeItemDraw 76 1
+ChangeItemColor 77 4
+ChangeItemDraw 77 1
+ChangeItemColor 80 4
+ChangeItemDraw 80 1
+ChangeItemColor 82 4
+ChangeItemDraw 82 1
+ChangeItemColor 83 4
+ChangeItemDraw 83 1
+ChangeItemColor 84 4
+ChangeItemDraw 84 1
+ChangeItemColor 85 4
+ChangeItemDraw 85 1
+ChangeItemColor 87 4
+ChangeItemDraw 87 1
+ChangeItemColor 91 4
+ChangeItemDraw 91 1
+ChangeItemColor 92 4
+ChangeItemDraw 92 1
+ChangeItemColor 94 4
+ChangeItemDraw 94 1
+ChangeItemColor 95 4
+ChangeItemDraw 95 1
+
+SuspendNavRedraw 0
+Echo Changed 32 Off Navigator items to magenta and enabled drawing
+EndMacro
+Macro	28
+R
+EndMacro
 Macro	29
 echo "running"
 AdjustBeamTiltforIS
 ReportBeamTilt
 FixComaByCTF 1 1 0 
+EndMacro
+Macro	30
+#!Python
+# ScriptName:  test mdoc saving
+import serialem as sem
+
+def saveRonchi(iter):
+   k = f'RonchiMatrix{iter: 02d}'
+   v = [1.0, 2.0,3.0,4.0]
+   v_str = "1,0   2.0   3.0   4.0"
+   sem.AddToNextFrameStackMdoc(k, v_str)
+
+def testSave(my_iter):
+   data_pattern = "test_%02d" % (my_iter)
+   sem.SetFrameBaseName(1, 1, 0, data_pattern)
+   saveRonchi(1)
+   saveRonchi(2)
+   sem.R()
+
+testSave(1)
+testSave(2)
+EndMacro
+Macro	31
+#!Python
+# ===================================================================
+#ScriptName     PACEtomo_measureOffset
+# Purpose:      Estimates tilt axis offset for PACEtomo. (Thanks to Wim Hagen for the suggestion!)
+#               More information at http://github.com/eisfabian/PACEtomo
+# Author:       Fabian Eisenstein
+# Created:      2022/05/10
+# Revision:     v1.9
+# Last Change:  2026/08/23: fixed compatability issue with latest numpy
+#               2024/05/10: forced "Center Shift on Tilt axis" (1.8)
+# ===================================================================
+
+############ SETTINGS ############ 
+
+increment   = 5     # tilt step
+maxTilt     = 15    # maximum +/- tilt angle
+offset      = 5     # +/- offset for measured positions in microns from tilt axis (also accepts lists e.g. [2, 4, 6])
+
+plot        = True  # plot measurements
+
+########## END SETTINGS ########## 
+
+import serialem as sem
+import numpy as np
+from scipy import optimize
+import matplotlib.pyplot as plt
+
+########### FUNCTIONS ###########
+
+def dZ(alpha, y0):
+    return y0 * np.tan(np.radians(-alpha))
+
+def Tilt(tilt):
+    sem.TiltTo(tilt)
+
+    for i in range(len(offsets)):
+        sem.ImageShiftByMicrons(0, offsets[i])
+        sem.G(-1)
+        defocus, *_ = sem.ReportAutoFocus()
+        focus[i].append(float(defocus))
+        sem.SetImageShift(0, 0)
+
+    if tilt == 0:
+        for j in range(len(offsets)): 
+            focus0.append(focus[j][-1])
+
+    angles.append(float(tilt))
+    
+###########################
+
+sem.ResetClock()
+sem.SuppressReports()
+sem.SetUserSetting("ShiftToTiltAxis", 1, 1)
+
+oldOffset = sem.ReportTiltAxisOffset()[0]
+
+sem.Echo("Currently set tilt axis offset: " + str(oldOffset))
+
+sem.Echo("##### Starting tilt axis offset estimation #####")
+sem.Echo("Rough eucentricity...")
+sem.Eucentricity(1)
+
+sem.Echo("Autofocus...")
+sem.G()
+
+sem.Echo("Start tilt series...")
+starttilt = -maxTilt
+sem.TiltTo(starttilt)
+sem.TiltBy(-increment)
+
+offsets = [0]
+if isinstance(offset, (list, tuple)):
+    for val in offset:
+        offsets.extend([-val, val])
+else:
+    offsets.extend([-offset, offset])
+
+angles = []
+focus = [[] for i in range(len(offsets))]
+focus0 = []
+
+steps = 2 * maxTilt / increment + 1
+
+tilt = starttilt
+for i in range(int(steps)):
+    sem.Echo("Tilt to " + str(tilt) + " deg")
+    Tilt(tilt)
+    tilt += increment
+
+relFocus = focus
+for i in range(len(angles)):
+    for j in range(len(offsets)):
+        relFocus[j][i] -= focus0[j]
+
+y0 = np.zeros(len(offsets))
+y0_neg = np.zeros(len(offsets))
+y0_pos = np.zeros(len(offsets))
+for j in range(len(offsets)):
+    popt, cov = optimize.curve_fit(dZ, angles, relFocus[j], p0=0)
+    y0[j] = popt[0]
+    popt, cov = optimize.curve_fit(dZ, [angle for angle in angles if angle <= 0], relFocus[j][:len([angle for angle in angles if angle <= 0])], p0=0)
+    y0_neg[j] = popt[0]
+    popt, cov = optimize.curve_fit(dZ, [angle for angle in angles if angle >= 0], relFocus[j][len([angle for angle in angles if angle < 0]):], p0=0)
+    y0_pos[j] = popt[0]
+
+sem.Echo("Remaining tilt axis offsets:")
+for i in range(0, len(offsets)):
+    sem.Echo("[" + str(offsets[i]) + "]: " + str(round(y0[i] + offsets[i], 2)) + " (neg: " + str(round(y0_neg[i] + offsets[i], 2)) + ", pos: " + str(round(y0_pos[i] + offsets[i], 2)) + ")")
+avgOffset = sum(y0) / len(offsets)
+avgOffset_neg = sum(y0_neg) / len(offsets)
+avgOffset_pos = sum(y0_pos) / len(offsets)
+sem.Echo("Average remaining tilt axis offset: " + str(round(avgOffset, 2)) + " (neg: " + str(round(avgOffset_neg, 2)) + ", pos: " + str(round(avgOffset_pos, 2)) + ")")
+totalOffset = round(avgOffset + oldOffset, 2)
+sem.Echo("##############################################")
+sem.Echo("Estimated total tilt axis offset: " + str(totalOffset))
+sem.Echo("##############################################")
+
+sem.TiltTo(0)
+sem.ResetImageShift()
+
+sem.SuppressReports(0)
+sem.ReportClock()
+
+if plot:
+    offsets, relFocus = zip(*sorted(zip(offsets, relFocus)))    # ensure right order for plot points
+    fig = plt.figure(figsize=(8, 6), tight_layout=True)
+    plt.title('Z Shifts [microns]')
+    for i in range(len(angles)):
+        values = []
+        for j in range(len(offsets)):
+            values.append(relFocus[j][i])
+        plt.plot(offsets, values, label=str(angles[i]) + " deg")
+
+    plt.legend()
+    plt.show()
+
+userInput = sem.YesNoBox("The estimated total tilt axis offset is " + str(totalOffset) + ". Do you want to set the new tilt axis offset?")
+if userInput == 1:
+    sem.SetTiltAxisOffset(totalOffset)
+    sem.Echo("The new tilt axis offset has been set!")
+sem.Exit()
 EndMacro
 Macro	60
 ReportBeamTilt
@@ -2191,5 +2473,5 @@ Macro	68
 ReportImageShift
 EndMacro
 Macro	69
-SetImageShift 5 5
+SetImageShift 0 0
 EndMacro
