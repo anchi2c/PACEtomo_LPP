@@ -152,6 +152,7 @@ ronchiStartXLensX = None          # set from ReportXLensDeflector(2) at startup 
 ronchiStartXLensY = None
 ronchiStartC3Offset = None      # set from ReportImageDistanceOffset at startup when doRonchigram
 
+ronchiMeasureCount = 0         # set from _ronchi_trial_and_analyze to log result in frame stack mdoc
 ### settings derived from other settings
 import numpy as np
 avg_norm = (np.linalg.norm(ronchiCorrectKs[0]) + np.linalg.norm(ronchiCorrectKs[1]))/2.0
@@ -662,6 +663,7 @@ def _log_ronchi_ks(result, pass_label=""):
         f"mean diagonal ks error: {result['ks_avg_err']:.4f} (1/um) | "
         f"recommended C3 correction: {result['c3_correction']:.2f} um"
     )
+    sem.AddToNextFrameStackMdoc(f'RonchiKs{ronchiMeasureCount:02d}', f"{np.array2string(result['ks'].ravel(), precision=4)[1:-1]}")
 
 
 def _log_ronchi_phases(result, pass_label=""):
@@ -676,7 +678,20 @@ def _log_ronchi_phases(result, pass_label=""):
         f"horizontal={result['phase_err_b']:.3f} | "
         f"deflector dX={result['correction_x']:.3e} dY={result['correction_y']:.3e}"
     )
+    sem.AddToNextFrameStackMdoc(f'RonchiPhases{ronchiMeasureCount:02d}',f"{phases[0]:.3f}    {phases[1]:.3f}")
 
+def _reset_ronchi_measure_count():
+    global ronchiMeasureCount
+    for c0 in range(ronchiMeasureCount):
+        # Enter default value for each key so that
+        # it does not retain old value in the next mdoc.
+        # SerialEM's default behavior is such that key-value pair
+        # persists until the program is closed.
+        c1 = c0+1 # base 1
+        sem.AddToNextFrameStackMdoc(f'RonchiKs{c1:02d}', '')
+        sem.AddToNextFrameStackMdoc(f'RonchiPhases{c1:02d}','')
+    # reset value until the next target
+    ronchiMeasureCount = 0
 
 def _analyze_ronchi_image(image):
     return analyze_ronchigram(
@@ -731,9 +746,12 @@ def _try_apply_ronchi_c3(result, c3_baseline_offset, pass_label="", min_err=None
 
 def _ronchi_trial_and_analyze(c3_baseline_offset, pass_label=""):
     """Acquire Trial ronchigram and analyze. Returns analysis result dict."""
+    global ronchiMeasureCount
     image = _acquire_ronchi_trial(c3_baseline_offset, pass_label=pass_label)
     result = _analyze_ronchi_image(image)
+    ronchiMeasureCount += 1
     _log_ronchi_ks(result, pass_label=pass_label)
+    _log_ronchi_phases(result, pass_label=pass_label)
     return result
 
 
@@ -891,6 +909,7 @@ def recordWithRonchi(set_track_fn=None, run_ronchi=True, acquire_label="Record",
     add_lpp_meta_to_next_mdoc()
     sem.R()
     sem.S()
+    _reset_ronchi_measure_count()
 
 ########### PACEtomo functions (non-ronchigram) ###########
 
