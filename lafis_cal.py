@@ -63,12 +63,20 @@ lafisXtCorrectionY = 0.0       # set from doLafis as the correction made on XLen
 
 # ScriptName Script 11 Recall xt0 and other origin values from temp_xt0.json
 
-def resetOptics():
+def getResetOpticsPath():
     if platform.system() == 'Windows':
         # TODO: should use working directory
-        filepath = 'X:\\k3f_serialem\\p26sep07a\\temp_xt0.json'
+        working_dir = sem.ReportDirectory()
+        filepath = os.path.join(working_dir,'temp_xt0.json')
+        
     else:
         filepath = './temp_xt0.json'
+    if not os.path.exists(filepath):
+        raise ValueError(f'optics not saved in {filepath} to be used for reset')
+    return filepath
+
+def resetOptics():
+    filepath = getResetOpticsPath()
     sem.Echo('-------- Loading optical values from %s' % os.path.join(os.getcwd(), filepath))
 
     with open(filepath, "r") as f:
@@ -143,9 +151,11 @@ def add_lpp_meta_to_next_mdoc():
         sem.AddToNextFrameStackMdoc(k, v_str)
 
 def checkRonchigramSetup():
+    filepath = getResetOpticsPath()
     ronchi_sem_lib.checkRonchigramSetup()
     #ronchi_sem_lib.ronchiC3Offset = -173.0 # xt_pixel xt_is 88000 1.5 um
     ronchi_sem_lib.ronchiC3Offset = -100.0 # xt_pixel xt_is 54000 1.5 um
+    ronchi_sem_lib.ronchiC3Offset = -130.0 # xt_pixel xt_is 110000 1.5 um
     #ronchi_sem_lib.ronchiC3Offset = -30.0
     #sem.Pause('Please set C3 offset to where you can clearly see the global xLPP center')
     #ronchi_sem_lib.ronchiC3Offset = float(sem.ReportImageDistanceOffset()) - ronchi_sem_lib.ronchiStartC3Offset
@@ -334,7 +344,7 @@ def _calibrate_pixel_xt_matrix(xt_scale, trial_offset_baseline, ronchi_c3_value)
     except Exception as e:
         log(f'Error: Calibration not updated {e} Bad pixel shift measured {pixel_shifts}')
         return np.linalg.inv(scope_to_observed)
-    pixel_residuals = cal_xt_change @ np.linalg.inv(tansform_matrix) - pixel_shifts
+    pixel_residuals = cal_xt_changes @ np.linalg.inv(tansform_matrix) - pixel_shifts
     return pixel_residuals
 
 def calibrateXtPixelMatrix():
@@ -365,7 +375,7 @@ def calibrateLafis():
             if trial > max_trials:
                 raise ValueError('Lafis calibration did not converge.')
             log(f'calibrating lafis_matrix trial {trial:d} with image shift of {cal_image_shift_scale} um')
-               pixel_residual = _refineLafisMatrix(cal_image_shift_scale, trial_offset_baseline, ronchi_offset)
+            pixel_residual = _refineLafisMatrix(cal_image_shift_scale, trial_offset_baseline, ronchi_offset)
             mean_deviation = np.linalg.norm(pixel_residual).mean()
             if mean_deviation < converging_deviation_threshold:
                 break
@@ -420,7 +430,7 @@ if __name__=='__main__':
             # reset image_buffer
             display_util.image_buffer = []
     except Exception as e:
-        log('Failed: e')
+        log(f'Failed: {e}')
         log('Aborting....')
         failed_xt_pixel = True
 
