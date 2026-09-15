@@ -308,6 +308,7 @@ def _refineLafisMatrix(image_shift_scale, trial_offset_baseline, ronchi_offset):
         update_is_xt_matrix(transform_matrix)
     except Exception as e:
         log(f'Error: Calibration not updated {e} Bad xt residuals {xt_residuals_arr}')
+    return pixel_residuals
 
 def update_pixel_xt_matrix(transform_arr):
     global pixel_xt_matrix
@@ -332,7 +333,9 @@ def _calibrate_pixel_xt_matrix(xt_scale, trial_offset_baseline, ronchi_c3_value)
         update_pixel_xt_matrix(transform_matrix)
     except Exception as e:
         log(f'Error: Calibration not updated {e} Bad pixel shift measured {pixel_shifts}')
-    return
+        return np.linalg.inv(scope_to_observed)
+    pixel_residuals = cal_xt_change @ np.linalg.inv(tansform_matrix) - pixel_shifts
+    return pixel_residuals
 
 def calibrateXtPixelMatrix():
     checkRonchigramSetup()
@@ -345,17 +348,28 @@ def calibrateXtPixelMatrix():
     # based on the is_xt_matrix and cal_image_shift_scale
     xt_scale = np.array(is_xt_matrix).mean() * cal_image_shift_scale
     log(f'calibrating pixel_xt_matrix with xt change of {xt_scale} rad')
-    _calibrate_pixel_xt_matrix(xt_scale, trial_offset_baseline, ronchi_offset)
+    pixel_residuals = _calibrate_pixel_xt_matrix(xt_scale, trial_offset_baseline, ronchi_offset)
 
 def calibrateLafis():
     checkRonchigramSetup()
     saveZeroImageShiftDefocusXLens()
     trial_offset_baseline = ronchi_sem_lib.ronchiStartC3Offset
     ronchi_offset = ronchi_sem_lib.ronchiC3Offset
-    cal_image_shift_scale = 5    #in um
-    # Step 2 do a refinement of the existing is_xt_matrix
-    log(f'calibrating lafis_matrix with image shift of {cal_image_shift_scale} um')
-    _refineLafisMatrix(cal_image_shift_scale, trial_offset_baseline, ronchi_offset)
+    cal_image_shift_scales = [1,2.5,5]    #in um
+    converging_deviation_threshold = 10
+    for scale in cal_image_shift_scales:
+        # do a refinement of the existing is_xt_matrix
+        log(f'calibrating lafis_matrix with image shift of {cal_image_shift_scale} um')
+        trial = 1
+        while True:
+            if trial > max_trials:
+                raise ValueError('Lafis calibration did not converge.')
+            log(f'calibrating lafis_matrix trial {trial:d} with image shift of {cal_image_shift_scale} um')
+               pixel_residual = _refineLafisMatrix(cal_image_shift_scale, trial_offset_baseline, ronchi_offset)
+            mean_deviation = np.linalg.norm(pixel_residual).mean()
+            if mean_deviation < converging_deviation_threshold:
+                break
+            trial += 1
     resetOptics() 
 
 def testXtPixel():
@@ -397,13 +411,32 @@ if __name__=='__main__':
     saveZeroImageShiftDefocusXLens()
     readCalibrations()
     ##### calibrate ronchiCorrMatrix
-    calibrateXtPixelMatrix()
-    testXtPixel()
-    ##### lafis
-    #calibrateLafis()
-    saveCalibrations()
-    #testLafis()
-    print(f'pixel_xt_matrix: {pixel_xt_matrix}')
-    print(f'is_xt_matrix: {is_xt_matrix}')
+    failed_xt_pixel = False
+    try:
+        calibrateXtPixelMatrix()
+        saveCalibrations()
+        if display_util.image_buffer:
+            display_util.showImages()
+            # reset image_buffer
+            display_util.image_buffer = []
+    except Exception as e:
+        log('Failed: e')
+        log('Aborting....')
+        failed_xt_pixel = True
+
+       #testXtPixel()
+
+    if not failed_xt_pixel:
+        ##### lafis
+        try:
+            calibrateLafis()
+            saveCalibrations()
+        except Exception as e:
+            log('Failed: e')
+            log('Aborting....')
+        #testLafis()
+    print(f'final pixel_xt_matrix: {pixel_xt_matrix}')
+    if not failed_xt_pixel:
+        print(f'final is_xt_matrix: {is_xt_matrix}')
     if display_util.image_buffer:
         display_util.showImages()
