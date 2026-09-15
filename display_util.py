@@ -5,6 +5,7 @@
 # Author:       Anchi Cheng
 # ===================================================================
 import numpy as np
+import math
 
 image_buffer = []
 
@@ -31,10 +32,15 @@ def addImage(arr, peak=None):
 def showImages():
     import matplotlib.pyplot as plt
     number_of_buffer_images = len(image_buffer)
-    print(number_of_buffer_images)
-    width = number_of_buffer_images * 5
-    fig, ax = plt.subplots(1,number_of_buffer_images, figsize=(width,4))
+    ncols = 8 #number of columns of subplots
+    nrows = int(math.ceil(number_of_buffer_images / ncols))
+    # layout
+    panel_width = 2
+    aspect = 1
+    fig, ax = plt.subplots(nrows, ncols, sharex=True, sharey=True, figsize=(ncols * panel_width, nrows * panel_width * aspect), squeeze=False)
     for i in range(number_of_buffer_images):
-        ax[i].imshow(image_buffer[i])
+        col = i % ncols
+        row = i // ncols
+        ax[row][col].imshow(image_buffer[i])
     plt.tight_layout()
     plt.show()
