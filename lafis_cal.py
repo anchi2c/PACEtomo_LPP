@@ -344,7 +344,7 @@ def _calibrate_pixel_xt_matrix(xt_scale, trial_offset_baseline, ronchi_c3_value)
     except Exception as e:
         log(f'Error: Calibration not updated {e} Bad pixel shift measured {pixel_shifts}')
         return np.linalg.inv(scope_to_observed)
-    pixel_residuals = cal_xt_changes @ np.linalg.inv(tansform_matrix) - pixel_shifts
+    pixel_residuals = cal_xt_changes @ np.linalg.inv(transform_matrix) - pixel_shifts
     return pixel_residuals
 
 def calibrateXtPixelMatrix():
@@ -359,6 +359,7 @@ def calibrateXtPixelMatrix():
     xt_scale = np.array(is_xt_matrix).mean() * cal_image_shift_scale
     log(f'calibrating pixel_xt_matrix with xt change of {xt_scale} rad')
     pixel_residuals = _calibrate_pixel_xt_matrix(xt_scale, trial_offset_baseline, ronchi_offset)
+    print(pixel_residuals)
 
 def calibrateLafis():
     checkRonchigramSetup()
@@ -366,16 +367,17 @@ def calibrateLafis():
     trial_offset_baseline = ronchi_sem_lib.ronchiStartC3Offset
     ronchi_offset = ronchi_sem_lib.ronchiC3Offset
     cal_image_shift_scales = [1,2.5,5]    #in um
-    converging_deviation_threshold = 10
+    max_trials = 3
+    converging_deviation_threshold = 15
     for scale in cal_image_shift_scales:
         # do a refinement of the existing is_xt_matrix
-        log(f'calibrating lafis_matrix with image shift of {cal_image_shift_scale} um')
+        log(f'calibrating lafis_matrix with image shift of {scale} um')
         trial = 1
         while True:
             if trial > max_trials:
                 raise ValueError('Lafis calibration did not converge.')
-            log(f'calibrating lafis_matrix trial {trial:d} with image shift of {cal_image_shift_scale} um')
-            pixel_residual = _refineLafisMatrix(cal_image_shift_scale, trial_offset_baseline, ronchi_offset)
+            log(f'calibrating lafis_matrix trial {trial:d} with image shift of {scale} um')
+            pixel_residual = _refineLafisMatrix(scale, trial_offset_baseline, ronchi_offset)
             mean_deviation = np.linalg.norm(pixel_residual).mean()
             if mean_deviation < converging_deviation_threshold:
                 break
@@ -442,7 +444,7 @@ if __name__=='__main__':
             calibrateLafis()
             saveCalibrations()
         except Exception as e:
-            log('Failed: e')
+            log(f'Failed: {e}')
             log('Aborting....')
         #testLafis()
     print(f'final pixel_xt_matrix: {pixel_xt_matrix}')
