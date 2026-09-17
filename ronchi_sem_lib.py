@@ -74,9 +74,10 @@ def acquire_ronchi_image(trial_offset_baseline, ronchi_offset, sem_acquire_prese
         add_lpp_meta_to_next_mdoc()
         # acquire with preset parameters
         getattr(sem,sem_acquire_preset)()
+        my_image = np.asarray(sem.bufferImage("A"))
     finally:
         sem.SetImageDistanceOffset(trial_offset_baseline)
         #_restore_frame_basename(saved_basename)
     if pass_label:
         log(f"Ronchigram{pass_label}: Trial image acquired.")
-    return np.asarray(sem.bufferImage("A"))
+    return my_image

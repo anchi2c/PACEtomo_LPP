@@ -13,8 +13,8 @@ import serialem as sem
 timestampFormat = "%Y-%m-%d %H:%M:%S %Z"
 
 def log(*args):
-	print(args)
-	pass
+    print(args)
+    pass
 
 def saveCalibration(cal_type, cal_dir, session_name, data):
     cal_path = os.path.join(cal_dir, cal_type+'.jsonl')
@@ -88,3 +88,18 @@ def solveTransform(scope_changes, observed_shifts):
     except Exception as e:
         raise ValueError(f'Can not solve transform matrix. {e}')
 
+def solveLines(x,y):
+    """
+    x is 1D array of n values
+    y is 2D array of (n,m) values where m is differet dataset such
+    as repeating measurement or independent axes.
+    """
+    # matrix stays the same shape: (n_points, 2)
+    A = np.vstack([x, np.ones(len(x))]).T
+    # lstsq solves for all columns of y at once
+    result, residuals, rank, sv = np.linalg.lstsq(A, y, rcond=None)
+
+    # result has shape [slope, intercept] pair per column of y
+    slopes = result[0]      # array of m slopes
+    intercepts = result[1]  # array of m intercepts
+    return slopes, intercepts, residuals

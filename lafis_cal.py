@@ -254,7 +254,7 @@ def xlpp_center_finding(shifted_corr_arr, threshold_factor=0.5):
     laser_center = np.array(ndimage.center_of_mass(laser))
     # peak shift np array 
     corr_shift = np.array(c_center) - laser_center
-    display_util.addImage(laser, corr_shift)
+    display_util.addImage(laser, [corr_shift,])
     return corr_shift
 
 def _find_shift_numpy(img0, img1):
@@ -280,7 +280,7 @@ def _find_shift_sem(img0, img1):
 def _measureLafisResidual(cal_image_shifts, trial_offset_baseline, ronchi_offset):
     img0_array = _acquire_ronchi_image(trial_offset_baseline, ronchi_offset)
     residual_shifts = np.zeros(cal_image_shifts.shape, dtype=np.float32)
-    display_util.addImage(img0_array)
+    #display_util.addImage(img0_array)
     old_cal_xts = []
     for i, my_is in enumerate(cal_image_shifts):
         sem.SetImageShift(my_is[0],my_is[1])
@@ -294,7 +294,6 @@ def _measureLafisResidual(cal_image_shifts, trial_offset_baseline, ronchi_offset
         old_cal_xt_y = lafisXtCorrectionY
         old_cal_xts.append([old_cal_xt_x,old_cal_xt_y])
         restoreLafis()
-    print('old_cal_xts', old_cal_xts[-1])
     print('lafis residual pixel shift x,y', residual_shifts)
     return np.array(old_cal_xts), residual_shifts
 
@@ -339,12 +338,12 @@ def _calibrate_pixel_xt_matrix(xt_scale, trial_offset_baseline, ronchi_c3_value)
         pixel_shifts[i] = np.array(my_shift)
         sem.SetXLensDeflector(2, xt0[0], xt0[1])
     try:
-        transform_matrix = cal_util.solveTransform(cal_xt_changes, pixel_shifts)
-        update_pixel_xt_matrix(transform_matrix)
+        observed_to_change_matrix = cal_util.solveTransform(cal_xt_changes, pixel_shifts)
+        update_pixel_xt_matrix(observed_to_change_matrix)
     except Exception as e:
         log(f'Error: Calibration not updated {e} Bad pixel shift measured {pixel_shifts}')
-        return np.linalg.inv(scope_to_observed)
-    pixel_residuals = cal_xt_changes @ np.linalg.inv(transform_matrix) - pixel_shifts
+        return np.linalg.inv(scope_to_observed_matrix)
+    pixel_residuals = cal_xt_changes @ np.linalg.inv(observed_to_change_matrix) - pixel_shifts
     return pixel_residuals
 
 def calibrateXtPixelMatrix():

@@ -9,18 +9,22 @@ import math
 
 image_buffer = []
 
-def addImage(arr, peak=None):
+def addImage(arr, peaks=[]):
     """
     Add image to image_buffer for display
     # peak is correlation shift with 0,0 unshifted in numpy convention
-    # when peak is specified. arr is wrapped correlation image with unshifted
+    # when peaks are specified. arr is wrapped correlation image with unshifted
     # at the center of the correlation image
     """
     global image_buffer
+    if np.iscomplexobj(arr):
+        arr = np.log1p(np.abs(arr).copy())
+        vmin, vmax = np.percentile(arr, [1, 99])
+        arr = 255*((arr -vmin)/(vmax-vmin))
     image_buffer.append(arr.copy())
 
-    if peak is not None:
-        print('correlation peak (y,x)',peak)
+    for peak in peaks:
+        print('peak (y,x)',peak)
         arr_min_shape = min(arr.shape)
         a = 0.01 * arr_min_shape
         b = 0.04 * arr_min_shape

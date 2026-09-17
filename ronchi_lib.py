@@ -49,9 +49,12 @@ def _ronchi_find_peaks(fourier, radius=100, npeaks=4):
 def _ronchi_find_ks_phases(corrected_fourier, pixel_size_um, npeaks=2, radius=100, binning=1, fourier_size=None):
     if fourier_size is None:
         fourier_size = corrected_fourier.shape[0]
+    import display_util
     peaks, phases = _ronchi_find_peaks(corrected_fourier, radius=radius, npeaks=npeaks * 2)
     ordering = np.argsort(_ronchi_report_angles(peaks, start_angle=-135))
     peaks = peaks[ordering][:npeaks]
+    print('peaks in fft',peaks)
+    display_util.addImage(corrected_fourier, peaks)
     phases = phases[ordering][:npeaks]
     ks = peaks / fourier_size * 1 / (pixel_size_um * binning)
     return ks, phases
