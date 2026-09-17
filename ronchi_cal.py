@@ -41,9 +41,11 @@ def log(text, color=0, style=0):
         sem.SetNextLogOutputStyle(style, color)
     sem.EchoBreakLines(text)
 
-def measure_ronchigram_ks_phases(pixel_size_um, binning,
+def measure_ronchigram_ks_phases_ronchi_lib(pixel_size_um, binning,
                        peak_radius=100, corr_scale=1e-5, pass_label=''):
-    """Set C3Offset, acquire ronchigram and analyze with T preset"""
+    """Set C3Offset, acquire ronchigram and analyze with T preset.
+    Use the analysis in ronchi_lib to measure.  This is faster.
+    """
     trial_offset_baseline = ronchi_sem_lib.ronchiStartC3Offset
     ronchi_offset = ronchi_sem_lib.ronchiC3Offset
     pass_label = 'cal'
@@ -65,7 +67,7 @@ def measure_ronchigram_ks_phases(pixel_size_um, binning,
     return ronchi_lib._ronchi_find_ks_phases(image_fft, pixel_size_um * binning, npeaks=2, radius=peak_radius, binning=1,
                                        fourier_size=image_fft.shape[0])
 
-def measure_ronchigram_ks_phases_leginon(pixel_size_um, binning,
+def measure_ronchigram_ks_phases_real_space(pixel_size_um, binning,
                        peak_radius=100, corr_scale=1e-5, pass_label=''):
     """
     Set C3Offset, acquire ronchigram and analyze with T preset
@@ -77,12 +79,21 @@ def measure_ronchigram_ks_phases_leginon(pixel_size_um, binning,
     pass_label = 'cal'
     image = ronchi_sem_lib.acquire_ronchi_image(trial_offset_baseline, ronchi_offset, sem_acquire_preset='T',pass_label=pass_label)
     display_util.image_buffer.append(image)
-    from leginon import lppfit
+    from ronchi_real_space_fit import lppfit
     results = lppfit.run_2d_fringe_fit(image)
     print('xxx leginon real space results')
     ks = np.array([results[1]['wave_freq'],results[2]['wave_freq']])/pixel_size_um
     phases = np.array([results[1]['wave_phase'],results[2]['wave_phase']])*math.pi/180.0
     return ks, phases
+
+def measure_ronchigram_ks_phases(pixel_size_um, binning,
+                       peak_radius=100, corr_scale=1e-5, pass_label=''):
+    return measure_ronchigram_ks_phases_real_space(pixel_size_um, binning,
+                       peak_radius, corr_scale, pass_label)
+
+    #return measure_ronchigram_ks_phases_ronchi_lib(pixel_size_um, binning,
+    #                   peak_radius, corr_scale, pass_label)
+
 
 def calibrate_ronchigram_phase_correction_matrix(pixel_size_um, binning,
                        measure_scope_shift, peak_radius=100, corr_scale=1e-5,
