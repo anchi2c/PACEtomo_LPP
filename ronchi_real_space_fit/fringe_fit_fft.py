@@ -13,7 +13,7 @@ from scipy.optimize import curve_fit
 
 from ronchi_real_space_fit import lattice
 if __name__=='__main__':
-    from leginon import fringe_fit_real_space
+    from ronchi_real_space_fit import fringe_fit_real_space
 
 def get_hanning(shape):
     hanning_y = numpy.hanning(shape[0])

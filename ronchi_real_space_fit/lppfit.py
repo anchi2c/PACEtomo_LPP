@@ -152,22 +152,22 @@ def show_on_node_on_plane_fit_results(x_data, y_data, offset, slope, amp):
 
 if __name__=='__main__':
     import os, sys
-    from pyami import mrc
+    import mrcfile
     lpp_number = int(input('number of lpp?'))
-    start_n = int(input('start target number?'))
-    total = int(input('total loop number?'))
-    mrc_path_f = input('mrc file path format i.e. "n25jun17a_%05d.mrc"?')
-    rf = '%7.2f\t%7.2f'
-    rf = 'lpp%d\t%7.2f\t shift_to_max in deg %7.2f p-p pixels\t%7.2f image rotation deg'
-    for i in range(total):
-        n = start_n + i
-        print(mrc_path_f, n)
-        mrc_path = mrc_path_f % (n)
+    mrc_path = input('Enter full path for an existing mrc file:')
+    angle1 = float(input('lpp1 wavevector angle in degrees:'))
+    if lpp_number == 2:
+        angle2 = float(input('lpp2 wavevector angle in degrees:'))
+    # End of input
+
+    rf = 'lpp%d: %7.2f\t shift_to_max in deg %7.2f p-p pixels\t%7.2f image rotation deg'
+
+    if True:
         print(mrc_path)
         if not os.access(mrc_path, os.R_OK):
             print('Error: file not accessibale')
             sys.exit(1)
-        a = mrc.read(mrc_path)
+        a = mrcfile.read(mrc_path)
         # test fitting with display
         if lpp_number == 1:
             results = run_1d_fringe_fit(a)
