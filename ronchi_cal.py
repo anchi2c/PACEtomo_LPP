@@ -164,10 +164,26 @@ def calibrate_ronchigram_start_c3(pixel_size_um, binning,
                        c3_correction_factor=20 / 6.85):
     """FFT peak ks -> C3imagingdistance saved as the new ronchiStartC3Offset"""
     c3_delta_scale = 5
-    c3_offset_arr, residuals = _calibrate_ronchigram_start_c3(c3_delta_scale,
+    c3_offset_diff_threshold = 1
+    max_trials = 4
+    trial_offset_baseline0 = ronchi_sem_lib.ronchiStartC3Offset
+    trial = 1
+    while True:
+        if trial >= max_trials:
+            ronchi_sem_lib.ronchiStartC3Offset = trial_offset_baseline0
+            sem.SetImageDistanceOffset(ronchi_sem_lib.ronchiStartC3Offset)
+            log('Maximal trials reached. Aborted and c3 offset restored to original')
+            return
+        c3_offset_arr, residuals = _calibrate_ronchigram_start_c3(c3_delta_scale,
                         pixel_size_um, binning,
                         measure_scope_shift, peak_radius, corr_scale,
                         c3_correction_factor)
+        new_trial_offset_baseline = c3_offset_arr.mean()
+        if abs(c3_offset_arr[1]-c3_offset_arr[0]) < c3_offset_diff_threshold:
+            break
+        ronchi_sem_lib.ronchiStartC3Offset -= c3_delta_scale
+        sem.SetImageDistanceOffset(ronchi_sem_lib.ronchiStartC3Offset)
+        trial += 1
     if display_util.image_buffer:
         display_util.showImages()
     if input('Is this a good ronchiStartC3 ? (Y/N/y/n)').lower() == 'y':
