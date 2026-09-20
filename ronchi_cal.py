@@ -22,6 +22,7 @@ import display_util
 import serialem as sem
 
 count = 0
+debug = False
 
 def log(text, color=0, style=0):
     if text.startswith("DEBUG:") and not debug:
@@ -81,7 +82,7 @@ def measure_ronchigram_ks_phases_real_space(pixel_size_um, binning,
     display_util.image_buffer.append(image)
     from ronchi_real_space_fit import lppfit
     results = lppfit.run_2d_fringe_fit(image)
-    print('xxx leginon real space results')
+    log('DEBUG: real space results')
     ks = np.array([results[1]['wave_freq'],results[2]['wave_freq']])/pixel_size_um
     phases = np.array([results[1]['wave_phase'],results[2]['wave_phase']])*math.pi/180.0
     return ks, phases
@@ -147,13 +148,12 @@ def _calibrate_ronchigram_start_c3(c3_delta_scale,
     # (m,n) m sets of n observed shifts
     observed_shifts = np.vstack([changes,changes]) * 0
     observed_shifts = observed_shifts.T
-    print('ks',observed_shifts)
     c3d0 = trial_offset_baseline0 + ronchi_offset0
     cal_c3d_changes = c3_delta_scale * changes + ronchi_offset0
+    print('c3',cal_c3d_changes, 'delta_scale',c3_delta_scale, 'offset0',ronchi_offset0)
     for i, my_change in enumerate(cal_c3d_changes):
         my_c3d = my_change
         ronchi_sem_lib.ronchiC3Offset = my_change
-        print(f'c3 change {my_change} in on-plane c3 calibration')
         pass_label = f"my_change:.1f"
         ks0, phase0 = measure_ronchigram_ks_phases(pixel_size_um, binning,
                        peak_radius, corr_scale, pass_label)
@@ -178,28 +178,39 @@ def calibrate_ronchigram_start_c3(pixel_size_um, binning,
     c3_offset_diff_threshold = 1
     max_trials = 4
     trial_offset_baseline0 = ronchi_sem_lib.ronchiStartC3Offset
+    ronchi_offset0 = ronchi_sem_lib.ronchiC3Offset
     trial = 1
     while True:
         if trial >= max_trials:
             ronchi_sem_lib.ronchiStartC3Offset = trial_offset_baseline0
             sem.SetImageDistanceOffset(ronchi_sem_lib.ronchiStartC3Offset)
-            log('Maximal trials reached. Aborted and c3 offset restored to original')
+            log(f'Maximal trials reached. ks difference between 2 axes > {c3_offset_diff_threshold}')
+            log('Calibration aborted and start c3 offset restored to original')
             return
-        c3_offset_arr, residuals = _calibrate_ronchigram_start_c3(c3_delta_scale,
+        try:
+            c3_offset_arr, residuals = _calibrate_ronchigram_start_c3(c3_delta_scale,
                         pixel_size_um, binning,
                         measure_scope_shift, peak_radius, corr_scale,
                         c3_correction_factor)
-        new_trial_offset_baseline = c3_offset_arr.mean()
-        if abs(c3_offset_arr[1]-c3_offset_arr[0]) < c3_offset_diff_threshold:
-            break
+            new_trial_offset_baseline = c3_offset_arr.mean()
+            if abs(c3_offset_arr[1]-c3_offset_arr[0]) < c3_offset_diff_threshold:
+                print('Success: Calibration converged')
+                break
+        except ValueError as e:
+            log(f'Error: Ronchigram fitting error {e}')
+        print('current c3',sem.ReportImageDistanceOffset())
+        print('prep for next iter')
         ronchi_sem_lib.ronchiStartC3Offset -= c3_delta_scale
+        print('new ronchi_sem_lib value',ronchi_sem_lib.ronchiStartC3Offset)
         sem.SetImageDistanceOffset(ronchi_sem_lib.ronchiStartC3Offset)
+        ronchi_sem_lib.ronchiC3Offset = ronchi_offset0
         trial += 1
     if display_util.image_buffer:
         display_util.showImages()
     if input('Is this a good ronchiStartC3 ? (Y/N/y/n)').lower() == 'y':
         new_trial_offset_baseline = c3_offset_arr.mean()
         ronchi_sem_lib.ronchiStartC3Offset = new_trial_offset_baseline
+        ronchi_sem_lib.ronchiC3Offset = ronchi_offset0
         sem.SetImageDistanceOffset(new_trial_offset_baseline)
         cal_dir, session_name = cal_util.getCalibrationsDir()
         os.makedirs(cal_dir, exist_ok=True)
@@ -221,7 +232,7 @@ if __name__=='__main__':
     new_ronchi_start_c3 = calibrate_ronchigram_start_c3(pixel_size_um, ronchi_binning,
                        xt_tilt, peak_radius=100, corr_scale=corr_scale,
                        c3_correction_factor=20 / 6.85)
-    print('new C3Offset',ronchi_sem_lib.ronchiStartC3Offset)
+    print('new StartC3Offset',ronchi_sem_lib.ronchiStartC3Offset)
 
     if False:
         corr_matrix = calibrate_ronchigram_phase_correction_matrix(pixel_size_um, ronchi_binning,
