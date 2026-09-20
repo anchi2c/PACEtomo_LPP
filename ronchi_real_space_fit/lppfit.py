@@ -86,6 +86,8 @@ def run_fringe_fit(a,number_of_lpps):
         key = n+1
         result1 = fringe_fit_real_space.run_fringe_fit(a, peaks[key]['image_rotation'], peaks[key]['wave_period'])
         all_results[key] = result1
+    if number_of_lpps == 2:
+        print(f"angle between 2 lpps (degrees): {all_results[2]['image_rotation']-all_results[1]['image_rotation']:.3f}")
     return all_results
 
 def run_1d_fringe_fit(a):

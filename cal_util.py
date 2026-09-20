@@ -94,6 +94,8 @@ def solveLines(x,y):
     y is 2D array of (n,m) values where m is differet dataset such
     as repeating measurement or independent axes.
     """
+    print('solving x',x)
+    print('against y',y)
     # matrix stays the same shape: (n_points, 2)
     A = np.vstack([x, np.ones(len(x))]).T
     # lstsq solves for all columns of y at once

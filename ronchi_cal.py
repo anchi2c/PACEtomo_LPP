@@ -163,12 +163,12 @@ def _calibrate_ronchigram_start_c3(c3_delta_scale,
         slopes, intercepts, residuals = cal_util.solveLines(cal_c3d_changes+trial_offset_baseline0, observed_shifts)
         print('intercepts',intercepts)
         print('slopes',slopes)
-        print('new start_c3', intercepts/slopes)
+        print('new start_c3', -intercepts/slopes)
         print('residuals', residuals)
     except Exception as e:
         log(f'Error: Calibration not updated {e} Bad pixel shift measured {observed_shifts}')
-        return trial_offset_baseline0, np.ones(observed_shifts.shape)*100
-    return intercepts/slopes, residuals
+        return trial_offset_baseline0, np.ones(observed_shifts.shape)*100,True
+    return -intercepts/slopes, residuals, slopes.mean() > 0
 
 def calibrate_ronchigram_start_c3(pixel_size_um, binning,
                        measure_scope_shift, peak_radius=100, corr_scale=1e-5,
@@ -176,50 +176,72 @@ def calibrate_ronchigram_start_c3(pixel_size_um, binning,
     """FFT peak ks -> C3imagingdistance saved as the new ronchiStartC3Offset"""
     c3_delta_scale = 5
     c3_offset_diff_threshold = 1
+    residual_threshold = 2e-6
     max_trials = 4
+    print('starting c3',sem.ReportImageDistanceOffset())
     trial_offset_baseline0 = ronchi_sem_lib.ronchiStartC3Offset
     ronchi_offset0 = ronchi_sem_lib.ronchiC3Offset
     trial = 1
     while True:
-        if trial >= max_trials:
+        if trial > max_trials:
             ronchi_sem_lib.ronchiStartC3Offset = trial_offset_baseline0
             sem.SetImageDistanceOffset(ronchi_sem_lib.ronchiStartC3Offset)
-            log(f'Maximal trials reached. ks difference between 2 axes > {c3_offset_diff_threshold}')
+            print(f'Maximal trials reached. ks difference between 2 axes > {c3_offset_diff_threshold}')
             log('Calibration aborted and start c3 offset restored to original')
             return
         try:
-            c3_offset_arr, residuals = _calibrate_ronchigram_start_c3(c3_delta_scale,
+            c3_offset_arr, residuals, is_fit_slope_positive = _calibrate_ronchigram_start_c3(c3_delta_scale,
                         pixel_size_um, binning,
                         measure_scope_shift, peak_radius, corr_scale,
                         c3_correction_factor)
+            if max(residuals) > residual_threshold:
+                raise ValueError('Bad linear fit. Might have both over and under focus.')
             new_trial_offset_baseline = c3_offset_arr.mean()
             if abs(c3_offset_arr[1]-c3_offset_arr[0]) < c3_offset_diff_threshold:
                 print('Success: Calibration converged')
+                print('new_baseline c3',new_trial_offset_baseline)
                 break
-        except ValueError as e:
+            # not converge but success
+            ronchi_sem_lib.ronchiStartC3Offset -= c3_delta_scale
+            if is_fit_slope_positive:
+                ronchi_sem_lib.ronchiStartC3Offset += ronchi_offset0
+        except (RuntimeError,ValueError) as e:
             log(f'Error: Ronchigram fitting error {e}')
+            print(f'Error: Ronchigram fitting error {e}')
+            print(f'Change baseline offset by {ronchi_offset0}')
+            ronchi_sem_lib.ronchiStartC3Offset += ronchi_offset0
         print('current c3',sem.ReportImageDistanceOffset())
-        print('prep for next iter')
-        ronchi_sem_lib.ronchiStartC3Offset -= c3_delta_scale
+        print(f'trial {trial} prep for next iter')
         print('new ronchi_sem_lib value',ronchi_sem_lib.ronchiStartC3Offset)
         sem.SetImageDistanceOffset(ronchi_sem_lib.ronchiStartC3Offset)
         ronchi_sem_lib.ronchiC3Offset = ronchi_offset0
         trial += 1
     if display_util.image_buffer:
+        sem.SetImageDistanceOffset(new_trial_offset_baseline)
+        sem.T()
+        print('displaying images for validation....')
         display_util.showImages()
     if input('Is this a good ronchiStartC3 ? (Y/N/y/n)').lower() == 'y':
         new_trial_offset_baseline = c3_offset_arr.mean()
         ronchi_sem_lib.ronchiStartC3Offset = new_trial_offset_baseline
         ronchi_sem_lib.ronchiC3Offset = ronchi_offset0
         sem.SetImageDistanceOffset(new_trial_offset_baseline)
+        print('final c3',sem.ReportImageDistanceOffset())
         cal_dir, session_name = cal_util.getCalibrationsDir()
         os.makedirs(cal_dir, exist_ok=True)
         cal_util.saveCalibration('ronchi_start_c3', cal_dir, session_name,new_trial_offset_baseline) 
         return new_trial_offset_baseline
+    else:
+        sem.SetImageDistanceOffset(trial_offset_baseline0)
+        print('final c3',sem.ReportImageDistanceOffset())
 
 if __name__=='__main__':
     ronchi_sem_lib.checkRonchigramSetup()
-    pixel_size_um = sem.ReportCurrentPixelSize('T')
+    pixel_size_angs = sem.ReportCurrentPixelSize('T')
+    binning = sem.ReportBinning('T')
+    mag, *_ = sem.ReportMag()
+    mag_ratio = mag/88000    #88000x is where default -20 was created. 
+    ronchi_sem_lib.ronchiC3Offset *= mag_ratio
     xt_tilt = 1 #(scaled at 1e-5 rad)
     ronchi_binning = 32
     corr_scale = 1e-5
@@ -229,10 +251,10 @@ if __name__=='__main__':
         pixel_size_um = 1.5
 
     # ronchiStartC3 calibration
-    new_ronchi_start_c3 = calibrate_ronchigram_start_c3(pixel_size_um, ronchi_binning,
+    new_ronchi_start_c3 = calibrate_ronchigram_start_c3(pixel_size_angs, ronchi_binning,
                        xt_tilt, peak_radius=100, corr_scale=corr_scale,
                        c3_correction_factor=20 / 6.85)
-    print('new StartC3Offset',ronchi_sem_lib.ronchiStartC3Offset)
+    print('new StartC3Offset',new_ronchi_start_c3)
 
     if False:
         corr_matrix = calibrate_ronchigram_phase_correction_matrix(pixel_size_um, ronchi_binning,
