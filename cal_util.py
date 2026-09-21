@@ -8,7 +8,16 @@ import os
 from datetime import datetime, timezone
 import json
 import numpy as np
-import serialem as sem
+import sys
+import platform
+if platform.system() == 'Windows':
+    is_simu = False
+    sys.path.insert(0, 'C:\Program Files\SerialEM\PythonModules')
+    import serialem as sem
+else:
+    is_simu = True
+    print('testing on Mac/Linux with simulator')
+    import sem_simulator as sem
 
 timestampFormat = "%Y-%m-%d %H:%M:%S %Z"
 

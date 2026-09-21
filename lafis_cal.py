@@ -2,19 +2,12 @@
 # ===================================================================
 #ScriptName     Lafis Calibration
 # Purpose:      Runs Calibration for LAFIS.
-#               Make sure to run selectTargets script first to generate compatible Navigator settings and a target file.
-#               More information at http://github.com/eisfabian/PACEtomo
-# Author:       Fabian Eisenstein
-# Created:      2021/04/16
-# Revision:     v1.9.2c
-# Last Change:  2026/05/27: selectable tilt schemes (dose_symmetric, bidirectional, continuous)
+# Author:       Anchi Cheng
 # ===================================================================
 
 ############ SETTINGS ############ 
 
-########## Ronchigram / laser alignment ##########
-# Trial LD area must match Record position; only exposure should differ.
-# Overridable from target file via _bset (e.g. _bset doRonchigram true).
+########## Ronchigram settings ##########
 # Requires ronchi_sem_lib.hasXLens = True.
 # Settings set in ronchi_sem_lib.py
 ########## END Ronchigram settings ##########
@@ -24,10 +17,11 @@ import platform
 if platform.system() == 'Windows':
     is_simu = False
     sys.path.insert(0, 'C:\Program Files\SerialEM\PythonModules')
+    import serialem as sem
 else:
     is_simu = True
     print('testing on Mac/Linux with simulator')
-import serialem as sem
+    import sem_simulator as sem
 import os
 import copy
 import time

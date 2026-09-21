@@ -11,15 +11,16 @@ import platform
 if platform.system() == 'Windows':
     is_simu = False
     sys.path.insert(0, 'C:\Program Files\SerialEM\PythonModules')
+    import serialem as sem
 else:
     is_simu = True
     print('testing on Mac/Linux with simulator')
+    import sem_simulator as sem
 import ronchi_lib
 import ronchi_sem_lib
 import cal_util
 import display_util
 
-import serialem as sem
 
 count = 0
 debug = False
