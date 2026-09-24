@@ -544,6 +544,8 @@ ronchi_flat_c3_offset = -20.0
 # ImageDistanceOffset at which the reference image below was acquired; it is
 # reproduced unzoomed (zoom_factor == 1).
 ref_c3_offset = -130.0
+# xt correction per um of defocus (the value defocus_xt_cal.py should recover)
+sim_df_xt_vector = np.array([2.0e-4, -1.0e-4])
 if not test_failed:
     sim_arr = mrc.read('./data/c3_offset_-130.mrc') #high underfocus for zoom and croping
     sq_size = int(min(sim_arr.shape)*0.8)
@@ -621,7 +623,9 @@ def bufferImage(*args, **kwargs) -> Any:
         xt_x,xt_y,*_ = ReportXLensDeflector(2)
         shift_from_xt = np.array((xt_x,xt_y)) @ np.linalg.inv(pixel_xt_matrix) * xt_scale
         shift_from_is = np.array((is_x,is_y)) @ np.linalg.inv(pixel_is_matrix) * is_scale
-        shift_x, shift_y = (shift_from_is + shift_from_xt).tolist()
+        # defocus shifts xlpp the same way as xt, opposite to its correction
+        shift_from_df = -defocus * sim_df_xt_vector @ np.linalg.inv(pixel_xt_matrix) * xt_scale
+        shift_x, shift_y = (shift_from_is + shift_from_xt + shift_from_df).tolist()
         print('simu total pixel shift x,y', shift_x, shift_y)
         shift_arr = shift_pad_or_crop(sim_arr, int(shift_y), int(shift_x))
         # sem functions is X,Y

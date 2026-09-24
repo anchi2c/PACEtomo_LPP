@@ -336,7 +336,7 @@ def _calibrate_pixel_xt_matrix(xt_scale, trial_offset_baseline, ronchi_c3_value)
         update_pixel_xt_matrix(observed_to_change_matrix)
     except Exception as e:
         log(f'Error: Calibration not updated {e} Bad pixel shift measured {pixel_shifts}')
-        return np.linalg.inv(scope_to_observed_matrix)
+        return None
     pixel_residuals = cal_xt_changes @ np.linalg.inv(observed_to_change_matrix) - pixel_shifts
     return pixel_residuals
 
@@ -352,6 +352,8 @@ def calibrateXtPixelMatrix():
     xt_scale = np.array(is_xt_matrix).mean() * cal_image_shift_scale
     log(f'calibrating pixel_xt_matrix with xt change of {xt_scale} rad')
     pixel_residuals = _calibrate_pixel_xt_matrix(xt_scale, trial_offset_baseline, ronchi_offset)
+    if pixel_residuals is None:
+        raise ValueError('pixel_xt_matrix calibration failed')
     print(pixel_residuals)
 
 def calibrateLafis():
