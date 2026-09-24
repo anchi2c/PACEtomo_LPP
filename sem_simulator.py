@@ -538,7 +538,12 @@ def AcquireToMatchBuffer(*args, **kwargs) -> None:
     _log("AcquireToMatchBuffer", *args, **kwargs)
 
 import numpy as np
-sim_arr = mrc.read('./data/c3_offset_-20.mrc') #typical ronchi
+# ImageDistanceOffset at which the simulated fringes vanish (the value
+# calibrate_ronchigram_start_c3 should recover).
+ronchi_flat_c3_offset = -20.0
+# ImageDistanceOffset at which the reference image below was acquired; it is
+# reproduced unzoomed (zoom_factor == 1).
+ref_c3_offset = -130.0
 if not test_failed:
     sim_arr = mrc.read('./data/c3_offset_-130.mrc') #high underfocus for zoom and croping
     sq_size = int(min(sim_arr.shape)*0.8)
@@ -622,12 +627,14 @@ def bufferImage(*args, **kwargs) -> Any:
         # sem functions is X,Y
         cropped_arr = CropCenterToSize(shift_arr, cropped_shape[1], cropped_shape[0])
         c3_focus = ReportImageDistanceOffset()
-        start_c3_offset = 20
         if not test_failed:
+            # distance from the fringe-free offset; zoom is the ratio of the
+            # reference image distance to the current one.
+            c3_distance = c3_focus - ronchi_flat_c3_offset
             # avoid division 0
-            if (start_c3_offset+c3_focus) == 0:
-                start_c3_offset+=0.2
-            zoom_factor = abs((start_c3_offset-130)/(start_c3_offset + c3_focus))
+            if c3_distance == 0:
+                c3_distance = 0.2
+            zoom_factor = abs((ref_c3_offset - ronchi_flat_c3_offset)/c3_distance)
         else:
             zoom_factor = 1
         print('****zoom_factor',zoom_factor)
