@@ -38,7 +38,7 @@ tgtMntOverlap   = 0.05      # montage tile overlap as fraction of shorter camera
 debug           = False     # Enables additional output and plots for a few processes (e.g. measureGeo, vecByXCorr)
 
 # Defocus measurement for measure geometry (sem.G(-1) replacement)
-defocusMethod = "ctf"       # ctf | beam_tilt
+defocusMethod = "beam_tilt"       # ctf | beam_tilt
 # False on scopes without XLensDeflector: skip all XLens Report/Set/Restore.
 # Requires doRonchigram = False.
 hasXLens = True
