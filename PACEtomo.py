@@ -2547,7 +2547,9 @@ def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_acc
             position[-1][0]["SSY"] = float(SSY)
             position[-1][0]["focus"] = correctedFocus
             position[-1][0]["z0"] = z0_ini                                                          # offset from eucentric height (will be refined during collection)
-            position[-1][0]["n0"] = float(tgt["SSY"])                                               # offset from tilt axis
+            #position[-1][0]["n0"] = float(tgt["SSY"])                                               # offset from tilt axis
+            _ta = np.radians(8) # JH - tilt axis angle
+            position[-1][0]["n0"] = np.cos(_ta)*float(tgt["SSY"]) - np.sin(_ta)*float(tgt["SSX"]) - tiltAxisOffset # JH
             position[-1][0]["ISXset"] = float(ISXset)
             position[-1][0]["ISYset"] = float(ISYset)
 
