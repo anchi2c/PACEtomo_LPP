@@ -154,8 +154,9 @@ def checkRonchigramSetup():
     filepath = getResetOpticsPath()
     ronchi_sem_lib.checkRonchigramSetup()
     #ronchi_sem_lib.ronchiC3Offset = -173.0 # xt_pixel xt_is 88000 1.5 um
-    ronchi_sem_lib.ronchiC3Offset = -100.0 # xt_pixel xt_is 54000 1.5 um
-    ronchi_sem_lib.ronchiC3Offset = -130.0 # xt_pixel xt_is 110000 1.5 um
+    #ronchi_sem_lib.ronchiC3Offset = -100.0 # xt_pixel xt_is 54000 1.5 um
+    ronchi_sem_lib.ronchiC3Offset = -90.0 # xt_pixel xt_is 54000 1.35 um spot 6
+    #ronchi_sem_lib.ronchiC3Offset = -130.0 # xt_pixel xt_is 110000 1.5 um
     #ronchi_sem_lib.ronchiC3Offset = -30.0
     #sem.Pause('Please set C3 offset to where you can clearly see the global xLPP center')
     #ronchi_sem_lib.ronchiC3Offset = float(sem.ReportImageDistanceOffset()) - ronchi_sem_lib.ronchiStartC3Offset
