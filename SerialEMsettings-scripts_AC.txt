@@ -348,6 +348,7 @@ if __name__ == "__main__":
     main()
 EndMacro
 Macro	1
+#!Python
 EndMacro
 Macro	2
 #!Python
@@ -501,8 +502,10 @@ def main():
    sem.SetXLensDeflector(2, xt1[0], xt1[1])
    sem.SetDefocus(df1)
    is2, bt2, xt2, stg2, df2 = get_values()
-   #Enable the next line so the AjustBeamTiltforIS is still applied before script ends.
-   sem.T()
+   #When running directly from SEM scripting gui, AdjustBeamTiltIS is reset at the end.
+   #Enable the next line so the AjustBeamTiltforIS is still applied for the test image before script ends.
+   # WARNING: BETTER use Script 12 for testing.
+   #sem.T()
    #sem.FixComaByCTF(1,1,0)
    #sem.SetXLensDeflector(2, xt0[0], xt0[1])
 
@@ -533,7 +536,6 @@ def reset_ronchi_measure_count():
         sem.AddToNextFrameStackMdoc(f'RonchiPhases{c1:02d}','')
 
 reset_ronchi_measure_count()
-
 EndMacro
 Macro	5
 #!Python
@@ -1042,7 +1044,7 @@ target_phase_A=  1.73232507 # Vertical Laser
 target_phase_B = -2.58469986 # Horizontal Laser
 
 if sem_params:
- 	ronchiMeasureCount = sem_params[0]
+ 	ronchiMeasureCount = int(sem_params[0])
 else:
     ronchiMeasureCount = 1
 
@@ -1346,16 +1348,17 @@ sem.SetImageDistanceOffset(data['c3_offset'])
 sem.Echo('Value reset')
 EndMacro
 Macro	11
-MacroName LAFIS coma test on multiple image shift
+MacroName LAFIS test on multiple image shift
 #calls script 4 and script 8 as seen in SEM Script Editor (Base 1)
+#Best to use this to confirm Script4 calibration
 
 #SETTINGS
-number_of_iter = 5
-step = 2.5 # image shift step in um
+number_of_iter = 2
+step = 5 # image shift step in um
 with_laser = 1
 do_coma_measurement = 0
 number_of_ronchi_iter = 3
-data_pattern = p26jul23a_xg_all_test11
+data_pattern = my_xg_all_test5
 data_filename = $data_pattern.json
 SetFrameBaseName 1 1 0 $data_pattern
 
@@ -1426,8 +1429,8 @@ Loop $number_of_iter i
       if $with_laser > 0
          Echo ---Laser on-plane on-node correction---
          #Laser magic phase correction. measurement count is passed as argument
-         Loop $number_of_ronchi_iter j
-            CallScript 8 $j
+         Loop $number_of_ronchi_iter k
+            CallScript 8 $k
          EndLoop
          ReportImageShift
          ReportBeamTilt
@@ -1438,7 +1441,7 @@ Loop $number_of_iter i
          CallScript 14
          R
          # reset ronchi measurement count for keys used
-         CallScript 3 $number_of_ronchi_iter
+         CallScript 8 $number_of_ronchi_iter
       endif
       #reset all values in python (Base 1 in Script Editor but Base 0 in the script.txt file)
       CallScript 11
@@ -1522,6 +1525,7 @@ for k,v in (
 EndMacro
 Macro	14
 MacroName Script15 Running Ron-IP iSerialem native SPA stage-shift workflow
+number_of_ronchi_iter = 3
 #run Ron-IP 3x
    Loop $number_of_ronchi_iter j
       CallScript 8 $j
@@ -2467,5 +2471,5 @@ Macro	68
 ReportImageShift
 EndMacro
 Macro	69
-SetImageShift 0 5
+SetImageShift 0 0
 EndMacro
