@@ -348,29 +348,6 @@ if __name__ == "__main__":
     main()
 EndMacro
 Macro	1
-#!Python
-import serialem as sem
-import time
-
-def echo_beamtilt():
-    beam_tilt = sem.ReportBeamTilt()
-    tilt_x = float(beam_tilt[0])
-    tilt_y = float(beam_tilt[1])
-    sem.Echo(f"beamtilt {tilt_x:.3f}, {tilt_y:.3f} um")
-    return tilt_x, tilt_y
-
-sem.Echo("***TestBeamTilt***")
-tilt_x_orig, tilt_y_orig = echo_beamtilt()
-tilt_x_plus = tilt_x_orig +10*1.7335
-
-sem.SetBeamTilt(tilt_x_plus, tilt_y_orig)
-echo_beamtilt()
-time.sleep(5)
-
-sem.SetBeamTilt(tilt_x_orig, tilt_y_orig)
-echo_beamtilt()
-#sem.SetBeamTilt(0.0,0.0)
-#echo_beamtilt()
 EndMacro
 Macro	2
 #!Python
@@ -533,28 +510,30 @@ if __name__=='__main__':
     main()
 EndMacro
 Macro	4
-#LAFIS in serialem scripting : Works now by using $ReportedValue1 $ReportedValue2
+#!Python
+# ===================================================================
+# ScriptName     reset frame stack mdoc ronchi results
+# Purpose:       Set mdoc keys related to ronchi analysis to empty
+#                string to make sure it is not duplicated
+# Author:        Josh Dickerson; Generated from PACEtomo
+# ===================================================================
+# use SEMargStrings to pass parameter from SEM scripting
+sem_params = SEMargStrings
 
-# TODO: this gives xt0x as the y value, not x value.
-SetXLensDeflector 2 0.1 0.2
-ReportXLensDeflector 2 xt0x xt0y
-Echo Direct assign through Report command
-Echo got_second_axis $xt0x
-#Error: Echo $xt0y fails as not defined
-#Echo $xt0y
+if sem_params:
+ 	ronchiMaxMeasureCount = sem_params[0]
+else:
+    ronchiMaxMeasureCount = 1
 
-# assign through ReportedValues does not retain the value when another Report command is called.
-xt1x = $ReportedValue1
-xt1y = $ReportedValue2
-Echo $xt1x
-Echo $xt1y
+def reset_ronchi_measure_count():
+    global ronchiMaxMeasureCount
+    for c0 in range(ronchiMaxMeasureCount):
+		c1 = c0 + 1 #base 1
+        sem.AddToNextFrameStackMdoc(f'RonchiKs{c1:02d}', '')
+        sem.AddToNextFrameStackMdoc(f'RonchiPhases{c1:02d}','')
 
-SetXLensDeflector 2 0 0
-ReportXLensDeflector 2 xt2x xt2y
+reset_ronchi_measure_count()
 
-Echo sending_the_variable_assigned_got updated_by_the_new_report
-SetXLensDeflector 2 $xt1x $xt1y
-ReportXLensDeflector 2
 EndMacro
 Macro	5
 #!Python
@@ -1056,10 +1035,16 @@ c3offset = -20
 pixel_size = 0.98e-4 * 2 #um
 binning = 32
 
-# target_phase measured in ronchi_measurement
+# use SEMargStrings to pass parameter from SEM scripting
+sem_params = SEMargStrings
 
 target_phase_A=  1.73232507 # Vertical Laser
 target_phase_B = -2.58469986 # Horizontal Laser
+
+if sem_params:
+ 	ronchiMeasureCount = sem_params[0]
+else:
+    ronchiMeasureCount = 1
 
 # target_ks 2D matrix measured in ronchi_measure
 correct_ks = np.array([[9.342, -0.545],   [0.895, 8.875]])
@@ -1204,11 +1189,14 @@ ks, phases = find_ks_phases(imageFFT, pixel_size * binning)
 sem.Echo("A")
 sem.Echo("Measured Fringe Spacing")
 sem.Echo(np.array2string(ks, formatter = {'float_kind':lambda x: "%.3f" % x}))
+# add to frame stack mdoc
+sem.AddToNextFrameStackMdoc(f'RonchiKs{ronchiMeasureCount:02d}', f"{np.array2string(ks.ravel(), precision=4)[1:-1]}")
 sem.Echo("Measured - Reference")
 ks_err = ks-correct_ks
 sem.Echo(np.array2string(ks_err,  formatter = {'float_kind':lambda x: "%.3f" % x}))
 sem.Echo("Measured Phase")
 sem.Echo(np.array2string(phases))
+sem.AddToNextFrameStackMdoc(f'RonchiPhases{ronchiMeasureCount:02d}',f"{phases[0]:.3f}    {phases[1]:.3f}")
 
 phase_err_A = np.mod(phases[0] - target_phase_A + np.pi, 2*np.pi) - np.pi
 phase_err_B = np.mod(phases[1] - target_phase_B + np.pi, 2*np.pi) - np.pi
@@ -1366,6 +1354,7 @@ number_of_iter = 5
 step = 2.5 # image shift step in um
 with_laser = 1
 do_coma_measurement = 0
+number_of_ronchi_iter = 3
 data_pattern = p26jul23a_xg_all_test11
 data_filename = $data_pattern.json
 SetFrameBaseName 1 1 0 $data_pattern
@@ -1436,10 +1425,10 @@ Loop $number_of_iter i
 
       if $with_laser > 0
          Echo ---Laser on-plane on-node correction---
-         #Laser magic phase correction
-         CallScript 8   
-         CallScript 8   
-         CallScript 8    
+         #Laser magic phase correction. measurement count is passed as argument
+         Loop $number_of_ronchi_iter j
+            CallScript 8 $j
+         EndLoop
          ReportImageShift
          ReportBeamTilt
          ReportXLensDeflector 2
@@ -1448,6 +1437,8 @@ Loop $number_of_iter i
          SetFrameBaseName 0 1 0 $base_rip
          CallScript 14
          R
+         # reset ronchi measurement count for keys used
+         CallScript 3 $number_of_ronchi_iter
       endif
       #reset all values in python (Base 1 in Script Editor but Base 0 in the script.txt file)
       CallScript 11
@@ -1486,16 +1477,20 @@ xt0_y = $ReportedValue2
 CallScript 4
 #End LAFIS
 if $with_laser > 0
-   #RIP 5 times
-   CallScript 8
-   CallScript 8
-   CallScript 8
+   #RIP 3 times
+   Loop $number_of_ronchi_iter j
+      CallScript 8 $j
+   EndLoop
    SetFrameBaseName 1 1 0 $base0
 endif
 # End Optical Modification
 
 CallScript 14    #save extra meta in mdoc
 R
+if $with_laser > 0
+   # reset ronchi measurement count for keys used
+   CallScript 3 $number_of_ronchi_iter
+endif
 
 #ReportXLensDeflector 2
 #Echo ......AFTER XT $ReportedValue1 $ReportedValue2
@@ -1528,11 +1523,13 @@ EndMacro
 Macro	14
 MacroName Script15 Running Ron-IP iSerialem native SPA stage-shift workflow
 #run Ron-IP 3x
-   CallScript 8
-   CallScript 8
-   CallScript 8
+   Loop $number_of_ronchi_iter j
+      CallScript 8 $j
+   EndLoop
 #record image, since this is replacing the serialEM acquisition routine
 R
+   # reset ronchi measurement count for keys used
+   CallScript 3 $number_of_ronchi_iter
 EndMacro
 Macro	15
 #MacroName Script16 Cold FEG flashing with try catch and only if advised
@@ -2139,6 +2136,7 @@ ScriptName DefocusSeries
 base = lppons4
 step = 0.1
 nimg = 31
+number_of_ronchi_iter = 3
 
 ReportDefocus
 startDef = $reportedValue1
@@ -2146,10 +2144,12 @@ startDef = $reportedValue1
 Loop $nimg i
    idx = $i + 100
    OpenNewFile $base-$idx.mrc
-   CallScript 8
-   CallScript 8
-   CallScript 8
+   Loop $number_of_ronchi_iter j
+      CallScript 8 $j
+   EndLoop
    Record
+   # reset ronchi measurement count for keys used
+   CallScript 3 $number_of_ronchi_iter
    SetXLensDeflector 2 -0.000944 -0.000011
    Save
    CloseFile
