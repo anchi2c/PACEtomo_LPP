@@ -30,8 +30,10 @@ def addImage(arr, peaks=[]):
         b = 0.04 * arr_min_shape
         c = np.array(arr.shape)//2
         fill = (arr.max()-arr.min())*2 + arr.max()
-        image_buffer[-1][int(c[0]-a):int(c[0]+a),int(c[1]-a):int(c[1]+a)] = fill 
+        #show peak
         image_buffer[-1][int(-peak[0]+c[0]-b):int(-peak[0]+c[0]+b),int(-peak[1]+c[1]-b):int(-peak[1]+c[1]+b)] = fill
+        #show center
+        image_buffer[-1][int(c[0]-a):int(c[0]+a),int(c[1]-a):int(c[1]+a)] = fill*0.8
 
 def showImages():
     import matplotlib.pyplot as plt

@@ -47,21 +47,19 @@ log = lafis_cal.log
 def saveCalibrations():
     cal_dir, session_name = cal_util.getCalibrationsDir()
     os.makedirs(cal_dir, exist_ok=True)
-    mag,*_ = sem.ReportMag()
-    cal_util.saveCalibration('pixel_xt_matrix_%d' % int(mag), cal_dir, session_name,pixel_xt_matrix)
+    optics = cal_util.getOpticsKey(ronchi_sem_lib.ronchiC3Offset)
+    cal_util.saveCalibration('pixel_xt_matrix', cal_dir, session_name,pixel_xt_matrix, optics)
     cal_util.saveCalibration('df_xt_vector', cal_dir, session_name,df_xt_vector)
 
 def readCalibrations():
     global pixel_xt_matrix, df_xt_vector
-    # lafis_cal is_xt_matrix is used to scale xt change in calibrateXtPixelMatrix
+    # lafis_cal reads pixel_xt_matrix of the current optics and
+    # is_xt_matrix used to scale xt change in calibrateXtPixelMatrix
     lafis_cal.readCalibrations()
+    pixel_xt_matrix = lafis_cal.pixel_xt_matrix
     cal_dir, session_name = cal_util.getCalibrationsDir()
-    mag,*_ = sem.ReportMag()
     # read calibrations from file. Only replace hardcoded default if
     # there is saved value
-    r = cal_util.readCalibration('pixel_xt_matrix_%d' % int(mag), cal_dir)
-    if r:
-        pixel_xt_matrix = r
     r = cal_util.readCalibration('df_xt_vector', cal_dir)
     if r:
         df_xt_vector = r

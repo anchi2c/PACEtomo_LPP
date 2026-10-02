@@ -20,6 +20,8 @@ import numpy as np
 import scipy.ndimage as ndimage
 
 file_count = 0
+spot_size = 1
+illuminated_area = 1.0
 c3_offset = 0.0
 x_tilt = (0.0,0.0)
 image_shift = (0.0,0.0)
@@ -134,6 +136,26 @@ def ReportColumnOrGunValve(*args, **kwargs) -> int:
 
 def SetColumnOrGunValve(*args, **kwargs) -> None:
     _log("SetColumnOrGunValve", *args, **kwargs)
+
+
+def ReportSpotSize(*args, **kwargs) -> int:
+    _log("ReportSpotSize", *args, **kwargs)
+    return spot_size
+
+def SetSpotSize(*args, **kwargs) -> None:
+    _log("SetSpotSize", *args, **kwargs)
+    global spot_size
+    spot_size = args[0]
+
+
+def ReportIlluminatedArea(*args, **kwargs) -> float:
+    _log("ReportIlluminatedArea", *args, **kwargs)
+    return illuminated_area
+
+def SetIlluminatedArea(*args, **kwargs) -> None:
+    _log("SetIlluminatedArea", *args, **kwargs)
+    global illuminated_area
+    illuminated_area = args[0]
 
 
 # ---------------------------------------------------------------------------
@@ -602,11 +624,11 @@ def bufferImage(*args, **kwargs) -> Any:
     their values and scale the value to create a shift.
     """
     import cal_util
-    mag,*_ = ReportMag()
+    import ronchi_sem_lib
     cal_dir, session_name = cal_util.getCalibrationsDir()
-    pixel_xt_matrix = cal_util.readCalibration('pixel_xt_matrix_%d' % int(mag), cal_dir)
+    pixel_xt_matrix = cal_util.readCalibration('pixel_xt_matrix', cal_dir, cal_util.getOpticsKey(ronchi_sem_lib.ronchiC3Offset))
     if pixel_xt_matrix is None:
-        pixel_xt_matrix = np.array([[1.115e-6, 1.2858e-6],[5.903e-6, -3.3343e-7]])  #starting guess mrad/pixel
+        pixel_xt_matrix = np.array([[1.115e-7, 5.9858e-7],[-5.903e-7, 1.3343e-7]])  #starting guess mrad/pixel
     else:
         pixel_xt_matrix = np.array(pixel_xt_matrix)
     pixel_is_matrix = np.array([[ 0.07404388, -0.02263578],

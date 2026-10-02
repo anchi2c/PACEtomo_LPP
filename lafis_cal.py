@@ -113,26 +113,32 @@ def log(text, color=0, style=0):
     sem.EchoBreakLines(text)
 
 def saveCalibrations():
-    #TODO save matrix as json
+    """
+    Save calibrations in jsonl format.
+    """
     cal_dir, session_name = cal_util.getCalibrationsDir()
     os.makedirs(cal_dir, exist_ok=True)
-    mag,*_ = sem.ReportMag()
-    cal_util.saveCalibration('pixel_xt_matrix_%d' % int(mag), cal_dir, session_name,pixel_xt_matrix) 
-    cal_util.saveCalibration('is_xt_matrix', cal_dir, session_name,is_xt_matrix) 
-    cal_util.saveCalibration('df_is_matrix', cal_dir, session_name,df_is_matrix) 
+    optics = cal_util.getOpticsKey(ronchi_sem_lib.ronchiC3Offset)
+    cal_util.saveCalibration('pixel_xt_matrix', cal_dir, session_name,pixel_xt_matrix, optics)
+    cal_util.saveCalibration('is_xt_matrix', cal_dir, session_name,is_xt_matrix, optics)
+    cal_util.saveCalibration('df_is_matrix', cal_dir, session_name,df_is_matrix)
 
 def readCalibrations():
     global pixel_xt_matrix, is_xt_matrix, df_is_matrix
     cal_dir, session_name = cal_util.getCalibrationsDir()
-    mag,*_ = sem.ReportMag()
+    optics = cal_util.getOpticsKey(ronchi_sem_lib.ronchiC3Offset)
     # read calibrations from file. Only replace hardcoded default if
     # there is saved value
-    r = cal_util.readCalibration('pixel_xt_matrix_%d' % int(mag), cal_dir)
+    r = cal_util.readCalibration('pixel_xt_matrix', cal_dir, optics)
     if r:
         pixel_xt_matrix = r
-    r = cal_util.readCalibration('is_xt_matrix', cal_dir)
+    else:
+        log(f'WARNING: no pixel_xt_matrix saved for {optics}, using default')
+    r = cal_util.readCalibration('is_xt_matrix', cal_dir, optics)
     if r:
         is_xt_matrix = r
+    else:
+        log(f'WARNING: no is_xt_matrix saved for {optics}, using default')
     r = cal_util.readCalibration('df_is_matrix', cal_dir)
     if r:
         df_is_matrix = r
@@ -354,7 +360,7 @@ def calibrateXtPixelMatrix():
     pixel_residuals = _calibrate_pixel_xt_matrix(xt_scale, trial_offset_baseline, ronchi_offset)
     if pixel_residuals is None:
         raise ValueError('pixel_xt_matrix calibration failed')
-    print(pixel_residuals)
+    print('pixel_residuals', pixel_residuals)
 
 def calibrateLafis():
     checkRonchigramSetup()
@@ -419,6 +425,7 @@ if __name__=='__main__':
     readCalibrations()
     ##### calibrate ronchiCorrMatrix
     failed_xt_pixel = False
+
     try:
         calibrateXtPixelMatrix()
         saveCalibrations()
@@ -431,7 +438,7 @@ if __name__=='__main__':
         log('Aborting....')
         failed_xt_pixel = True
 
-       #testXtPixel()
+    #testXtPixel()
 
     if not failed_xt_pixel:
         ##### lafis
