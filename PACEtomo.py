@@ -18,17 +18,17 @@ maxTilt         = 45        # maximum absolute tilt angle [degrees]
 step            = 3         # tilt step [degrees]
 groupSize       = 2         # group size for dose_symmetric scheme (contiguous images per side before switching)
 tiltScheme      = "dose_symmetric"  # dose_symmetric | bidirectional | continuous
-minDefocus      = -0.5        # minimum defocus [microns] of target range (low defocus)
+minDefocus      = -1.5        # minimum defocus [microns] of target range (low defocus)
 maxDefocus      = -1.5        # maximum defocus [microns] of target range (high defocus)
 stepDefocus     = 0.5       # step [microns] between target defoci (between TS)
 
-focusSlope      = 0.0       # [DEPRECATED] empirical linear focus correction [microns per degree] (obtained by linear regression of CTF fitted defoci over tilt series; microscope stage dependent)
+focusSlope      = -0.004       # [DEPRECATED] empirical linear focus correction [microns per degree] (obtained by linear regression of CTF fitted defoci over tilt series; microscope stage dependent)
 delayIS         = 2.0      # delay [s] between applying image shift and Record
 delayTilt       = 2.0       # delay [s] after stage tilt
 zeroExpTime     = 0         # set to exposure time [s] used for start tilt image, if 0: use same exposure time for all tilt images
 zeroDefocus     = 0         # set to defocus [microns] used for start tilt image, if 0: use same defocus for all tilt images
 
-nav_item_list   = [1]        # e.g. [5, 10, 15]; empty = current nav item only (SetSelectedNavItem, SerialEM 4.2+)
+nav_item_list   = [235]        # e.g. [5, 10, 15]; empty = current nav item only (SetSelectedNavItem, SerialEM 4.2+)
 nav_pretilt_list = []       # parallel to nav_item_list; fall back to global pretilt when empty
 nav_rotation_list = []      # parallel to nav_item_list; fall back to global rotation when empty
 nav_start_defocus_list = [] # parallel to nav_item_list; objective defocus [um] before autofocus; else default_nav_start_defocus
@@ -69,8 +69,8 @@ extendedMdoc    = True      # saves additional info to .mdoc file
 slowTilt        = False     # do backlash step for all tilt angles, on bad stages large tilt steps are less accurate
 fixedStageTilt  = False     # keep stage at fixedStageTiltAngle while running the full scheduled tilt series
 fixedStageTiltAngle = 0.0   # physical stage angle [degrees] when fixedStageTilt is True
-taOffsetPos     = -1.71         # additional tilt axis offset values [microns] applied to calculations for positive and...
-taOffsetNeg     = -1.71         # ...negative branch of the tilt series (possibly useful for side-entry holder systems)
+taOffsetPos     = 0         # additional tilt axis offset values [microns] applied to calculations for positive and...
+taOffsetNeg     = 0         # ...negative branch of the tilt series (possibly useful for side-entry holder systems)
 checkDewar      = True      # check if dewars are refilling before every acquisition
 cryoARM         = False     # if you use a JEOL cryoARM TEM, this will keep the dewar refilling in sync
 coldFEG         = True     # if you use a cold FEG, this will flash the gun whenever the dewars are being refilled
@@ -136,9 +136,9 @@ ronchiC3Offset     = -20          # added to ReportImageDistanceOffset before Tr
 ronchiDelay        = 1.0          # seconds after C3 offset change
 ronchiBinning      = 32
 ronchiPixelSize    = 0.98e-4 * 2 # um (unbinned; multiplied by binning in analysis)
-ronchiTargetPhaseA = -1.93941993           # vertical laser (rad)
-ronchiTargetPhaseB = 1.67658165        # horizontal laser (rad)
-ronchiCorrectKs    = [[9.303, -0.662] ,  [0.856 ,8.680]]
+ronchiTargetPhaseA = 0.48524           # vertical laser (rad)
+ronchiTargetPhaseB = -2.919554        # horizontal laser (rad)
+ronchiCorrectKs    = [[9.809, -0.701],   [0.895, 9.381]]
 ronchiPeakRadius   = 100
 ronchiMontage      = True         # also run before montage tile Record shots
 ronchiCorrMatrix   = [[0.212, 1.28], [1.22, -0.243]]  # phase-to-deflector coupling, scaled by 1e-5
@@ -163,7 +163,8 @@ ronchiC3CorrectionFactor = abs(ronchiC3Offset) / avg_norm  # um offset per um^-1
 # calibration matrix applied when beamTiltComp == True on xlpp
 # Requires hasXLens = True and beamTiltComp = True to be meaningful.
 
-xt_is_matrix = [[0.000324, -0.000347],[0.001100, 0.00028125]]  #26jul23
+#xt_is_matrix = [[0.000324, -0.000347],[0.001100, 0.00028125]]  #26jul23
+xt_is_matrix = [[0.00024965200894843043, -0.0002568478985382952], [0.0008983, 0.000260]] #26sep29a recal
 df_is_matrix = [[0.041381,0.012342], [0.041381,0.012342]]
 
 lafisZeroImageShiftDefocus = None            # set from saveZeroImageShiftDefocusXLens before doLafis
@@ -1556,8 +1557,9 @@ def Tilt(tilt):
                 log("WARNING: Tilt series file already exists. Existing file was renamed.")
             # Use ".openTS" postfix to make sure live processing don't start until
             # tilt series is finished
-            lockfile = target[targets[pos][["tsfile"]+".openTS"
-               sem.OpenNewFile(lockfile)
+            lockfile = targets[pos]["tsfile"]+".openTS"
+            with open(lockfile, "w"):
+                pass
             sem.OpenNewFile(targets[pos]["tsfile"])
             if not tgtPattern and "tgtfile" in targets[pos].keys():
                 if refFromPreview:
@@ -1583,7 +1585,8 @@ def Tilt(tilt):
         position[pos][pn]["focus"] += focuscorrection
         position[pos][pn]["focus"] -= focuschange
 
-        sem.SetDefocus(position[pos][pn]["focus"])
+        #sem.SetDefocus(position[pos][pn]["focus"])
+        sem.SetDefocus(position[pos][pn]["focus"] - (0.38*position[pos][0]["SSX"] - 0.46*position[pos][0]["SSY"])*realTilt/1000.0) # JH
         if zeroDefocus != 0 and tilt == startTilt:
             sem.ChangeFocus(zeroDefocus - maxDefocus)
 
