@@ -1554,9 +1554,10 @@ def Tilt(tilt):
                     sem.CloseFile()
                 os.replace(os.path.join(curDir, targets[pos]["tsfile"]), os.path.join(curDir, targets[pos]["tsfile"]) + "~")
                 log("WARNING: Tilt series file already exists. Existing file was renamed.")
-			# Use ".openTS" postfix to make sure live processing don't start until
-			# tilt series is finished
-			sem.OpenNewFile(targets[pos]["tsfile"+".openTS")
+            # Use ".openTS" postfix to make sure live processing don't start until
+            # tilt series is finished
+            lockfile = target[targets[pos][["tsfile"]+".openTS"
+               sem.OpenNewFile(lockfile)
             sem.OpenNewFile(targets[pos]["tsfile"])
             if not tgtPattern and "tgtfile" in targets[pos].keys():
                 if refFromPreview:
@@ -2706,8 +2707,15 @@ def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_acc
                     sortTS(target["tsfile"])
                 if binFinalStack > 1:
                     binStack(target["tsfile"], binFinalStack)
-	# Remove lock file for live processing
-	os.remove(target["tsfile"]+".openTS")
+
+    # Remove lock file for live processing
+    for target in targets:
+        lockfile = target["tsfile"]+".openTS"
+        try:
+            os.remove(lockfile)
+            log(f"NOTE: {lockfile} was removed for live processing")
+        except FileNotFoundError:
+            log(f"WARNING: {lockfile} was not present for unlocking")
 
     totalTime = round(sem.ReportClock() / 60, 1)
     perTime = round(totalTime / len(position), 1)
