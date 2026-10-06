@@ -272,7 +272,7 @@ if __name__=='__main__':
     if is_simu:
         corr_scale = 3e-3
         ronchi_binning = 1
-        pixel_size_um = 1.5
+        pixel_size_angs = 1.5
 
     if False:
         # ronchiStartC3 calibration
@@ -282,7 +282,7 @@ if __name__=='__main__':
         print('new StartC3Offset',new_ronchi_start_c3)
 
     if True:
-        measure_and_save_reference_ronchigram_ks_phases(pixel_size_um, ronchi_binning,
+        measure_and_save_reference_ronchigram_ks_phases(pixel_size_angs, ronchi_binning,
                        corr_scale=corr_scale)
 
     if False:
