@@ -112,44 +112,6 @@ def log(text, color=0, style=0):
         sem.SetNextLogOutputStyle(style, color)
     sem.EchoBreakLines(text)
 
-def saveCalibrations():
-    """
-    Save calibrations in jsonl format.
-    """
-    cal_dir, session_name = cal_util.getCalibrationsDir()
-    os.makedirs(cal_dir, exist_ok=True)
-    optics = cal_util.getOpticsKey(ronchi_sem_lib.ronchiC3Offset)
-    cal_util.saveCalibration('pixel_xt_matrix', cal_dir, session_name,pixel_xt_matrix, optics)
-    cal_util.saveCalibration('is_xt_matrix', cal_dir, session_name,is_xt_matrix, optics)
-    cal_util.saveCalibration('df_is_matrix', cal_dir, session_name,df_is_matrix)
-
-def readCalibrations():
-    global pixel_xt_matrix, is_xt_matrix, df_is_matrix
-    cal_dir, session_name = cal_util.getCalibrationsDir()
-    optics = cal_util.getOpticsKey(ronchi_sem_lib.ronchiC3Offset)
-    # read calibrations from file. Only replace hardcoded default if
-    # there is saved value
-    r = cal_util.readCalibration('pixel_xt_matrix', cal_dir, optics)
-    if r:
-        pixel_xt_matrix = r
-    else:
-        log(f'WARNING: no pixel_xt_matrix saved for {optics}, using default')
-    r = cal_util.readCalibration('is_xt_matrix', cal_dir, optics)
-    if r:
-        is_xt_matrix = r
-    else:
-        log(f'WARNING: no is_xt_matrix saved for {optics}, using default')
-    r = cal_util.readCalibration('df_is_matrix', cal_dir)
-    if r:
-        df_is_matrix = r
-
-def add_lpp_meta_to_next_mdoc():
-    for k,v in (
-            ('ImageDistanceOffset', sem.ReportImageDistanceOffset()),
-        ):
-        v_str = '%.12f' % (float(v))
-        sem.AddToNextFrameStackMdoc(k, v_str)
-
 def checkRonchigramSetup():
     filepath = getResetOpticsPath()
     ronchi_sem_lib.checkRonchigramSetup()
@@ -160,6 +122,46 @@ def checkRonchigramSetup():
     #ronchi_sem_lib.ronchiC3Offset = -30.0
     #sem.Pause('Please set C3 offset to where you can clearly see the global xLPP center')
     #ronchi_sem_lib.ronchiC3Offset = float(sem.ReportImageDistanceOffset()) - ronchi_sem_lib.ronchiStartC3Offset
+
+def saveCalibrations():
+    """
+    Save calibrations in jsonl format.
+    """
+    working_dir = sem.ReportDirectory()
+    cal_dir, session_name = cal_util.getCalibrationsDir(working_dir)
+    os.makedirs(cal_dir, exist_ok=True)
+    optics = ronchi_sem_lib.getOpticsKey(ronchi_sem_lib.ronchiC3Offset)
+    cal_util.saveCalibration('pixel_xt_matrix', cal_dir, session_name,pixel_xt_matrix, optics)
+    cal_util.saveCalibration('is_xt_matrix', cal_dir, session_name,is_xt_matrix, optics)
+    cal_util.saveCalibration('df_is_matrix', cal_dir, session_name,df_is_matrix)
+
+def readCalibrations():
+    global pixel_xt_matrix, is_xt_matrix, df_is_matrix
+    working_dir = sem.ReportDirectory()
+    cal_dir, session_name = cal_util.getCalibrationsDir(working_dir)
+    optics = ronchi_sem_lib.getOpticsKey(ronchi_sem_lib.ronchiC3Offset)
+    # read calibrations from file. Only replace hardcoded default if
+    # there is saved value
+    r, ronchi_c3_offset = cal_util.readCalibration('pixel_xt_matrix', cal_dir, optics)
+    if r:
+        pixel_xt_matrix = r
+    else:
+        log(f'WARNING: no pixel_xt_matrix saved for {optics}, using default')
+    r, ronchi_c3_offset = cal_util.readCalibration('is_xt_matrix', cal_dir, optics)
+    if r:
+        is_xt_matrix = r
+    else:
+        log(f'WARNING: no is_xt_matrix saved for {optics}, using default')
+    r, dummy = cal_util.readCalibration('df_is_matrix', cal_dir)
+    if r:
+        df_is_matrix = r
+
+def add_lpp_meta_to_next_mdoc():
+    for k,v in (
+            ('ImageDistanceOffset', sem.ReportImageDistanceOffset()),
+        ):
+        v_str = '%.12f' % (float(v))
+        sem.AddToNextFrameStackMdoc(k, v_str)
 
 def calc_xt_is(xt0, is_delta):
     # This form works for both array and list of list [x,y]

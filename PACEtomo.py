@@ -28,7 +28,7 @@ delayTilt       = 2.0       # delay [s] after stage tilt
 zeroExpTime     = 0         # set to exposure time [s] used for start tilt image, if 0: use same exposure time for all tilt images
 zeroDefocus     = 0         # set to defocus [microns] used for start tilt image, if 0: use same defocus for all tilt images
 
-nav_item_list   = [235]        # e.g. [5, 10, 15]; empty = current nav item only (SetSelectedNavItem, SerialEM 4.2+)
+nav_item_list   = []        # e.g. [5, 10, 15]; empty = current nav item only (SetSelectedNavItem, SerialEM 4.2+)
 nav_pretilt_list = []       # parallel to nav_item_list; fall back to global pretilt when empty
 nav_rotation_list = []      # parallel to nav_item_list; fall back to global rotation when empty
 nav_start_defocus_list = [] # parallel to nav_item_list; objective defocus [um] before autofocus; else default_nav_start_defocus
@@ -136,9 +136,6 @@ ronchiC3Offset     = -20          # added to ReportImageDistanceOffset before Tr
 ronchiDelay        = 1.0          # seconds after C3 offset change
 ronchiBinning      = 32
 ronchiPixelSize    = 0.98e-4 * 2 # um (unbinned; multiplied by binning in analysis)
-ronchiTargetPhaseA = 0.48524           # vertical laser (rad)
-ronchiTargetPhaseB = -2.919554        # horizontal laser (rad)
-ronchiCorrectKs    = [[9.809, -0.701],   [0.895, 9.381]]
 ronchiPeakRadius   = 100
 ronchiMontage      = True         # also run before montage tile Record shots
 ronchiCorrMatrix   = [[0.212, 1.28], [1.22, -0.243]]  # phase-to-deflector coupling, scaled by 1e-5
@@ -153,6 +150,23 @@ ronchiStartXLensY = None
 ronchiStartC3Offset = None      # set from ReportImageDistanceOffset at startup when doRonchigram
 
 ronchiMeasureCount = 0         # set from _ronchi_trial_and_analyze to log result in frame stack mdoc
+
+### settings from cal_util
+import serialem as sem
+import ronchi_sem_lib
+import cal_util
+sem.GoToLowDoseArea("T")
+working_dir = sem.ReportDirectory()
+cal_dir, session_name = cal_util.getCalibrationsDir(working_dir)
+ronchi_sem_lib.ronchiC3Offset = ronchiC3Offset
+optics = ronchi_sem_lib.getOpticsKey(ronchiC3Offset)
+ref_correct_ks, ronchi_c3_offset = cal_util.readCalibration('ronchi_ref_ks', cal_dir, optics)
+ref_phases, ronchi_c3_offset = cal_util.readCalibration('ronchi_ref_phase', cal_dir, optics)
+
+ronchiTargetPhaseA = ref_phases[0]           # vertical laser (rad)
+ronchiTargetPhaseB = ref_phases[1]        # horizontal laser (rad)
+ronchiCorrectKs    = ref_correct_ks
+### END settings from cal_util
 ### settings derived from other settings
 import numpy as np
 avg_norm = (np.linalg.norm(ronchiCorrectKs[0]) + np.linalg.norm(ronchiCorrectKs[1]))/2.0

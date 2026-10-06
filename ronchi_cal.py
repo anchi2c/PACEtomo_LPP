@@ -21,9 +21,14 @@ import ronchi_sem_lib
 import cal_util
 import display_util
 
+debug = False
+
+# global settings for saving/reading calibrations
+working_dir = sem.ReportDirectory()
+cal_dir, session_name = cal_util.getCalibrationsDir(working_dir)
+os.makedirs(cal_dir, exist_ok=True)
 
 count = 0
-debug = False
 
 def log(text, color=0, style=0):
     if text.startswith("DEBUG:") and not debug:
@@ -90,11 +95,11 @@ def measure_ronchigram_ks_phases_real_space(pixel_size_um, binning,
 
 def measure_ronchigram_ks_phases(pixel_size_um, binning,
                        peak_radius=100, corr_scale=1e-5, pass_label=''):
-    return measure_ronchigram_ks_phases_real_space(pixel_size_um, binning,
-                       peak_radius, corr_scale, pass_label)
-
-    #return measure_ronchigram_ks_phases_ronchi_lib(pixel_size_um, binning,
+    #return measure_ronchigram_ks_phases_real_space(pixel_size_um, binning,
     #                   peak_radius, corr_scale, pass_label)
+
+    return measure_ronchigram_ks_phases_ronchi_lib(pixel_size_um, binning,
+                       peak_radius, corr_scale, pass_label)
 
 
 def calibrate_ronchigram_phase_correction_matrix(pixel_size_um, binning,
@@ -130,8 +135,6 @@ def calibrate_ronchigram_phase_correction_matrix(pixel_size_um, binning,
     #global ronchi_sem_lib.ronchiCorrMatrix
     if input('Is this a good matrix ? (Y/N/y/n)').lower() == 'y':
         ronchi_sem_lib.ronchiCorrMatrix = corr.tolist()
-        cal_dir, session_name = cal_util.getCalibrationsDir()
-        os.makedirs(cal_dir, exist_ok=True)
         cal_util.saveCalibration('ronchi_corr_matrix', cal_dir, session_name,corr) 
     return corr
 
@@ -228,21 +231,41 @@ def calibrate_ronchigram_start_c3(pixel_size_um, binning,
         ronchi_sem_lib.ronchiC3Offset = ronchi_offset0
         sem.SetImageDistanceOffset(new_trial_offset_baseline)
         print('final c3',sem.ReportImageDistanceOffset())
-        cal_dir, session_name = cal_util.getCalibrationsDir()
-        os.makedirs(cal_dir, exist_ok=True)
-        cal_util.saveCalibration('ronchi_start_c3', cal_dir, session_name,new_trial_offset_baseline) 
+        optics = ronchi_sem_lib.getOpticsKey(ronchi_offset0)
+        cal_util.saveCalibration('ronchi_start_c3', cal_dir, session_name,new_trial_offset_baseline, optics)
         return new_trial_offset_baseline
     else:
         sem.SetImageDistanceOffset(trial_offset_baseline0)
         print('final c3',sem.ReportImageDistanceOffset())
 
+def measure_and_save_reference_ronchigram_ks_phases(pixel_size_um, ronchi_binning,
+                       peak_radius=100, corr_scale=1e-5):
+    pass_label = f"reference_ks_phases"
+    ks0, phase0 = measure_ronchigram_ks_phases(pixel_size_um, ronchi_binning,
+                       peak_radius, corr_scale, pass_label)
+    ronchi_offset0 = ronchi_sem_lib.ronchiC3Offset
+    optics = ronchi_sem_lib.getOpticsKey(ronchi_offset0)
+    cal_util.saveCalibration('ronchi_ref_ks', cal_dir, session_name,ks0, optics)
+    cal_util.saveCalibration('ronchi_ref_phase', cal_dir, session_name,phase0, optics)
+
+def readRonchiCalibrations():
+    # Get the latest calibration at the same optics except ronchiC3Offset
+    optics = ronchi_sem_lib.getOpticsKey()
+    ref_correct_ks, ronchi_c3_offset = cal_util.readCalibration('ronchi_ref_ks', cal_dir, optics)
+    if ref_correct_ks is None:
+        # No calibration to transfer.  Use module defaults
+        return
+    optics = ronchi_sem_lib.getOpticsKey(ronchi_c3_offset)  #limit to the same ronchi_c3_offset
+    ref_phases, ronchi_c3_offset = cal_util.readCalibration('ronchi_ref_phase', cal_dir, optics)
+    ronchi_sem_lib.ronchiC3Offset = ronchi_c3_offset
+    ronchi_sem_lib.ronchiTargetPhaseA = ref_phases[0]           # vertical laser (rad)
+    ronchi_sem_lib.ronchiTargetPhaseB = ref_phases[1]        # horizontal laser (rad)
+    ronchi_sem_lib.ronchiCorrectKs    = ref_correct_ks
+
 if __name__=='__main__':
     ronchi_sem_lib.checkRonchigramSetup()
+    readRonchiCalibrations()
     pixel_size_angs = sem.ReportCurrentPixelSize('T')
-    binning = sem.ReportBinning('T')
-    mag, *_ = sem.ReportMag()
-    mag_ratio = mag/88000    #88000x is where default -20 was created. 
-    ronchi_sem_lib.ronchiC3Offset *= mag_ratio
     xt_tilt = 1 #(scaled at 1e-5 rad)
     ronchi_binning = 32
     corr_scale = 1e-5
@@ -251,11 +274,16 @@ if __name__=='__main__':
         ronchi_binning = 1
         pixel_size_um = 1.5
 
-    # ronchiStartC3 calibration
-    new_ronchi_start_c3 = calibrate_ronchigram_start_c3(pixel_size_angs, ronchi_binning,
+    if False:
+        # ronchiStartC3 calibration
+        new_ronchi_start_c3 = calibrate_ronchigram_start_c3(pixel_size_angs, ronchi_binning,
                        xt_tilt, peak_radius=100, corr_scale=corr_scale,
                        c3_correction_factor=20 / 6.85)
-    print('new StartC3Offset',new_ronchi_start_c3)
+        print('new StartC3Offset',new_ronchi_start_c3)
+
+    if True:
+        measure_and_save_reference_ronchigram_ks_phases(pixel_size_um, ronchi_binning,
+                       corr_scale=corr_scale)
 
     if False:
         corr_matrix = calibrate_ronchigram_phase_correction_matrix(pixel_size_um, ronchi_binning,

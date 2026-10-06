@@ -27,28 +27,9 @@ def log(*args):
     print(args)
     pass
 
-def getOpticsKey(ronchi_c3_offset=None):
-    """
-    Optics condition that calibrations such as pixel_xt_matrix depend on.
-    ronchi_c3_offset is ronchi_sem_lib.ronchiC3Offset used to acquire
-    the ronchigram.
-    """
-    mag,*_ = sem.ReportMag()
-    spot_size = sem.ReportSpotSize()
-    try:
-        illuminated_area = float(sem.ReportIlluminatedArea())
-    except Exception as e:
-        # only available on some Thermo Scientific microscopes
-        log('WARNING: illuminated area not available', e)
-        illuminated_area = None
-    if ronchi_c3_offset is not None:
-        ronchi_c3_offset = float(ronchi_c3_offset)
-    return {'mag': int(mag), 'spot_size': int(spot_size), 'illuminated_area': illuminated_area,
-            'ronchi_c3_offset': ronchi_c3_offset}
-
 def _valueMatch(v1, v2, tolerance):
     if v1 is None or v2 is None:
-        return v1 is None and v2 is None
+        return True
     return abs(v1 - v2) <= tolerance
 
 def opticsMatch(optics1, optics2):
@@ -79,11 +60,12 @@ def readCalibration(cal_type, cal_dir, optics=None):
     """
     Read the most recent calibration value from file. If optics is
     given, read the most recent one saved with matching optics.
+	Pass back ronchiC3Offset in the calibration so it could be reproduced.
     """
     cal_path = os.path.join(cal_dir, cal_type+'.jsonl')
     log('reading', cal_path)
     if not os.path.exists(cal_path):
-        return None
+        return None, None
     if optics is not None:
         return _readCalibrationMatchingOptics(cal_path, optics)
     # read from backward to get most recent entry
@@ -104,7 +86,11 @@ def readCalibration(cal_type, cal_dir, optics=None):
         if 'timestamp' in my_data.keys():
             my_data['timestamp'] = datetime.strptime(my_data['timestamp'],timestampFormat)
         if 'calibration' in my_data.keys():
-            return my_data['calibration']
+            if 'ronchi_c3_offset' in my_data.keys():
+                return my_data['calibration'], my_data['ronchi_c3_offset']
+            else:
+                return my_data['calibration'], None
+    return None, None
 
 def _readCalibrationMatchingOptics(cal_path, optics):
     """
@@ -120,11 +106,13 @@ def _readCalibrationMatchingOptics(cal_path, optics):
             continue
         my_data = json.loads(line)
         if 'optics' in my_data and opticsMatch(my_data['optics'], optics):
-            return my_data.get('calibration')
-    return None
+            return my_data.get('calibration'), my_data['optics']['ronchi_c3_offset']
+    return None, None
 
-def getCalibrationsDir():
-    working_dir = sem.ReportDirectory()
+def getCalibrationsDir(working_dir):
+    """
+    get calibrations directory relative to the working_dir
+    """
     root_dir, session_name = os.path.split(working_dir)
     if not session_name:
         root_dir, session_name = os.path.split(root_dir)

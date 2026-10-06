@@ -562,7 +562,7 @@ def AcquireToMatchBuffer(*args, **kwargs) -> None:
 import numpy as np
 # ImageDistanceOffset at which the simulated fringes vanish (the value
 # calibrate_ronchigram_start_c3 should recover).
-ronchi_flat_c3_offset = -20.0
+ronchi_flat_c3_offset = 0.0
 # ImageDistanceOffset at which the reference image below was acquired; it is
 # reproduced unzoomed (zoom_factor == 1).
 ref_c3_offset = -130.0
@@ -625,8 +625,9 @@ def bufferImage(*args, **kwargs) -> Any:
     """
     import cal_util
     import ronchi_sem_lib
-    cal_dir, session_name = cal_util.getCalibrationsDir()
-    pixel_xt_matrix = cal_util.readCalibration('pixel_xt_matrix', cal_dir, cal_util.getOpticsKey(ronchi_sem_lib.ronchiC3Offset))
+    working_dir = ReportDirectory()
+    cal_dir, session_name = cal_util.getCalibrationsDir(working_dir)
+    pixel_xt_matrix, ronchi_c3_offset = cal_util.readCalibration('pixel_xt_matrix', cal_dir, ronchi_sem_lib.getOpticsKey(ronchi_sem_lib.ronchiC3Offset))
     if pixel_xt_matrix is None:
         pixel_xt_matrix = np.array([[1.115e-7, 5.9858e-7],[-5.903e-7, 1.3343e-7]])  #starting guess mrad/pixel
     else:

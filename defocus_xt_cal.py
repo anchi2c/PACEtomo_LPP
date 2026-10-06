@@ -45,7 +45,8 @@ converging_deviation_threshold = 15   #in pixels
 log = lafis_cal.log
 
 def saveCalibrations():
-    cal_dir, session_name = cal_util.getCalibrationsDir()
+    working_dir = sem.ReportDirectory()
+    cal_dir, session_name = cal_util.getCalibrationsDir(working_dir)
     os.makedirs(cal_dir, exist_ok=True)
     optics = cal_util.getOpticsKey(ronchi_sem_lib.ronchiC3Offset)
     cal_util.saveCalibration('pixel_xt_matrix', cal_dir, session_name,pixel_xt_matrix, optics)
@@ -57,10 +58,11 @@ def readCalibrations():
     # is_xt_matrix used to scale xt change in calibrateXtPixelMatrix
     lafis_cal.readCalibrations()
     pixel_xt_matrix = lafis_cal.pixel_xt_matrix
-    cal_dir, session_name = cal_util.getCalibrationsDir()
+    working_dir = sem.ReportDirectory()
+    cal_dir, session_name = cal_util.getCalibrationsDir(working_dir)
     # read calibrations from file. Only replace hardcoded default if
     # there is saved value
-    r = cal_util.readCalibration('df_xt_vector', cal_dir)
+    r, ronchi_c3_offset = cal_util.readCalibration('df_xt_vector', cal_dir)
     if r:
         df_xt_vector = r
 
