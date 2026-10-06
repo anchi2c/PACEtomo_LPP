@@ -152,6 +152,9 @@ ronchiStartC3Offset = None      # set from ReportImageDistanceOffset at startup 
 ronchiMeasureCount = 0         # set from _ronchi_trial_and_analyze to log result in frame stack mdoc
 
 ### settings from cal_util
+import sys
+sys.path.insert(0, 'C:\\Users\\VALUEDGATANCUSTOMER\\Desktop\\anchi\\PACEtomo_LPP')
+sys.path.insert(0, 'C:\Program Files\SerialEM\PythonModules')
 import serialem as sem
 import ronchi_sem_lib
 import cal_util
@@ -167,6 +170,7 @@ ronchiTargetPhaseA = ref_phases[0]           # vertical laser (rad)
 ronchiTargetPhaseB = ref_phases[1]        # horizontal laser (rad)
 ronchiCorrectKs    = ref_correct_ks
 ### END settings from cal_util
+
 ### settings derived from other settings
 import numpy as np
 avg_norm = (np.linalg.norm(ronchiCorrectKs[0]) + np.linalg.norm(ronchiCorrectKs[1]))/2.0
@@ -197,9 +201,6 @@ default_pretilt = pretilt
 default_rotation = rotation
 
 versionPACE = "1.9.2c"
-import sys
-sys.path.insert(0, 'C:\Program Files\SerialEM\PythonModules')
-import serialem as sem
 import os
 import copy
 import time
