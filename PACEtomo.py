@@ -2767,6 +2767,10 @@ sem.SetUserSetting("ShiftToTiltAxis", 1)
 sem.SetNewFileType(0)                                                                           # set file type to mrc in case user changed default file type
 sem.SetFrameBaseName(0, 1, 0, "PACEtomo_setup")                                                 # change frame name at start to avoid overwriting in case sets other than Record save frames
 
+### Start at record preset microscope condition
+log(f"WARNING: go to Record state to be a consistent start")
+sem.GoToLowDoseArea('R')
+
 # Warnings
 log(f"DEBUG: Tilt limit is: {tiltLimit}")
 if (maxTilt > tiltLimit or minTilt < -tiltLimit) and sem.IsVariableDefined("warningTiltAngle") == 0:
