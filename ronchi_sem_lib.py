@@ -20,7 +20,7 @@ doRonchigram       = True
 ronchiBaseSuffix   = "_ronchi"         # appended to active frame base name for Trial saves only, then restored
 ronchiC3Offset     = -20          # added to ReportImageDistanceOffset before Trial shot
 ronchiDelay        = 1.0          # seconds after C3 offset change
-ronchiBinning      = 2
+ronchiBinning      = 32
 ronchiPixelSize    = 0.98e-4 * 2 # um (unbinned; multiplied by binning in analysis)
 ronchiTargetPhaseA = -1.93941993           # vertical laser (rad)
 ronchiTargetPhaseB = 1.67658165        # horizontal laser (rad)
@@ -77,16 +77,19 @@ def checkRonchigramSetup():
     
         ronchiC3Offset = float(sem.ReportImageDistanceOffset()) - ronchiStartC3Offset
 
-def getOpticsKey(ronchi_c3_offset=None):
+def getOpticsKey(ronchi_binning=32, ronchi_c3_offset=None):
     """
     Optics condition that calibrations such as pixel_xt_matrix depend on.
-    ronchi_c3_offset is ronchi_sem_lib.ronchiC3Offset used to acquire
+    ronchi_binning: the binning of the ronchi_image before fft is calculated for
+    peak finding
+    ronchi_c3_offset: ronchi_sem_lib.ronchiC3Offset used to acquire
     the ronchigram.
     This is in ronchi_sem_lib.py instead of cal_util.py to avoid need to
     import serialem in cal_util.py
     """
     mag,*_ = sem.ReportMag()
     spot_size = sem.ReportSpotSize()
+    cam_binning = sem.ReportBinning('T')
     try:
         illuminated_area = float(sem.ReportIlluminatedArea())
     except Exception as e:
@@ -98,7 +101,7 @@ def getOpticsKey(ronchi_c3_offset=None):
     else:
         ronchi_c3_offset = None
     kv_pairs = {'mag': int(mag), 'spot_size': int(spot_size), 'illuminated_area': illuminated_area,
-            'ronchi_c3_offset':ronchi_c3_offset}
+            'cam_binning': cam_binning, 'ronchi_binning': ronchi_binning, 'ronchi_c3_offset':ronchi_c3_offset}
     return kv_pairs
 
 ###############

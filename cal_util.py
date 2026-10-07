@@ -37,12 +37,17 @@ def opticsMatch(optics1, optics2):
         return False
     if not _valueMatch(optics1['illuminated_area'], optics2['illuminated_area'], illuminatedAreaTolerance):
         return False
+    if 'cam_binning' in optics1.keys() and 'cam_binning' in optics2.keys():
+        if not _valueMatch(optics1['cam_binning'],optics2['cam_binning'], 0):
+            return False
+    if 'ronchi_binning' in optics1.keys() and 'ronchi_binning' in optics2.keys():
+        if not  _valueMatch(optics1['cam_binning'],optics2['cam_binning'], 0):
+            return False
     # records saved before ronchi_c3_offset was added have no such key
     return _valueMatch(optics1.get('ronchi_c3_offset'), optics2.get('ronchi_c3_offset'), ronchiC3OffsetTolerance)
 
 def saveCalibration(cal_type, cal_dir, session_name, data, optics=None):
     cal_path = os.path.join(cal_dir, cal_type+'.jsonl')
-    log(cal_path)
     if isinstance(data, np.ndarray):
         data = data.tolist()
     cal_data = {}
@@ -51,6 +56,7 @@ def saveCalibration(cal_type, cal_dir, session_name, data, optics=None):
     if optics is not None:
         cal_data['optics'] = optics
     cal_data['calibration'] = data
+    log(f"writing {cal_type} = {data} at {cal_path}")
     # saved as JSONL: one JSON object per line
     with open(cal_path, "a") as f:
         f.write(json.dumps(cal_data)+"\n")
@@ -60,10 +66,10 @@ def readCalibration(cal_type, cal_dir, optics=None):
     """
     Read the most recent calibration value from file. If optics is
     given, read the most recent one saved with matching optics.
-	Pass back ronchiC3Offset in the calibration so it could be reproduced.
+    Pass back ronchiC3Offset in the calibration so it could be reproduced.
     """
     cal_path = os.path.join(cal_dir, cal_type+'.jsonl')
-    log('reading', cal_path)
+    log(f'reading {cal_path}')
     if not os.path.exists(cal_path):
         return None, None
     if optics is not None:

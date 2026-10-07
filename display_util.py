@@ -21,6 +21,9 @@ def addImage(arr, peaks=[]):
         arr = np.log1p(np.abs(arr).copy())
         vmin, vmax = np.percentile(arr, [1, 99])
         arr = 255*((arr -vmin)/(vmax-vmin))
+    else:
+        vmin, vmax = np.percentile(arr,[1,99])
+        arr = 255*((arr -vmin)/(vmax-vmin))
     image_buffer.append(arr.copy())
 
     for peak in peaks:

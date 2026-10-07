@@ -130,7 +130,7 @@ def saveCalibrations():
     working_dir = sem.ReportDirectory()
     cal_dir, session_name = cal_util.getCalibrationsDir(working_dir)
     os.makedirs(cal_dir, exist_ok=True)
-    optics = ronchi_sem_lib.getOpticsKey(ronchi_sem_lib.ronchiC3Offset)
+    optics = ronchi_sem_lib.getOpticsKey(ronchi_binning=None, ronchi_c3_offset=ronchi_sem_lib.ronchiC3Offset)
     cal_util.saveCalibration('pixel_xt_matrix', cal_dir, session_name,pixel_xt_matrix, optics)
     cal_util.saveCalibration('is_xt_matrix', cal_dir, session_name,is_xt_matrix, optics)
     cal_util.saveCalibration('df_is_matrix', cal_dir, session_name,df_is_matrix)
@@ -139,7 +139,7 @@ def readCalibrations():
     global pixel_xt_matrix, is_xt_matrix, df_is_matrix
     working_dir = sem.ReportDirectory()
     cal_dir, session_name = cal_util.getCalibrationsDir(working_dir)
-    optics = ronchi_sem_lib.getOpticsKey(ronchi_sem_lib.ronchiC3Offset)
+    optics = ronchi_sem_lib.getOpticsKey(ronchi_binning=None, ronchi_c3_offset=ronchi_sem_lib.ronchiC3Offset)
     # read calibrations from file. Only replace hardcoded default if
     # there is saved value
     r, ronchi_c3_offset = cal_util.readCalibration('pixel_xt_matrix', cal_dir, optics)

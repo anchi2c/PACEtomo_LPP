@@ -3,7 +3,9 @@
 # Ronchigram - image analysis (numpy / FFT only; no SerialEM calls)
 #
 # Public API: analyze_ronchigram()
+# Author:        Josh Dickerson, Eric Cooper
 # Internal helpers: _ronchi_bin_image, _ronchi_find_fourier_centered, ...
+# Extracted from PACEtomo.py by Anchi Cheng
 ##############################################################################
 import numpy as np
 
@@ -47,14 +49,19 @@ def _ronchi_find_peaks(fourier, radius=100, npeaks=4):
 
 
 def _ronchi_find_ks_phases(corrected_fourier, pixel_size_um, npeaks=2, radius=100, binning=1, fourier_size=None):
+    """
+    image_pixe_size_um: refers to the pixel size of the image acquired by acquire_ronchigram.
+    binning: the binning used to shrink the image before calculate corrected_fourier.
+
+    Notes: ks returned is only usable for correction if image_pixel_size_um used in
+    magic_phase reference image is at the same binning and image camera_binning and scope
+    parameters saved in ronch_ref_ks.jsonl
+    """
     if fourier_size is None:
         fourier_size = corrected_fourier.shape[0]
-    import display_util
     peaks, phases = _ronchi_find_peaks(corrected_fourier, radius=radius, npeaks=npeaks * 2)
     ordering = np.argsort(_ronchi_report_angles(peaks, start_angle=-135))
     peaks = peaks[ordering][:npeaks]
-    print('peaks in fft',peaks)
-    display_util.addImage(corrected_fourier, peaks)
     phases = phases[ordering][:npeaks]
     ks = peaks / fourier_size * 1 / (pixel_size_um * binning)
     return ks, phases

@@ -2641,6 +2641,9 @@ def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_acc
                 position[-1][i+1]["dose"] = float(savedRun[pos][i]["dose"])
                 position[-1][i+1]["sec"] = int(savedRun[pos][i]["sec"])
                 position[-1][i+1]["skip"] = True if savedRun[pos][i]["skip"] == "True" or targets[pos]["skip"] == "True" else False
+            # This fixes JH's line KeyError in recover since it calls for pn=0
+            # Need testing in case it has unintended consequence
+            position[-1][0] = copy.deepcopy(position[-1][1])                                        # index 0 is not saved; branches start as copies of it and SSX/SSY never change
 
             sem.AreaForCumulRecordDose(pos + 1)                                                     # set dose accumulator to highest recorded prior dose
             sem.AccumulateRecordDose(max(position[-1][1]["dose"], position[-1][2]["dose"]))
