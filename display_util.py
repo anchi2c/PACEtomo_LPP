@@ -23,6 +23,12 @@ def addImage(arr, peaks=[]):
         arr = 255*((arr -vmin)/(vmax-vmin))
     else:
         vmin, vmax = np.percentile(arr,[1,99])
+        vmean = arr.mean()
+        # use mean std method if needed
+        vstd_max = vmean+4*arr.std()
+        if vstd_max < (vmax+vmin)/2:
+            vmin = vmean-4*arr.std()
+            vmax = vstd_max
         arr = 255*((arr -vmin)/(vmax-vmin))
     image_buffer.append(arr.copy())
 
@@ -30,10 +36,12 @@ def addImage(arr, peaks=[]):
         print('peak (y,x)',peak)
         arr_min_shape = min(arr.shape)
         a = 0.01 * arr_min_shape
-        b = 0.04 * arr_min_shape
+        b = 0.035 * arr_min_shape
+        b1 = 0.04 * arr_min_shape
         c = np.array(arr.shape)//2
-        fill = (arr.max()-arr.min())*2 + arr.max()
+        fill = (arr.max()-arr.min())*0.5 + arr.min()
         #show peak
+        image_buffer[-1][int(-peak[0]+c[0]-b1):int(-peak[0]+c[0]+b1),int(-peak[1]+c[1]-b1):int(-peak[1]+c[1]+b1)] = arr.max()
         image_buffer[-1][int(-peak[0]+c[0]-b):int(-peak[0]+c[0]+b),int(-peak[1]+c[1]-b):int(-peak[1]+c[1]+b)] = fill
         #show center
         image_buffer[-1][int(c[0]-a):int(c[0]+a),int(c[1]-a):int(c[1]+a)] = fill*0.8
@@ -64,7 +72,7 @@ def showImages(ncols=8,panel_width=2,cmap=None,title='',savefig=False):
         else:
             ax[row][col].imshow(display_arr)
     if title:
-        plt.title(title)
+        fig.suptitle(title)
     plt.tight_layout()
     if savefig and title:
         plt.savefig(title+'.png', dpi=300, bbox_inches="tight")

@@ -60,13 +60,14 @@ def realignTo(nav_id=None, target=None):
             print('before goto_dose_area_V', is_x, is_y)
             sem.GoToLowDoseArea("V")
             is_v_x, is_v_y, *_ = sem.ReportImageShift()
-            print('goto_dose_area_V', is_v_x, is_v_y)
+            print('after goto_dose_area_V', is_v_x, is_v_y)
             sem.SetImageShift(0, 0)
             sem.SetImageShift(is_x, is_y)
+            print('resetting back to before goto_V IS values:', is_x, is_y)
             sem.V()
-            display_util.addImage(sem.bufferImage('A'))
             alignTo("O", debug)
-            ASX, ASY = sem.ReportAlignShift()[4:6]
+            ASPX, ASPY, AISX, AISY, ASX, ASY = sem.ReportAlignShift()[:6]
+            display_util.addImage(sem.bufferImage('A'), peaks=[(ASPX,ASPY),])
             log(f"Alignment (View) error in X | Y: {round(ASX, 0)} nm | {round(ASY, 0)} nm")
             print(f"Alignment (View) error in X | Y: {round(ASX, 0)} nm | {round(ASY, 0)} nm")
             print('paused at viewfile realignment. press enter to continue')
@@ -83,12 +84,12 @@ def realignTo(nav_id=None, target=None):
                 doLafis(is_x,is_y)
             ronchi_before_preview_align("initial realign preview (tgtfile)")
             sem.L()
-            display_util.addImage(sem.bufferImage('A'))
             print('showing preview after ronchi_before preview')
             if beamTiltComp:
                 restoreLafis()
             alignTo("O", debug)
-            AISX, AISY, ASX, ASY = sem.ReportAlignShift()[2:6]
+            ASPX, ASPY, AISX, AISY, ASX, ASY = sem.ReportAlignShift()[:6]
+            display_util.addImage(sem.bufferImage('A'), peaks=[(ASPX,ASPY),])
             print(is_x, is_y)
             log(f"Alignment (Prev) error in X | Y: {round(ASX, 0)} nm | {round(ASY, 0)} nm")
             print(f"Alignment (Prev) error in X | Y: {round(ASX, 0)} nm | {round(ASY, 0)} nm")
@@ -100,8 +101,6 @@ def realignTo(nav_id=None, target=None):
             sem.SetImageShift(0, 0)
             sem.SetImageShift(is_x, is_y)
             sem.V()
-            print('V at start of align between mags',is_x, is_y)
-            print('paused at align between mag after V. press enter to continue')
             sem.Copy("A", "O")
             # Check defocus offset
             is_x, is_y, *_ = sem.ReportImageShift()
@@ -110,16 +109,26 @@ def realignTo(nav_id=None, target=None):
             defocus_offset = max(-10, sem.ReportLDDefocusOffset("V"))
             if defocus_offset != 0:
                 sem.ChangeFocus(defocus_offset) # Higher defocus for better correlation, but max at 10 to avoid major distortions
-            sem.SetImageShift(is_x, is_y)
             print('R IS set to V image shift here', is_x, is_y)
-            print('image shift set to R is from V. press enter to continue')
+            sem.SetImageShift(is_x, is_y)
             if beamTiltComp:
                 doLafis(is_x,is_y)
             ronchi_before_preview_align("initial realign preview (view to Record)")
-            temp_is_x, temp_is_y, *_ = sem.ReportImageShift()
-            print(temp_is_x, temp_is_y)
-            print('L image taken with Lafis restored. press enter to continue')
             sem.L()
+            if beamTiltComp:
+                restoreLafis()
+            sem.AlignBetweenMags("O", -1, -1, -1)
+            ASPX, ASPY, AISX, AISY, ASX, ASY = sem.ReportAlignShift()[:6]
+            display_util.addImage(sem.bufferImage('A'), peaks=[(ASPX,ASPY),])
+            if defocus_offset != 0:
+                sem.ChangeFocus(-defocus_offset) # Reset focus
+            log(f"Alignment (Pv2V) error in X | Y: {round(ASX, 0)} nm | {round(ASY, 0)} nm")
+        else:
+            log(f"WARNING: No target file or view file found for realignment!")
+    elif nav_id is not None:
+        sem.RealignToOtherItem(nav_id, 1)
+    else:
+        log(f"WARNING: No target provided for realignment!")
 
 def parseTargets(file_path):
     """Reads targets file."""
@@ -177,6 +186,8 @@ def convertValueType(target):
     bool_keys = ['skip']
 
     for k in float_keys:
+        if k not in target.keys():
+            continue
         try:
             target[k] = float(target[k])
         except:
@@ -185,6 +196,8 @@ def convertValueType(target):
             else:
                 raise
     for k in bool_keys:
+        if k not in target.keys():
+            continue
         if target[k]=='False':
             target[k] = False
         else:
