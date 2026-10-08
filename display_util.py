@@ -6,7 +6,7 @@
 # ===================================================================
 import numpy as np
 import math
-
+from scipy import ndimage
 image_buffer = []
 
 def addImage(arr, peaks=[]):
@@ -38,18 +38,34 @@ def addImage(arr, peaks=[]):
         #show center
         image_buffer[-1][int(c[0]-a):int(c[0]+a),int(c[1]-a):int(c[1]+a)] = fill*0.8
 
-def showImages():
+def showImages(ncols=8,panel_width=2,cmap=None,title='',savefig=False):
     import matplotlib.pyplot as plt
+    # ncols: number of columns of subplots
+    # panel_width: width of the each subplot panel in inches
+    # cmap: colormap. None uses default in matplotlib
     number_of_buffer_images = len(image_buffer)
-    ncols = 8 #number of columns of subplots
     nrows = int(math.ceil(number_of_buffer_images / ncols))
     # layout
-    panel_width = 2
     aspect = 1
     fig, ax = plt.subplots(nrows, ncols, sharex=True, sharey=True, figsize=(ncols * panel_width, nrows * panel_width * aspect), squeeze=False)
     for i in range(number_of_buffer_images):
         col = i % ncols
         row = i // ncols
-        ax[row][col].imshow(image_buffer[i])
+        if i == 0:
+            shape0 = image_buffer[i].shape
+            display_arr = image_buffer[i]
+        else:
+            my_shape = image_buffer[i].shape
+            factor = (shape0[0]/my_shape[0])
+            display_arr = ndimage.zoom(image_buffer[i], factor, order=1)
+
+        if cmap is not None:
+            ax[row][col].imshow(display_arr, cmap=cmap)
+        else:
+            ax[row][col].imshow(display_arr)
+    if title:
+        plt.title(title)
     plt.tight_layout()
+    if savefig and title:
+        plt.savefig(title+'.png', dpi=300, bbox_inches="tight")
     plt.show()
