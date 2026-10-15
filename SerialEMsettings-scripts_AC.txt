@@ -1035,16 +1035,62 @@ binning = 32
 # use SEMargStrings to pass parameter from SEM scripting
 sem_params = SEMargStrings
 
-target_phase_A= 0.48524 # Vertical Laser
-target_phase_B = -2.919554 # Horizontal Laser
 
 if sem_params:
  	ronchiMeasureCount = sem_params[0]
 else:
     ronchiMeasureCount = 1
 
-# target_ks 2D matrix measured in ronchi_measure
-correct_ks = np.array([[9.809, -0.701],   [0.895, 9.381]])
+### settings from cal_util
+sys.path.insert(0, 'C:\\Users\\VALUEDGATANCUSTOMER\\Desktop\\anchi\\PACEtomo_LPP')
+import cal_util
+
+def getOpticsKey(ronchi_binning=32, ronchi_c3_offset=None):
+    """
+    Optics condition that calibrations such as pixel_xt_matrix depend on.
+    ronchi_binning: the binning of the ronchi_image before fft is calculated for
+    peak finding
+    ronchi_c3_offset: ronchi_sem_lib.ronchiC3Offset used to acquire
+    the ronchigram.
+    This is in ronchi_sem_lib.py instead of cal_util.py to avoid need to
+    import serialem in cal_util.py
+    """
+    mag,*_ = sem.ReportMag()
+    spot_size = sem.ReportSpotSize()
+    cam_binning = sem.ReportBinning('T')
+    try:
+        illuminated_area = float(sem.ReportIlluminatedArea())
+    except Exception as e:
+        # only available on some Thermo Scientific microscopes
+        log('WARNING: illuminated area not available', e)
+        illuminated_area = None
+    if ronchi_c3_offset is not None:
+        ronchi_c3_offset = float(ronchi_c3_offset)
+    else:
+        ronchi_c3_offset = None
+    kv_pairs = {'mag': int(mag), 'spot_size': int(spot_size), 'illuminated_area': illuminated_area,
+            'cam_binning': cam_binning, 'ronchi_binning': ronchi_binning, 'ronchi_c3_offset':ronchi_c3_offset}
+    return kv_pairs
+
+sem.GoToLowDoseArea("T")
+working_dir = sem.ReportDirectory()
+cal_dir, session_name = cal_util.getCalibrationsDir(working_dir)
+optics = getOpticsKey(c3offset)
+ref_correct_ks, c3offset = cal_util.readCalibration('ronchi_ref_ks', cal_dir, optics)
+ref_phases, c3offset = cal_util.readCalibration('ronchi_ref_phase', cal_dir, optics)
+
+try:
+    # setting target ks and phase
+    correct_ks = ref_correct_ks
+    target_phase_A= ref_phases[0] # Vertical Laser
+    target_phase_B = ref_phases[1] # Horizontal Laser
+except TypeError as e:
+    sem.OKBox(f'Error loading target phase/ks. Missing saved calibration for  {optics}. Please calibrate for these optics')
+    sem.Exit()
+except Exception as e:
+    sem.OKBox(f"Unknown Error: {e}")
+    sem.Exit()
+
 avg_norm = (np.linalg.norm(correct_ks[0]) + np.linalg.norm(correct_ks[1]))/2.0
 c3_correction_factor = 20 /avg_norm
 
@@ -2883,20 +2929,37 @@ if userInput == 1:
     sem.Echo("The new tilt axis offset has been set!")
 sem.Exit()
 EndMacro
+Macro	39
+MacroName IS-Pixel
+IncMagIfFoundPixel -1
+Trial
+AutoFocus
+ShiftCalSkipLensNorm
+CalibrateImageShift
+ReportMagIndex
+SetupWaffleMontage 5 wafflemont-$repVal1.mrc
+If $repVal1 == 1
+  Montage
+  Copy B A
+Else
+  Record
+Endif
+FindPixelSize
+EndMacro
 Macro	60
 ReportBeamTilt
 EndMacro
 Macro	61
-ReportLastMarkerShift
+ReportSequentialFrameNum
 EndMacro
 Macro	62
 ReportXLensDeflector 2
 EndMacro
 Macro	63
-ReportComaVsISmatrix
+GoToLowDoseArea R
 EndMacro
 Macro	64
-AdjustBeamTiltforIS
+SetSequentialFrameNum 0
 EndMacro
 Macro	65
 ReportImageDistanceOffset
@@ -2913,3 +2976,8 @@ EndMacro
 Macro	69
 SetImageShift 0 0
 EndMacro
+OneLineHistory	1
+ReportSequentialFrameNum
+$%EndLine%$
+ReportSquentialFrameNum
+EndHistory
