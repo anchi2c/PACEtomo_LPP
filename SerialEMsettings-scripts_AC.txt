@@ -363,10 +363,10 @@ import numpy as np
 import serialem as sem
 
 ############ SETTINGS ############
-image_shift_delta_um = [(0.0,-5.0)]
+image_shift_delta_um = [ (-5.0,0.0)]
 c3offset = -130
 xt_is_matrix = [[0.000219, -0.000259],[0.000902, 0.000264]] #26aug18, 110kx, 1.4um 
-xt_is_matrix = [[0.000251,-0.000302],[0.000971,0.000289]]
+xt_is_matrix = [[0.000225,-0.000265],[0.000730,0.000212]]
 df_is_matrix = [[0.041381,0.012342], [0.041381,0.012342]]
 sem.Echo("***Running X-Tilt LAFIS***")
 sem.Echo("DIAGNOSTIC MESSAGE: Current image shift:")
@@ -450,16 +450,46 @@ Macro	3
 # python for Laser Image-Shift XTilt correction only
 import serialem as sem
 
-#xt_is_matrix = [[0.000312, -0.000352],[0.001120, 0.000281]] #26jul16a
-#xt_is_matrix = [[0.000312, -0.000352],[0.001069, 0.000257]]
-#xt_is_matrix = [[0.000324, -0.000347],[0.001100, 0.0002815]]  #26jul23
-#xt_is_matrix = [[0.000219, -0.000259],[0.000902, 0.000264]] #26aug18, 110kx, 1.4um 
-#xt_is_matrix = [[0.00031648, -0.0003773], [0.00106358, 0.00029595]] #26sep17, 54kx, ss6, 1.5IA
-#xt_is_matrix = [[0.0002538, -0.00029750], [0.000787444, 0.0002514]] # p26sep11b 110x, 1.4 um
-#xt_is_matrix = [[0.00022244, -0.000256937], [0.000710469, 0.0002146357]] # p26sep19a 110x, 1.4 um
-xt_is_matrix = [[0.00024965200894843043, -0.0002568478985382952], [0.0008983, 0.000260]]
+
 df_is_matrix = [[0.041381,0.012342],[ 0.041381,0.012342]]
 
+### settings from cal_util
+sys.path.insert(0, 'C:\\Users\\VALUEDGATANCUSTOMER\\Desktop\\anchi\\PACEtomo_LPP')
+import cal_util
+
+def getOpticsKey(ronchi_binning=32, ronchi_c3_offset=None):
+    """
+    Optics condition that calibrations such as pixel_xt_matrix depend on.
+    ronchi_binning: the binning of the ronchi_image before fft is calculated for
+    peak finding
+    ronchi_c3_offset: ronchi_sem_lib.ronchiC3Offset used to acquire
+    the ronchigram.
+    This is in ronchi_sem_lib.py instead of cal_util.py to avoid need to
+    import serialem in cal_util.py
+    """
+    mag,*_ = sem.ReportMag()
+    spot_size = sem.ReportSpotSize()
+    cam_binning = sem.ReportBinning('T')
+    try:
+        illuminated_area = float(sem.ReportIlluminatedArea())
+    except Exception as e:
+        # only available on some Thermo Scientific microscopes
+        log('WARNING: illuminated area not available', e)
+        illuminated_area = None
+    if ronchi_c3_offset is not None:
+        ronchi_c3_offset = float(ronchi_c3_offset)
+    else:
+        ronchi_c3_offset = None
+    kv_pairs = {'mag': int(mag), 'spot_size': int(spot_size), 'illuminated_area': illuminated_area,
+            'cam_binning': cam_binning, 'ronchi_binning': ronchi_binning, 'ronchi_c3_offset':ronchi_c3_offset}
+    return kv_pairs
+
+sem.GoToLowDoseArea("T")
+working_dir = sem.ReportDirectory()
+cal_dir, session_name = cal_util.getCalibrationsDir(working_dir)
+optics = getOpticsKey(ronchi_c3_offset=-100)
+xt_is_matrix, dummy_c3_offset = cal_util.readCalibration('is_xt_matrix', cal_dir, optics)
+print(xt_is_matrix)
 
 def float_tuple(input_str_tuple):
    return (float(input_str_tuple[0]), float(input_str_tuple[1]))
@@ -500,7 +530,7 @@ def main():
    sem.SetDefocus(df1)
    is2, bt2, xt2, stg2, df2 = get_values()
    #Enable the next line so the AjustBeamTiltforIS is still applied before script ends.
-   sem.T()
+   #sem.T()
    #sem.FixComaByCTF(1,1,0)
    #sem.SetXLensDeflector(2, xt0[0], xt0[1])
 
@@ -1037,7 +1067,7 @@ sem_params = SEMargStrings
 
 
 if sem_params:
- 	ronchiMeasureCount = sem_params[0]
+    ronchiMeasureCount = int(sem_params[0])
 else:
     ronchiMeasureCount = 1
 
@@ -1075,7 +1105,7 @@ def getOpticsKey(ronchi_binning=32, ronchi_c3_offset=None):
 sem.GoToLowDoseArea("T")
 working_dir = sem.ReportDirectory()
 cal_dir, session_name = cal_util.getCalibrationsDir(working_dir)
-optics = getOpticsKey(c3offset)
+optics = getOpticsKey(ronchi_c3_offset=c3offset)
 ref_correct_ks, c3offset = cal_util.readCalibration('ronchi_ref_ks', cal_dir, optics)
 ref_phases, c3offset = cal_util.readCalibration('ronchi_ref_phase', cal_dir, optics)
 
@@ -1398,7 +1428,7 @@ step = 2.5 # image shift step in um
 with_laser = 1
 do_coma_measurement = 0
 number_of_ronchi_iter = 3
-data_pattern = p26jul23a_xg_all_test11
+data_pattern = p26oct15a_test5
 data_filename = $data_pattern.json
 SetFrameBaseName 1 1 0 $data_pattern
 
@@ -1416,7 +1446,7 @@ endif
 
 #CallScript 10 #save xt value in python (Base 1 in Script Editor but Base 0 in the script.txt file)
 #reset saved all values in python
-CallScript 11
+#CallScript 11
 
 comax = 0.0
 comay = 0.0
@@ -1447,6 +1477,7 @@ Loop $number_of_iter i
       endif
       CallScript 9 $data_filename $comax $comay
       Echo ---LAFIS applyed---
+      T
       CallScript 4   #Laser image-shift Xtilt correction
       CallScript 14
       R
@@ -1469,8 +1500,8 @@ Loop $number_of_iter i
       if $with_laser > 0
          Echo ---Laser on-plane on-node correction---
          #Laser magic phase correction. measurement count is passed as argument
-         Loop $number_of_ronchi_iter j
-            CallScript 8 $j
+         Loop $number_of_ronchi_iter k
+            CallScript 8 $k
          EndLoop
          ReportImageShift
          ReportBeamTilt
@@ -1481,7 +1512,7 @@ Loop $number_of_iter i
          CallScript 14
          R
          # reset ronchi measurement count for keys used
-         CallScript 3 $number_of_ronchi_iter
+         #CallScript 3 $number_of_ronchi_iter
       endif
       #reset all values in python (Base 1 in Script Editor but Base 0 in the script.txt file)
       CallScript 11
@@ -1499,6 +1530,7 @@ MacroName Script13 Running LAFIS+rip in Serialem native SPA workflow
 
 ######Settings#####
 with_laser = 1
+number_of_ronchi_iter = 3
 ######End Settings######
 
 Echo ******Running Script****
@@ -1521,8 +1553,10 @@ CallScript 4
 #End LAFIS
 if $with_laser > 0
    #RIP 3 times
-   Loop $number_of_ronchi_iter j
-      CallScript 8 $j
+#   Loop $number_of_ronchi_iter j
+   Loop $number_of_ronchi_iter
+#      CallScript 8 $j
+      CallScript 8
    EndLoop
    SetFrameBaseName 1 1 0 $base0
 endif
@@ -1530,10 +1564,10 @@ endif
 
 CallScript 14    #save extra meta in mdoc
 R
-if $with_laser > 0
+#if $with_laser > 0
    # reset ronchi measurement count for keys used
-   CallScript 3 $number_of_ronchi_iter
-endif
+ #  CallScript 3 $number_of_ronchi_iter
+#endif
 
 #ReportXLensDeflector 2
 #Echo ......AFTER XT $ReportedValue1 $ReportedValue2
@@ -2929,6 +2963,9 @@ if userInput == 1:
     sem.Echo("The new tilt axis offset has been set!")
 sem.Exit()
 EndMacro
+Macro	34
+ReportComaVsISmatrix
+EndMacro
 Macro	39
 MacroName IS-Pixel
 IncMagIfFoundPixel -1
@@ -2950,7 +2987,7 @@ Macro	60
 ReportBeamTilt
 EndMacro
 Macro	61
-ReportSequentialFrameNum
+AdjustBeamTiltforIS; FixComaByCTF 1 1 0
 EndMacro
 Macro	62
 ReportXLensDeflector 2
@@ -2959,7 +2996,7 @@ Macro	63
 GoToLowDoseArea R
 EndMacro
 Macro	64
-SetSequentialFrameNum 0
+ReportIlluminatedArea
 EndMacro
 Macro	65
 ReportImageDistanceOffset
@@ -2976,8 +3013,66 @@ EndMacro
 Macro	69
 SetImageShift 0 0
 EndMacro
+OneLineHistory	0
+ReportBeamTilt
+EndHistory
 OneLineHistory	1
+AdjustBeamTiltforIS
+ FixComaByCTF 1 1 0
+$%EndLine%$
+AdjustBeamTiltforIS
+ FixComaByCTF 1 1 0
+
+$%EndLine%$
+AdjustBeamTiltforIS
+ ReportBeamTilt
+$%EndLine%$
+AdjustBeamTiltforIS
+$%EndLine%$
 ReportSequentialFrameNum
 $%EndLine%$
 ReportSquentialFrameNum
+EndHistory
+OneLineHistory	4
+ReportIlluminatedArea
+$%EndLine%$
+ReportIlluminationArea
+EndHistory
+OneLineHistory	6
+FixComaByCTF 1 1 0
+EndHistory
+OneLineHistory	8
+ReportImageShift
+EndHistory
+OneLineHistory	9
+SetImageShift 0 0
+$%EndLine%$
+SetImageShift -5 5
+$%EndLine%$
+SetImageShift -5 0
+$%EndLine%$
+SetImageShift 5 0
+$%EndLine%$
+SetImageShift 0 5
+$%EndLine%$
+SetImageShift -4.9 0
+
+$%EndLine%$
+SetImageShift 4.9 0
+$%EndLine%$
+SetImageShift 0 4.9
+$%EndLine%$
+SetImageShift 5 5
+$%EndLine%$
+SetImageShift 0 -5
+$%EndLine%$
+SetImageShift -5 -5
+$%EndLine%$
+SetImageShift 5 -5
+$%EndLine%$
+SetImageShift -8 8
+$%EndLine%$
+SetImageShift 8 -8
+$%EndLine%$
+SetImageShift 8 0
 EndHistory

@@ -118,6 +118,7 @@ def checkRonchigramSetup():
     #ronchi_sem_lib.ronchiC3Offset = -173.0 # xt_pixel xt_is 88000 1.5 um
     #ronchi_sem_lib.ronchiC3Offset = -100.0 # xt_pixel xt_is 54000 1.5 um
     ronchi_sem_lib.ronchiC3Offset = -90.0 # xt_pixel xt_is 54000 1.35 um spot 6
+    ronchi_sem_lib.ronchiC3Offset = -100.0 # xt_pixel xt_is 54000 1.30 um spot 6
     #ronchi_sem_lib.ronchiC3Offset = -130.0 # xt_pixel xt_is 110000 1.5 um
     #ronchi_sem_lib.ronchiC3Offset = -30.0
     #sem.Pause('Please set C3 offset to where you can clearly see the global xLPP center')
@@ -372,7 +373,7 @@ def calibrateLafis():
     ronchi_offset = ronchi_sem_lib.ronchiC3Offset
     cal_image_shift_scales = [1,2.5,5]    #in um
     max_trials = 3
-    converging_deviation_threshold = 15
+    converging_deviation_threshold = 20
     for scale in cal_image_shift_scales:
         # do a refinement of the existing is_xt_matrix
         log(f'calibrating lafis_matrix with image shift of {scale} um')

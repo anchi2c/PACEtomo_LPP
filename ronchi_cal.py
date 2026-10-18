@@ -168,8 +168,8 @@ def calibrate_ronchigram_start_c3(pixel_size_um, binning,
                        c3_correction_factor=20 / 6.85):
     """FFT peak ks -> C3imagingdistance saved as the new ronchiStartC3Offset"""
     c3_delta_scale = 5
-    c3_offset_diff_threshold = 1
-    residual_threshold = 2e-3
+    c3_offset_diff_threshold = 1.5
+    residual_threshold = 3e-3
     max_trials = 4
     print('starting c3',sem.ReportImageDistanceOffset())
     trial_offset_baseline0 = ronchi_sem_lib.ronchiStartC3Offset
