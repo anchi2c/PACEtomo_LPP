@@ -321,6 +321,8 @@ def _refineLafisMatrix(image_shift_scale, trial_offset_baseline, ronchi_offset):
         update_is_xt_matrix(transform_matrix)
     except Exception as e:
         log(f'Error: Calibration not updated {e} Bad xt residuals {xt_residuals_arr}')
+        transform_matrix = is_xt_matrix
+    display_util.addTransformFitData(transform_matrix, old_cal_xts, xt_residuals_arr, cal_image_shifts)
     return pixel_residuals
 
 def update_pixel_xt_matrix(transform_arr):
@@ -380,13 +382,18 @@ def calibrateLafis():
         trial = 1
         while True:
             if trial > max_trials:
+                display_util.showTransformFit()
+				display_util.resetTransformFitData()
                 raise ValueError('Lafis calibration did not converge.')
             log(f'calibrating lafis_matrix trial {trial:d} with image shift of {scale} um')
             pixel_residual = _refineLafisMatrix(scale, trial_offset_baseline, ronchi_offset)
             mean_deviation = np.linalg.norm(pixel_residual).mean()
             if mean_deviation < converging_deviation_threshold:
-                break
-            trial += 1
+                display_util.showTransformFit()
+				display_util.resetTransformFitData()
+                continue
+            else:
+                trial += 1
     resetOptics() 
 
 def testXtPixel():
