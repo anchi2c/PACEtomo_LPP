@@ -24,13 +24,16 @@ def addImage(arr, peaks=[]):
     if np.iscomplexobj(arr):
         arr = np.log1p(np.abs(arr).copy())
         vmin, vmax = np.percentile(arr, [1, 99])
+        if vmin == vmax:
+            print('vmin==vmax')
+            vmin = 0.99*vmax
         arr = 255*((arr -vmin)/(vmax-vmin))
     else:
         vmin, vmax = np.percentile(arr,[1,99])
         vmean = arr.mean()
         # use mean std method if needed
         vstd_max = vmean+4*arr.std()
-        if vstd_max < (vmax+vmin)/2:
+        if vmin==vmax or vstd_max < (vmax+vmin)/2:
             vmin = vmean-4*arr.std()
             vmax = vstd_max
         arr = 255*((arr -vmin)/(vmax-vmin))
@@ -97,20 +100,21 @@ def resetTransformFitData():
     Fit_T = []
 
 def showTransformFit():
-	"""
-	Create graph that shows residual vectors at each calibration applied shift and resulting
-	transform matrix fit.
-	For refining is_xt_matrix
-		Fit_X: applied image shifts
-		Fit_UV: xt_residuals_from_old matrix, xt_residuals_from new matrix
-		Fit_T: 2x2 transform matrix
-	"""
+    """
+    Create graph that shows residual vectors at each calibration applied shift and resulting
+    transform matrix fit.
+    For refining is_xt_matrix
+        Fit_X: applied image shifts
+        Fit_UV: xt_residuals_from_old matrix, xt_residuals_from new matrix
+        Fit_T: 2x2 transform matrix
+    """
     import matplotlib.pyplot as plt
     # ncols: number of columns of subplots
     # panel_width: width of the each subplot panel in inches
     # cmap: colormap. None uses default in matplotlib
     ncols = 3
     number_of_images = len(Fit_T)
+    print(number_of_images)
     nrows = int(math.ceil(number_of_images / ncols))
     # layout
     aspect = 1
@@ -127,27 +131,29 @@ def showTransformFit():
         X = Fit_X[n][:,0]
         Y = Fit_X[n][:,1]
         # Define vector components at each (x, y) point
-        scale = 1
+        scale = 0.5e6
         U1.append(Fit_UV[n][0][:,0] * scale)
         V1.append(Fit_UV[n][0][:,1] * scale)
         U2.append(Fit_UV[n][1][:,0] * scale)
         V2.append(Fit_UV[n][1][:,1] * scale)
-
         # Compute magnitude for coloring (optional)
         magnitude = np.sqrt(U1[0]**2 + V1[0]**2)
 
         # Plot the vectors
-        q1 = ax[row][col].quiver(X, Y, U1[n], V1[n], label='LAFIS old', color='orange', scale=50)
-        q2 = ax[row][col].quiver(X, Y, U2[n], V2[n], label='LAFIS new', color='green', scale=50)
+        q1 = ax[row][col].quiver(X, Y, U1[n], V1[n], label='residual', color='orange', scale=50)
+        #q2 = ax[row][col].quiver(X, Y, U2[n], V2[n], label='LAFIS new', color='green', scale=50)
 
 
+    X_stack = np.vstack(Fit_X)
     for n in range(number_of_images):
-        ax[row][col].set_xlim(Fit_X[0][0].min() - 2, Fit_X[0][0].max() + 2)
-        ax[row][col].set_ylim(Fit_X[0][1].min() - 2, Fit_X[0][1].max() + 2)
+        col = n % ncols
+        row = n // ncols
+        ax[row][col].set_xlim(X_stack[:,0].min() - 2, X_stack[:,1].max() + 2)
+        ax[row][col].set_ylim(X_stack[:,1].min() - 2, X_stack[:,1].max() + 2)
 
         ax[row][col].set_xlabel('Image Shift X (um)')
         ax[row][col].set_ylabel('Image Shift Y (um)')
-        ax[row][col].set_title('Residual XT Iter=%d' % n)
+        ax[row][col].set_title(f'Residual at {Fit_X[n].max()} um')
         ax[row][col].set_aspect('equal')
 
         ax[row][col].legend(loc='lower right', fontsize=11, bbox_to_anchor=(0.995, 0.035))

@@ -22,6 +22,7 @@ else:
     is_simu = True
     print('testing on Mac/Linux with simulator')
     import sem_simulator as sem
+
 import os
 import copy
 import time
@@ -41,7 +42,6 @@ import display_util
 # Requires ronchi_sem_lib.hasXLens = True and beamTiltComp = True to be meaningful.
 count = 0
 # all transform matrix are to be used with [x,y] as in SerialEM convention
-is_xt_matrix = [[0.000324, -0.000347],[0.001100, 0.00028125]]  #26jul23
 is_xt_matrix = [[0.00028763286791300477, -0.00012083706524300338], [0.0009948701965659995, 0.00014791197022821008]]  #simu_testing
 is_xt_matrix = [[0.00024180881486977201, -0.00042928950183638887], [0.0010020323076790395, 0.0002672870290525659]]
 df_is_matrix = [[0.041381,0.012342], [0.041381,0.012342]]
@@ -54,6 +54,13 @@ lafisIsDone = False            # set from saveZeroImageShiftDefocusXLens before 
 lafisXtCorrectionX = 0.0       # set from doLafis as the correction made on XLens
 lafisXtCorrectionY = 0.0       # set from doLafis as the correction made on XLens
 ########## 
+
+# calibration parameters
+working_dir = sem.ReportDirectory()
+cal_dir, session_name = cal_util.getCalibrationsDir(working_dir)
+os.makedirs(cal_dir, exist_ok=True)
+optics = ronchi_sem_lib.getOpticsKey(ronchi_binning=None, ronchi_c3_offset=ronchi_sem_lib.ronchiC3Offset)
+print(optics)
 
 # ScriptName Script 11 Recall xt0 and other origin values from temp_xt0.json
 
@@ -102,6 +109,7 @@ def log(text, color=0, style=0):
     elif text.startswith("WARNING:"):
         color = 5
     elif text.startswith("ERROR:"):
+        print(text)
         color = 2
         style = 1 
     elif text.startswith("DEBUG:"):
@@ -112,35 +120,35 @@ def log(text, color=0, style=0):
         sem.SetNextLogOutputStyle(style, color)
     sem.EchoBreakLines(text)
 
+def suggestRonchiC3Offset(optics):
+    optics['ronchi_c3_offset']=None
+    r, ronchi_c3_offset = cal_util.readCalibration('is_xt_matrix', cal_dir, optics)
+    if r:
+        return ronchi_c3_offset
+    if optics['mag'] == 54000:
+        return -125.0 # xt_pixel xt_is 54000 1.35 um spot 6
+    elif optics['mag'] in (88000, 110000):
+        return -130.0 # xt_pixel xt_is 54000 1.35 um spot 6
+    else:
+        return -abs(float(input('Enter an C3 offset that gives strong lpp cross')))
+
 def checkRonchigramSetup():
+    global optics
     filepath = getResetOpticsPath()
     ronchi_sem_lib.checkRonchigramSetup()
+    ronchi_sem_lib.ronchiC3Offset = suggestRonchiC3Offset(optics)
+    optics = ronchi_sem_lib.getOpticsKey(ronchi_binning=None, ronchi_c3_offset=ronchi_sem_lib.ronchiC3Offset)
     #ronchi_sem_lib.ronchiC3Offset = -173.0 # xt_pixel xt_is 88000 1.5 um
     #ronchi_sem_lib.ronchiC3Offset = -100.0 # xt_pixel xt_is 54000 1.5 um
-    ronchi_sem_lib.ronchiC3Offset = -90.0 # xt_pixel xt_is 54000 1.35 um spot 6
-    ronchi_sem_lib.ronchiC3Offset = -100.0 # xt_pixel xt_is 54000 1.30 um spot 6
+    #ronchi_sem_lib.ronchiC3Offset = -90.0 # xt_pixel xt_is 54000 1.35 um spot 6
+    #ronchi_sem_lib.ronchiC3Offset = -130.0 # xt_pixel xt_is 54000 1.30 um spot 6
     #ronchi_sem_lib.ronchiC3Offset = -130.0 # xt_pixel xt_is 110000 1.5 um
     #ronchi_sem_lib.ronchiC3Offset = -30.0
     #sem.Pause('Please set C3 offset to where you can clearly see the global xLPP center')
     #ronchi_sem_lib.ronchiC3Offset = float(sem.ReportImageDistanceOffset()) - ronchi_sem_lib.ronchiStartC3Offset
 
-def saveCalibrations():
-    """
-    Save calibrations in jsonl format.
-    """
-    working_dir = sem.ReportDirectory()
-    cal_dir, session_name = cal_util.getCalibrationsDir(working_dir)
-    os.makedirs(cal_dir, exist_ok=True)
-    optics = ronchi_sem_lib.getOpticsKey(ronchi_binning=None, ronchi_c3_offset=ronchi_sem_lib.ronchiC3Offset)
-    cal_util.saveCalibration('pixel_xt_matrix', cal_dir, session_name,pixel_xt_matrix, optics)
-    cal_util.saveCalibration('is_xt_matrix', cal_dir, session_name,is_xt_matrix, optics)
-    cal_util.saveCalibration('df_is_matrix', cal_dir, session_name,df_is_matrix)
-
 def readCalibrations():
     global pixel_xt_matrix, is_xt_matrix, df_is_matrix
-    working_dir = sem.ReportDirectory()
-    cal_dir, session_name = cal_util.getCalibrationsDir(working_dir)
-    optics = ronchi_sem_lib.getOpticsKey(ronchi_binning=None, ronchi_c3_offset=ronchi_sem_lib.ronchiC3Offset)
     # read calibrations from file. Only replace hardcoded default if
     # there is saved value
     r, ronchi_c3_offset = cal_util.readCalibration('pixel_xt_matrix', cal_dir, optics)
@@ -303,7 +311,6 @@ def _measureLafisResidual(cal_image_shifts, trial_offset_baseline, ronchi_offset
 
 def update_is_xt_matrix(transform_arr):
     global is_xt_matrix
-    print('before update is_xt_matrix', is_xt_matrix)
     is_xt_matrix = transform_arr.tolist()
     print('updated_is_xt_matrix', is_xt_matrix)
 
@@ -313,9 +320,6 @@ def _refineLafisMatrix(image_shift_scale, trial_offset_baseline, ronchi_offset):
     print('image_shifts for cal', cal_image_shifts)
     old_cal_xts, pixel_residuals = _measureLafisResidual(cal_image_shifts, trial_offset_baseline, ronchi_offset)
     xt_residuals_arr = pixel_residuals @ np.array(pixel_xt_matrix)
-    print('old_cal_xts',old_cal_xts)
-    print('xt_residuals', xt_residuals_arr)
-    print('together', old_cal_xts+xt_residuals_arr)
     try:
         transform_matrix = cal_util.solveTransform(old_cal_xts-xt_residuals_arr, cal_image_shifts)
         update_is_xt_matrix(transform_matrix)
@@ -357,15 +361,23 @@ def calibrateXtPixelMatrix():
     saveZeroImageShiftDefocusXLens()
     trial_offset_baseline = ronchi_sem_lib.ronchiStartC3Offset
     ronchi_offset = ronchi_sem_lib.ronchiC3Offset
-    cal_image_shift_scale = 0.5    #in um
-
     # Do pixel_xt_matrix calibration using an estimated xt_scale
-    # based on the is_xt_matrix and cal_image_shift_scale
-    xt_scale = np.array(is_xt_matrix).mean() * cal_image_shift_scale
+    xt_scale = 0.000114648
     log(f'calibrating pixel_xt_matrix with xt change of {xt_scale} rad')
+    print(f'calibrating pixel_xt_matrix with xt change of {xt_scale} rad')
     pixel_residuals = _calibrate_pixel_xt_matrix(xt_scale, trial_offset_baseline, ronchi_offset)
     if pixel_residuals is None:
         raise ValueError('pixel_xt_matrix calibration failed')
+    norm_0 = np.linalg.norm(pixel_xt_matrix[0])
+    norm_1 = np.linalg.norm(pixel_xt_matrix[1])
+    print(f'magnitudes: {norm_0:.3e}, {norm_1:.3e}')
+    if abs(norm_0-norm_1) > 0.2 * (norm_0+norm_1)/2:
+        raise ValueError('pixel_xt_matrix unreasonable. magnitudes between two axis too different')
+    cos_theta = np.dot(pixel_xt_matrix[0], pixel_xt_matrix[1]) / (norm_0 * norm_1)
+    angle_rad = np.arccos(np.clip(cos_theta, -1.0, 1.0))
+    print(f'angle in degrees between the two axis {np.degrees(angle_rad):.2}')
+    if abs(cos_theta) > np.sin(np.radians(10.0)):
+        raise ValueError('pixel_xt_matrix unreasonable. angle between two axis too far from 90 degrees')
     print('pixel_residuals', pixel_residuals)
 
 def calibrateLafis():
@@ -375,23 +387,22 @@ def calibrateLafis():
     ronchi_offset = ronchi_sem_lib.ronchiC3Offset
     cal_image_shift_scales = [1,2.5,5]    #in um
     max_trials = 3
-    converging_deviation_threshold = 20
+    converging_deviation_threshold = 1.5e-5
     for scale in cal_image_shift_scales:
         # do a refinement of the existing is_xt_matrix
         log(f'calibrating lafis_matrix with image shift of {scale} um')
         trial = 1
         while True:
             if trial > max_trials:
-                display_util.showTransformFit()
-				display_util.resetTransformFitData()
                 raise ValueError('Lafis calibration did not converge.')
             log(f'calibrating lafis_matrix trial {trial:d} with image shift of {scale} um')
             pixel_residual = _refineLafisMatrix(scale, trial_offset_baseline, ronchi_offset)
-            mean_deviation = np.linalg.norm(pixel_residual).mean()
-            if mean_deviation < converging_deviation_threshold:
-                display_util.showTransformFit()
-				display_util.resetTransformFitData()
-                continue
+            xt_residual = pixel_residual @ np.array(pixel_xt_matrix)
+            mean_xt_deviation = np.linalg.norm(xt_residual).mean()
+            print(f'mean_deviation/scale={mean_xt_deviation/scale:.3e} vs converging_threshold={converging_deviation_threshold:.3e}')
+            if mean_xt_deviation /scale < converging_deviation_threshold:
+
+                break
             else:
                 trial += 1
     resetOptics() 
@@ -419,7 +430,7 @@ def testXtPixel():
 
 def testLafis():
     trial_offset_baseline = ronchi_sem_lib.ronchiStartC3Offset
-    ronchi_offset = ronchi_sem_lib.ronchiC3Offset
+    ronchi_offset = -20
     ronchi_c3_value = trial_offset_baseline + ronchi_offset
     all_is = [(0,0),(5,0),(-5,0),(0,5),(0,-5)]
     for my_is in all_is:
@@ -432,6 +443,7 @@ def testLafis():
 if __name__=='__main__':
     #saveCalibrations()
     checkRonchigramSetup()
+    print(ronchi_sem_lib.ronchiC3Offset)
     saveZeroImageShiftDefocusXLens()
     readCalibrations()
     ##### calibrate ronchiCorrMatrix
@@ -439,13 +451,13 @@ if __name__=='__main__':
 
     try:
         calibrateXtPixelMatrix()
-        saveCalibrations()
+        cal_util.saveCalibration('pixel_xt_matrix', cal_dir, session_name,pixel_xt_matrix, optics)
         if display_util.image_buffer:
             display_util.showImages()
             # reset image_buffer
             display_util.image_buffer = []
     except Exception as e:
-        log(f'Failed: {e}')
+        log(f'ERROR: Failed: {e}')
         log('Aborting....')
         failed_xt_pixel = True
 
@@ -455,13 +467,17 @@ if __name__=='__main__':
         ##### lafis
         try:
             calibrateLafis()
-            saveCalibrations()
+            print(f'saving is_xt_matrix: {is_xt_matrix}')
+            cal_util.saveCalibration('is_xt_matrix', cal_dir, session_name,is_xt_matrix, optics)
+            if input('Perform test at 5 um IS shift ? (Y/N/y/n)').lower() == 'y':
+                testLafis()
         except Exception as e:
-            log(f'Failed: {e}')
+            log(f'ERROR: Failed: {e}')
+            print(f'Failed: {e}')
             log('Aborting....')
-        #testLafis()
+            print("""Tip:Try accurately align to on-plane""")
     print(f'final pixel_xt_matrix: {pixel_xt_matrix}')
     if not failed_xt_pixel:
         print(f'final is_xt_matrix: {is_xt_matrix}')
-    if display_util.image_buffer:
-        display_util.showImages()
+    if display_util.Fit_X:
+        display_util.showTransformFit()

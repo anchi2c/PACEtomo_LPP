@@ -20,7 +20,7 @@ else:
     import sem_simulator as sem
 
 timestampFormat = "%Y-%m-%d %H:%M:%S %Z"
-illuminatedAreaTolerance = 1e-3   # in ReportIlluminatedArea unit
+illuminatedAreaTolerance = 1e-3   # in ReportIlluminatedArea unit. 0.01 is 1 um
 ronchiC3OffsetTolerance = 1.0   # in ReportImageDistanceOffset unit
 
 def log(*args):
