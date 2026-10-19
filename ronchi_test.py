@@ -21,7 +21,7 @@ def readRonchiCalibrations():
     if ref_correct_ks is None:
         # No calibration to transfer.  Use module defaults
         return
-    optics = ronchi_sem_lib.getOpticsKey(ronchi_c3_offset)  #limit to the same ronchi_c3_offset
+    optics = ronchi_sem_lib.getOpticsKey(ronchi_c3_offset=ronchi_c3_offset)  #limit to the same ronchi_c3_offset
     ref_phases, ronchi_c3_offset = cal_util.readCalibration('ronchi_ref_phase', cal_dir, optics)
     ronchi_sem_lib.ronchiC3Offset = ronchi_c3_offset
     ronchi_sem_lib.ronchiTargetPhaseA = ref_phases[0]           # vertical laser (rad)

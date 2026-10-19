@@ -140,16 +140,13 @@ ronchiPeakRadius   = 100
 ronchiMontage      = True         # also run before montage tile Record shots
 ronchiCorrMatrix   = [[0.212, 1.28], [1.22, -0.243]]  # phase-to-deflector coupling, scaled by 1e-5
 ronchiCorrectC3    = True         # apply C3 correction from mean ks error (diagonal fringe spacing)
+ronchiCorrectConstantIterNumber = 0   # > 0: correct C3 and phase on this many Trials (ronchiMinErrForC3CorrectionRedo and redo_ronchi_after_C3 ignored)
 ronchiMinErrForC3Correction   = 0.3          # apply C3 on 1st Trial only if |c3 correction| exceeds this (um)
 ronchiMinErrForC3CorrectionRedo = 0.5        # apply C3 on 2nd Trial only if |c3 correction| exceeds this (um)
 redo_ronchi_after_C3 = True       # up to 3 Trials: 1st C3, 2nd optional C3 + 3rd phase-only if 2nd C3 applied
 ronchiPerPositionC3 = True        # remember ImageDistanceOffset per target; False = global C3 for all
 ronchiXLensTolerance = 0.000125     # reset XLensDeflector(2) to start if |x-x0| or |y-y0| exceeds this
-ronchiStartXLensX = None          # set from ReportXLensDeflector(2) at startup when doRonchigram
-ronchiStartXLensY = None
-ronchiStartC3Offset = None      # set from ReportImageDistanceOffset at startup when doRonchigram
-
-ronchiMeasureCount = 0         # set from _ronchi_trial_and_analyze to log result in frame stack mdoc
+# Session start XLens/C3 and the mdoc measure count are kept in ronchi_sem_lib.
 
 ### settings from cal_util
 import sys
@@ -157,18 +154,8 @@ sys.path.insert(0, 'C:\\Users\\VALUEDGATANCUSTOMER\\Desktop\\anchi\\PACEtomo_LPP
 sys.path.insert(0, 'C:\Program Files\SerialEM\PythonModules')
 import serialem as sem
 import ronchi_sem_lib
-import cal_util
-sem.GoToLowDoseArea("T")
-working_dir = sem.ReportDirectory()
-cal_dir, session_name = cal_util.getCalibrationsDir(working_dir)
-ronchi_sem_lib.ronchiC3Offset = ronchiC3Offset
-optics = ronchi_sem_lib.getOpticsKey(ronchiC3Offset)
-ref_correct_ks, ronchi_c3_offset = cal_util.readCalibration('ronchi_ref_ks', cal_dir, optics)
-ref_phases, ronchi_c3_offset = cal_util.readCalibration('ronchi_ref_phase', cal_dir, optics)
-
-ronchiTargetPhaseA = ref_phases[0]           # vertical laser (rad)
-ronchiTargetPhaseB = ref_phases[1]        # horizontal laser (rad)
-ronchiCorrectKs    = ref_correct_ks
+ronchiTargetPhaseA, ronchiTargetPhaseB, ronchiCorrectKs, _ = ronchi_sem_lib.readCalibrations(
+    "T", ronchi_binning=ronchiBinning, ronchi_c3_offset=ronchiC3Offset)
 ### END settings from cal_util
 
 ### settings derived from other settings
@@ -427,219 +414,25 @@ def autofocus_apply(target):
     return defocus
 
 ##############################################################################
-# Ronchigram - image analysis (numpy / FFT only; no SerialEM calls)
-#
-# Public API: analyze_ronchigram()
-# Internal helpers: _ronchi_bin_image, _ronchi_find_fourier_centered, ...
-##############################################################################
-
-
-def _ronchi_bin_image(image, binning=32):
-    bins = [image[i:(image.shape[0] // binning * binning):binning, j:(image.shape[1] // binning * binning):binning]
-            for i in range(binning) for j in range(binning)]
-    return np.sum(bins, axis=0)
-
-
-def _ronchi_find_fourier_centered(image, padded_size=4096):
-    fourier = np.fft.fftshift(np.fft.fft2(image - np.mean(image), s=(padded_size, padded_size)))
-    center = np.array(image.shape) / 2
-    grid_y, grid_x = np.indices((padded_size, padded_size), dtype=float)
-    shifted_y = grid_y - padded_size / 2
-    shifted_x = grid_x - padded_size / 2
-    correction_phase_x = np.exp(2j * np.pi * shifted_x / padded_size * center[1])
-    correction_phase_y = np.exp(2j * np.pi * shifted_y / padded_size * center[0])
-    return fourier * correction_phase_x * correction_phase_y
-
-
-def _ronchi_report_angles(ks, start_angle=-135):
-    return np.mod(np.arctan2(-ks[:, 0], ks[:, 1]) * 180 / np.pi - start_angle, 360) + start_angle
-
-
-def _ronchi_find_peaks(fourier, radius=100, npeaks=4):
-    fourier_abs = np.abs(fourier).copy()
-    peak_locations = []
-    phases = []
-    size = np.shape(fourier_abs)[0]
-    peak_coords = [size // 2, size // 2]
-    fourier_abs[(peak_coords[0] - radius):(peak_coords[0] + radius),
-                (peak_coords[1] - radius):(peak_coords[1] + radius)] = 0
-    for _ in range(npeaks):
-        max_idx = np.argmax(fourier_abs)
-        peak_coords = np.unravel_index(max_idx, fourier_abs.shape)
-        peak_locations.append(peak_coords)
-        fourier_abs[(peak_coords[0] - radius):(peak_coords[0] + radius),
-                    (peak_coords[1] - radius):(peak_coords[1] + radius)] = 0
-        phases.append(np.angle(fourier[peak_coords]))
-    return np.array(peak_locations) - size / 2, np.array(phases)
-
-
-def _ronchi_find_ks_phases(corrected_fourier, pixel_size_um, npeaks=2, radius=100, binning=1, fourier_size=None):
-    if fourier_size is None:
-        fourier_size = corrected_fourier.shape[0]
-    peaks, phases = _ronchi_find_peaks(corrected_fourier, radius=radius, npeaks=npeaks * 2)
-    ordering = np.argsort(_ronchi_report_angles(peaks, start_angle=-135))
-    peaks = peaks[ordering][:npeaks]
-    phases = phases[ordering][:npeaks]
-    ks = peaks / fourier_size * 1 / (pixel_size_um * binning)
-    return ks, phases
-
-
-def analyze_ronchigram(image, pixel_size_um, binning, target_phase_a, target_phase_b,
-                       correct_ks, peak_radius=100, corr_matrix=None, corr_scale=1e-5,
-                       c3_correction_factor=20 / 6.85):
-    """FFT peak phases -> laser deflector and C3 corrections (dict with correction_x/y, phases, ks, ...)."""
-    if corr_matrix is None:
-        corr_matrix = [[0.212, 1.28], [1.22, -0.243]]
-    correct_ks = np.asarray(correct_ks, dtype=float)
-    binned = _ronchi_bin_image(np.asarray(image), binning=binning)
-    image_fft = _ronchi_find_fourier_centered(binned)
-    ks, phases = _ronchi_find_ks_phases(image_fft, pixel_size_um * binning, npeaks=2, radius=peak_radius, binning=1,
-                                       fourier_size=image_fft.shape[0])
-    ks_error = ks - correct_ks
-    ks_total_err = float(np.linalg.norm(ks_error))
-    ks_avg_err = (ks_error[0, 0] + ks_error[1, 1]) / 2.0
-    c3_correction = ks_avg_err * c3_correction_factor
-    phase_err_a = np.mod(phases[0] - target_phase_a + np.pi, 2 * np.pi) - np.pi
-    phase_err_b = np.mod(phases[1] - target_phase_b + np.pi, 2 * np.pi) - np.pi
-    corr = np.asarray(corr_matrix, dtype=float) * corr_scale
-    correction_x = phase_err_a * corr[0, 0] + phase_err_b * corr[0, 1]
-    correction_y = phase_err_a * corr[1, 0] + phase_err_b * corr[1, 1]
-    return {
-        "ks": ks, "phases": phases, "ks_error": ks_error, "ks_total_err": ks_total_err,
-        "ks_avg_err": ks_avg_err,
-        "c3_correction": c3_correction,
-        "phase_err_a": phase_err_a, "phase_err_b": phase_err_b,
-        "correction_x": correction_x, "correction_y": correction_y,
-    }
-
-
-##############################################################################
-# Ronchigram - microscope aligner (SerialEM: Trial acquire, apply, Record)
+# Ronchigram (shared code in ronchi_sem_lib.py / ronchi_lib.py)
 #
 # Public API: checkRonchigramSetup(), doRonchigramCorrection(), recordWithRonchi()
 ##############################################################################
 
 
-def applyRonchigramXtiltCorrection(correction_x, correction_y, lens_index=2):
-    """Apply calculated shifts to the X lens deflector."""
-    if not hasXLens:
-        return
-    xtX, xtY = sem.ReportXLensDeflector(lens_index)
-    sem.SetXLensDeflector(lens_index, xtX + correction_x, xtY + correction_y)
-
-
-def _reset_ronchi_xlens_if_out_of_tolerance(lens_index=2):
-    """Reset XLensDeflector to session start if phase corrections have walked it too far."""
-    global ronchiStartXLensX, ronchiStartXLensY
-    if not hasXLens or ronchiStartXLensX is None or ronchiStartXLensY is None:
-        return
-    xtX, xtY = sem.ReportXLensDeflector(lens_index)
-    xtX, xtY = float(xtX), float(xtY)
-    xtX_delta = xtX - lafisXtCorrectionX - ronchiStartXLensX
-    xtY_delta = xtY - lafisXtCorrectionY - ronchiStartXLensY
-    if (abs(xtX_delta) > ronchiXLensTolerance
-            or abs(xtY_delta) > ronchiXLensTolerance):
-        log(
-            f"WARNING: Ronchigram X lens deflector ({xtX:.6f}, {xtY:.6f}) beyond tolerance "
-            f"{ronchiXLensTolerance} from start ({ronchiStartXLensX:.6f}, {ronchiStartXLensY:.6f}); resetting."
-        )
-        sem.SetXLensDeflector(lens_index, ronchiStartXLensX+lafisXtCorrectionX, ronchiStartXLensY+lafisXtCorrectionY)
-
-
-def applyRonchigramC3Correction(c3_correction, baseline_offset):
-    """Apply C3 correction to ImageDistanceOffset relative to pre-ronchigram offset."""
-    new_offset = baseline_offset + c3_correction
-    sem.SetImageDistanceOffset(new_offset)
-    return new_offset
-
-
-def _report_frame_basename():
-    """ReportFrameBaseName -> (use_in_frame, name, use_in_folder)."""
-    r = sem.ReportFrameBaseName()
-    use_in_frame = int(r[0])
-    name = r[1] if len(r) > 1 else ""
-    use_in_folder = int(r[2]) if len(r) > 2 else 0
-    if isinstance(name, str) and name.lower() == "none":
-        name = ""
-    return use_in_frame, name, use_in_folder
-
-
-def _ronchi_trial_basename(use_in_frame, current_name, use_in_folder):
-    """Frame base name for Trial ronchigram image (active SetFrameBaseName + suffix)."""
-    root = (current_name or "").strip()
-    return root + ronchiBaseSuffix, root
-
-
-def _set_ronchi_trial_frame_basename():
-    """SetFrameBaseName with _ronchi suffix for Trial; return saved state for restore."""
-    use_in_frame, name, use_in_folder = _report_frame_basename()
-    ronchi_name, root = _ronchi_trial_basename(use_in_frame, name, use_in_folder)
-    if not root:
-        log("WARNING: Ronchigram Trial: no frame base name; SetFrameBaseName before acquire.")
-    else:
-        sem.SetFrameBaseName(0, use_in_frame, use_in_folder, ronchi_name)
-        log(f"Ronchigram Trial: SetFrameBaseName -> {ronchi_name}")
-    return use_in_frame, name, use_in_folder
-
-
-def _restore_frame_basename(saved):
-    use_in_frame, name, use_in_folder = saved
-    sem.SetFrameBaseName(0, use_in_frame, use_in_folder, name)
-    log(f"Ronchigram Trial: restored frame base name -> {name or '(none)'}")
+def _sync_ronchi_settings():
+    """Push current settings (including _bset overrides and LAFIS XLens correction) to ronchi_sem_lib."""
+    ronchi_sem_lib.configure(globals(), log_fn=log,
+                             ronchiXLensOffset=(lafisXtCorrectionX, lafisXtCorrectionY))
 
 
 def checkRonchigramSetup():
-    """Startup checks when doRonchigram is enabled (called after parseTargets)."""
-    global ronchiStartXLensX, ronchiStartXLensY, ronchiStartC3Offset, doRonchigram
-    if not hasXLens and doRonchigram:
-        sem.OKBox(
-            "ERROR: doRonchigram requires XLensDeflector. "
-            "Set hasXLens = True, or set doRonchigram = False."
-        )
-        sem.Exit()
+    """Startup checks when doRonchigram is enabled."""
+    _sync_ronchi_settings()
+    ronchi_sem_lib.checkRonchigramSetup()
     if not doRonchigram:
-        if not hasXLens:
-            log("NOTE: hasXLens=False; all XLens Report/Set/Restore calls are skipped.")
         return
-    if ronchiStartXLensX is None:
-        ronchiStartXLensX, ronchiStartXLensY = [float(v) for v in sem.ReportXLensDeflector(2)[:2]]
-    if ronchiStartC3Offset is None:
-        ronchiStartC3Offset = float(sem.ReportImageDistanceOffset())
-    log(
-        f"NOTE: Ronchigram X lens deflector start ({ronchiStartXLensX:.6f}, {ronchiStartXLensY:.6f}), "
-        f"reset tolerance {ronchiXLensTolerance}"
-    )
-    log(f"NOTE: Ronchigram C3 (ImageDistanceOffset) session start {ronchiStartC3Offset:.2f} um")
-    trial_exp, *_ = sem.ReportExposure("T")
-    record_exp, *_ = sem.ReportExposure("R")
-    if trial_exp <= 0 and sem.IsVariableDefined("warningRonchiTrial") == 0:
-        sem.Pause("WARNING: Trial exposure is zero or not set. Configure Trial with a very short exposure at the same position as Record.")
-        sem.SetPersistentVar("warningRonchiTrial", "")
-    if trial_exp >= record_exp * 0.5:
-        log("WARNING: Trial exposure should be much shorter than Record for negligible ronchigram dose.")
-    try:
-        t_shift = sem.ReportLDAreaShift("T")
-        if len(t_shift) >= 2 and np.linalg.norm(np.array(t_shift[:2], dtype=float)) > 0.01:
-            log("WARNING: Trial area position differs from Record. Set Trial LD offsets to match Record.")
-    except (AttributeError, TypeError, ValueError):
-        pass
-    log("NOTE: Ronchigram uses Trial at Record beam position. Set Trial LD offsets identical to Record; only exposure should differ.")
-    log(f"NOTE: Ronchigram Trial temporarily appends '{ronchiBaseSuffix}' to the active frame base name.")
     log("NOTE: Ronchigram runs before startup preview alignment images when previewAli or viewAli is enabled.")
-    if ronchiCorrectC3:
-        log(
-            f"NOTE: Ronchigram C3 correction enabled (factor {ronchiC3CorrectionFactor:.4f}, "
-            f"only if |C3 correction| > {ronchiMinErrForC3Correction} um)."
-        )
-    if redo_ronchi_after_C3:
-        log(
-            "NOTE: Ronchigram may use up to 3 Trials before Record: "
-            "1st C3 (if above threshold), 2nd phase or C3, 3rd phase-only if 2nd C3 applied."
-        )
-        log(
-            f"NOTE: 2nd-Trial C3 threshold |correction| > {ronchiMinErrForC3CorrectionRedo} um "
-            f"(1st-Trial threshold {ronchiMinErrForC3Correction} um)."
-        )
     if ronchiPerPositionC3:
         log("NOTE: Ronchigram C3 offset is stored and restored per target across tilts.")
 
@@ -668,113 +461,6 @@ def _save_c3_offset_for_target(pos, pn):
     log(f"Ronchigram: target {pos + 1} saved C3 offset {current:.2f} um")
 
 
-def _log_ronchi_ks(result, pass_label=""):
-    prefix = f"Ronchigram{pass_label}"
-    log(
-        f"{prefix} ks (1/um): {np.array2string(result['ks'], precision=4)} | "
-        f"ks error: {np.array2string(result['ks_error'], precision=4)}"
-    )
-    log(
-        f"{prefix} ||ks error||: {result['ks_total_err']:.4f} (1/um) | "
-        f"mean diagonal ks error: {result['ks_avg_err']:.4f} (1/um) | "
-        f"recommended C3 correction: {result['c3_correction']:.2f} um"
-    )
-    sem.AddToNextFrameStackMdoc(f'RonchiKs{ronchiMeasureCount:02d}', f"{np.array2string(result['ks'].ravel(), precision=4)[1:-1]}")
-
-
-def _log_ronchi_phases(result, pass_label=""):
-    phases = result["phases"]
-    prefix = f"Ronchigram{pass_label}"
-    log(
-        f"{prefix} phases (rad): measured vertical={phases[0]:.3f} horizontal={phases[1]:.3f} | "
-        f"targets vertical={ronchiTargetPhaseA:.3f} horizontal={ronchiTargetPhaseB:.3f}"
-    )
-    log(
-        f"{prefix} phase error (rad): vertical={result['phase_err_a']:.3f} "
-        f"horizontal={result['phase_err_b']:.3f} | "
-        f"deflector dX={result['correction_x']:.3e} dY={result['correction_y']:.3e}"
-    )
-    sem.AddToNextFrameStackMdoc(f'RonchiPhases{ronchiMeasureCount:02d}',f"{phases[0]:.3f}    {phases[1]:.3f}")
-
-def _reset_ronchi_measure_count():
-    global ronchiMeasureCount
-    for c0 in range(ronchiMeasureCount):
-        # Enter default value for each key so that
-        # it does not retain old value in the next mdoc.
-        # SerialEM's default behavior is such that key-value pair
-        # persists until the program is closed.
-        c1 = c0+1 # base 1
-        sem.AddToNextFrameStackMdoc(f'RonchiKs{c1:02d}', '')
-        sem.AddToNextFrameStackMdoc(f'RonchiPhases{c1:02d}','')
-    # reset value until the next target
-    ronchiMeasureCount = 0
-
-def _analyze_ronchi_image(image):
-    return analyze_ronchigram(
-        image, ronchiPixelSize, ronchiBinning, ronchiTargetPhaseA, ronchiTargetPhaseB,
-        ronchiCorrectKs, peak_radius=ronchiPeakRadius, corr_matrix=ronchiCorrMatrix,
-        c3_correction_factor=ronchiC3CorrectionFactor,
-    )
-
-
-def _acquire_ronchi_trial(trial_offset_baseline, pass_label=""):
-    """Trial ronchigram at C3 imaging offset; restore baseline offset after shot."""
-    _reset_ronchi_xlens_if_out_of_tolerance()
-    is_x, is_y, *_ = sem.ReportImageShift()
-    sem.GoToLowDoseArea("T")
-    sem.SetImageShift(0, 0)
-    sem.SetImageShift(is_x, is_y)
-    sem.SetImageDistanceOffset(trial_offset_baseline + ronchiC3Offset)
-    saved_basename = _set_ronchi_trial_frame_basename()
-    try:
-        sem.Delay(ronchiDelay, "s")
-        add_lpp_meta_to_next_mdoc()
-        sem.T()
-    finally:
-        sem.SetImageDistanceOffset(trial_offset_baseline)
-        _restore_frame_basename(saved_basename)
-    if pass_label:
-        log(f"Ronchigram{pass_label}: Trial image acquired.")
-    return np.asarray(sem.bufferImage("A"))
-
-
-def _try_apply_ronchi_c3(result, c3_baseline_offset, pass_label="", min_err=None):
-    """Apply C3 if enabled and correction magnitude exceeds minimum. Returns True if C3 was changed."""
-    if min_err is None:
-        min_err = ronchiMinErrForC3Correction
-    prefix = f"Ronchigram{pass_label}"
-    if not ronchiCorrectC3:
-        log(f"{prefix} C3: correction {result['c3_correction']:.2f} um not applied (ronchiCorrectC3=False)")
-        return False
-    if abs(result["c3_correction"]) <= min_err:
-        log(
-            f"{prefix} C3: skipped (|correction| {abs(result['c3_correction']):.2f} um <= "
-            f"minimum {min_err} um)"
-        )
-        return False
-    new_offset = applyRonchigramC3Correction(result["c3_correction"], c3_baseline_offset)
-    log(
-        f"{prefix} C3: ImageDistanceOffset adjusted by {result['c3_correction']:.2f} um "
-        f"(now {new_offset:.2f} um)"
-    )
-    return True
-
-
-def _ronchi_trial_and_analyze(c3_baseline_offset, pass_label=""):
-    """Acquire Trial ronchigram and analyze. Returns analysis result dict."""
-    global ronchiMeasureCount
-    image = _acquire_ronchi_trial(c3_baseline_offset, pass_label=pass_label)
-    result = _analyze_ronchi_image(image)
-    ronchiMeasureCount += 1
-    _log_ronchi_ks(result, pass_label=pass_label)
-    _log_ronchi_phases(result, pass_label=pass_label)
-    return result
-
-
-def _apply_ronchi_phase(result, pass_label=""):
-    _log_ronchi_phases(result, pass_label=pass_label)
-    applyRonchigramXtiltCorrection(result["correction_x"], result["correction_y"])
-
 def calc_xt_is(xt0, is_delta):
    xt1 = [0.0,0.0]
    xt1[0] = xt0[0]+is_delta[0]*xt_is_matrix[0][0]+is_delta[1]*xt_is_matrix[1][0]
@@ -785,20 +471,6 @@ def calc_df_is(df0, is_delta):
    df1 = 0.0
    df1 =df0+is_delta[0]*df_is_matrix[0][0]+is_delta[1]*df_is_matrix[1][1]
    return df1
-
-def add_lpp_meta_to_next_mdoc():
-    for k,v in (
-            ('ImageDistanceOffset', sem.ReportImageDistanceOffset()),
-        ):
-        v_str = '%.12f' % (float(v))
-        sem.AddToNextFrameStackMdoc(k, v_str)
-
-    for k,v in (
-            ('BeamTilt', sem.ReportBeamTilt()),
-            ('ObjectiveStig',sem.ReportObjectiveStigmator()),
-            ('XTilt', sem.ReportXLensDeflector(2)),):
-        v_str = '%.6f        %.6f' % (float(v[0]), float(v[1]))
-        sem.AddToNextFrameStackMdoc(k, v_str)
 
 def saveZeroImageShiftDefocusXLens():
     global lafisZeroImageShiftDefocus
@@ -845,54 +517,14 @@ def doRonchigramCorrection(set_track_fn=None, pos=None, pn=None):
     """Trial shot + analyze_ronchigram + C3 and/or laser correction; return to Record area."""
     if not doRonchigram:
         return
-    try:
-        sem.UpdateLowDoseParams("T")
-    except AttributeError:
-        pass
-    tilt = float(sem.ReportTiltAngle())
-    trial_exp, *_ = sem.ReportExposure("T")
-    log(
-        f"Ronchigram: Trial acquire at tilt {tilt:.1f} deg | "
-        f"C3 offset {ronchiC3Offset} um | binning {ronchiBinning} | Trial exposure {trial_exp:.4g} s"
-    )
+    _sync_ronchi_settings()
     if ronchiPerPositionC3 and pos is not None and pn is not None:
         c3_baseline_offset = _apply_stored_c3_offset(pos, pn)
     else:
-        c3_baseline_offset = float(sem.ReportImageDistanceOffset())
-    try:
-        result = _ronchi_trial_and_analyze(c3_baseline_offset)
-        c3_changed = _try_apply_ronchi_c3(result, c3_baseline_offset)
-
-        if c3_changed and redo_ronchi_after_C3:
-            log("Ronchigram: phase correction deferred until after 2nd Trial.")
-            c3_baseline_offset = float(sem.ReportImageDistanceOffset())
-            log("Ronchigram: 2nd Trial after 1st C3 change.")
-            result = _ronchi_trial_and_analyze(c3_baseline_offset, pass_label=" (2nd)")
-            c3_changed_redo = _try_apply_ronchi_c3(
-                result, c3_baseline_offset, pass_label=" (2nd)",
-                min_err=ronchiMinErrForC3CorrectionRedo,
-            )
-            if c3_changed_redo:
-                log("Ronchigram: phase correction deferred until after 3rd Trial.")
-                c3_baseline_offset = float(sem.ReportImageDistanceOffset())
-                log("Ronchigram: 3rd Trial (phase correction only).")
-                result = _ronchi_trial_and_analyze(c3_baseline_offset, pass_label=" (3rd)")
-                _apply_ronchi_phase(result, pass_label=" (3rd)")
-            else:
-                _apply_ronchi_phase(result, pass_label=" (2nd)")
-        else:
-            _apply_ronchi_phase(result)
-
-        if debug:
-            log(f"DEBUG: Ronchigram pixel size {ronchiPixelSize} um, peak radius {ronchiPeakRadius} px")
-        if ronchiPerPositionC3 and pos is not None and pn is not None:
-            _save_c3_offset_for_target(pos, pn)
-    except Exception as e:
-        log(f"WARNING: Ronchigram analysis failed: {e}. Continuing without laser correction.")
-        sem.SetImageDistanceOffset(ronchiStartC3Offset)
-        if ronchiPerPositionC3 and pos is not None and pn is not None:
-            _save_c3_offset_for_target(pos, pn)
-    sem.GoToLowDoseArea("R")
+        c3_baseline_offset = None
+    ronchi_sem_lib.doRonchigramCorrection(c3_baseline_offset)
+    if ronchiPerPositionC3 and pos is not None and pn is not None:
+        _save_c3_offset_for_target(pos, pn)
     if set_track_fn is not None:
         set_track_fn()
 
@@ -922,10 +554,10 @@ def recordWithRonchi(set_track_fn=None, run_ronchi=True, acquire_label="Record",
     else:
         log(f"NOTE: {acquire_label} - Record acquire.")
     sem.Delay(delayIS, "s")
-    add_lpp_meta_to_next_mdoc()
+    ronchi_sem_lib.add_lpp_meta_to_next_mdoc()
     sem.R()
     sem.S()
-    _reset_ronchi_measure_count()
+    ronchi_sem_lib.reset_ronchi_measure_count()
 
 ########### PACEtomo functions (non-ronchigram) ###########
 
@@ -1975,6 +1607,9 @@ def _reset_ronchi_to_session_start(when=""):
     if not doRonchigram:
         return
     suffix = f" {when}" if when else ""
+    ronchiStartXLensX = ronchi_sem_lib.ronchiStartXLensX
+    ronchiStartXLensY = ronchi_sem_lib.ronchiStartXLensY
+    ronchiStartC3Offset = ronchi_sem_lib.ronchiStartC3Offset
     if hasXLens and ronchiStartXLensX is not None and ronchiStartXLensY is not None:
         sem.SetXLensDeflector(2, ronchiStartXLensX, ronchiStartXLensY)
         log(
@@ -2506,7 +2141,7 @@ def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_acc
                             saveZeroImageShiftDefocusXLens()
                             doLafis(is_x,is_y)
                         ronchi_before_preview_align(f"target {i + 1} preview alignment (tgtfile)", pos=i, pn=0)
-                        tem.L()
+                        sem.L()
                         if beamTiltComp:
                             restoreLafis()
                         alignTo("O", debug)
@@ -2535,7 +2170,7 @@ def run_one_nav_item(nav_idx, item_index, batch_recover=False, batch_recover_acc
                             sem.ChangeFocus(defocus_offset)                                             # Higher defocus for better correlation, but max at 10 to avoid major distortions
                         if beamTiltComp:
                             doLafis(is_x,is_y)
-                        add_lpp_meta_to_next_mdoc()
+                        ronchi_sem_lib.add_lpp_meta_to_next_mdoc()
                         ronchi_before_preview_align(f"target {i + 1} preview alignment (view to Record)", pos=i, pn=0)
                         sem.L()
                         if beamTiltComp:

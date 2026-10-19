@@ -21,7 +21,7 @@ sem.GoToLowDoseArea("T")
 working_dir = sem.ReportDirectory()
 cal_dir, session_name = cal_util.getCalibrationsDir(working_dir)
 ronchi_sem_lib.ronchiC3Offset = ronchiC3Offset
-optics = ronchi_sem_lib.getOpticsKey(ronchiC3Offset)
+optics = ronchi_sem_lib.getOpticsKey(ronchi_c3_offset=ronchiC3Offset)
 ref_correct_ks, ronchi_c3_offset = cal_util.readCalibration('ronchi_ref_ks', cal_dir, optics)
 ref_phases, ronchi_c3_offset = cal_util.readCalibration('ronchi_ref_phase', cal_dir, optics)
 
