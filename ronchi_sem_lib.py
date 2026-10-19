@@ -35,6 +35,11 @@ import numpy as np
 import ronchi_lib
 import cal_util
 
+########## Ronchigram scope constants (not taken from callers by configure) ##########
+ronchiBinning      = 32
+ronchiPixelSize    = 0.98e-4 * 2 # um (unbinned; multiplied by binning in analysis)
+ronchiCorrMatrix   = [[0.212, 1.28], [1.22, -0.243]]  # phase-to-deflector coupling, scaled by 1e-5
+
 ########## Ronchigram settings (defaults; overridden by configure) ##########
 debug = False
 
@@ -43,13 +48,10 @@ doRonchigram       = True
 ronchiBaseSuffix   = "_ronchi"         # appended to active frame base name for Trial saves only, then restored
 ronchiC3Offset     = -20          # added to ReportImageDistanceOffset before Trial shot
 ronchiDelay        = 1.0          # seconds after C3 offset change
-ronchiBinning      = 32
-ronchiPixelSize    = 0.98e-4 * 2 # um (unbinned; multiplied by binning in analysis)
 ronchiTargetPhaseA = -1.93941993           # vertical laser (rad)
 ronchiTargetPhaseB = 1.67658165        # horizontal laser (rad)
 ronchiCorrectKs    = [[9.303, -0.662] ,  [0.856 ,8.680]]
 ronchiPeakRadius   = 100
-ronchiCorrMatrix   = [[0.212, 1.28], [1.22, -0.243]]  # phase-to-deflector coupling, scaled by 1e-5
 ronchiCorrectC3    = True         # apply C3 correction from mean ks error (diagonal fringe spacing)
 ronchiC3CorrectionFactor = 20 / 9.1  # um offset per um^-1 mean ks error
 ronchiCorrectConstantIterNumber  = 0         # measure and correct c3 and phase on a constant number of iteration.  ronchiMinErrForC3Correction, ronchiMinErrForC3CorrectionRedo, and redo_ronchi_after_C3 are ignored when this is set to a number larger than 0.
@@ -63,8 +65,8 @@ ronchiXLensOffset  = (0.0, 0.0)     # XLens correction made by others (e.g. PACE
 # Names configure() accepts from a caller namespace
 SETTING_NAMES = (
     "debug", "hasXLens", "doRonchigram", "ronchiBaseSuffix", "ronchiC3Offset", "ronchiDelay",
-    "ronchiBinning", "ronchiPixelSize", "ronchiTargetPhaseA", "ronchiTargetPhaseB",
-    "ronchiCorrectKs", "ronchiPeakRadius", "ronchiCorrMatrix", "ronchiCorrectC3",
+    "ronchiTargetPhaseA", "ronchiTargetPhaseB",
+    "ronchiCorrectKs", "ronchiPeakRadius", "ronchiCorrectC3",
     "ronchiC3CorrectionFactor", "ronchiCorrectConstantIterNumber",
     "ronchiMinErrForC3Correction", "ronchiMinErrForC3CorrectionRedo",
     "redo_ronchi_after_C3", "ronchiXLensTolerance", "ronchiXLensOffset",

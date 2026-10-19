@@ -130,15 +130,13 @@ autofocus_tolerance_um = 0.05
 # Trial LD area must match Record position; only exposure should differ.
 # Overridable from target file via _bset (e.g. _bset doRonchigram true).
 # Requires hasXLens = True.
+# ronchiBinning, ronchiPixelSize and ronchiCorrMatrix are scope constants in ronchi_sem_lib.py.
 doRonchigram       = True
 ronchiBaseSuffix   = "_ronchi"         # appended to active frame base name for Trial saves only, then restored
 ronchiC3Offset     = -20          # added to ReportImageDistanceOffset before Trial shot
 ronchiDelay        = 1.0          # seconds after C3 offset change
-ronchiBinning      = 32
-ronchiPixelSize    = 0.98e-4 * 2 # um (unbinned; multiplied by binning in analysis)
 ronchiPeakRadius   = 100
 ronchiMontage      = True         # also run before montage tile Record shots
-ronchiCorrMatrix   = [[0.212, 1.28], [1.22, -0.243]]  # phase-to-deflector coupling, scaled by 1e-5
 ronchiCorrectC3    = True         # apply C3 correction from mean ks error (diagonal fringe spacing)
 ronchiCorrectConstantIterNumber = 0   # > 0: correct C3 and phase on this many Trials (ronchiMinErrForC3CorrectionRedo and redo_ronchi_after_C3 ignored)
 ronchiMinErrForC3Correction   = 0.3          # apply C3 on 1st Trial only if |c3 correction| exceeds this (um)
@@ -155,7 +153,7 @@ sys.path.insert(0, 'C:\Program Files\SerialEM\PythonModules')
 import serialem as sem
 import ronchi_sem_lib
 ronchiTargetPhaseA, ronchiTargetPhaseB, ronchiCorrectKs, _ = ronchi_sem_lib.readCalibrations(
-    "T", ronchi_binning=ronchiBinning, ronchi_c3_offset=ronchiC3Offset)
+    "T", ronchi_binning=ronchi_sem_lib.ronchiBinning, ronchi_c3_offset=ronchiC3Offset)
 ### END settings from cal_util
 
 ### settings derived from other settings

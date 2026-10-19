@@ -64,15 +64,13 @@ measure_cycles = 1
 ########## Ronchigram / laser alignment (before Preview) ##########
 # Trial LD area must match Record position; only exposure should differ.
 # Requires hasXLens = True.
+# ronchiBinning, ronchiPixelSize and ronchiCorrMatrix are scope constants in ronchi_sem_lib.py.
 # ronchiTargetPhaseA/B, ronchiCorrectKs and ronchiC3CorrectionFactor are read from calibrations below.
 doRonchigram       = True
 ronchiBaseSuffix   = "_ronchi"    # appended to active frame base name for Trial saves only, then restored
 ronchiC3Offset     = -20          # added to ReportImageDistanceOffset before Trial shot
 ronchiDelay        = 2.0          # seconds after C3 offset change
-ronchiBinning      = 32
-ronchiPixelSize    = 0.973e-4 * 2 # um (unbinned; multiplied by binning in analysis)
 ronchiPeakRadius   = 100
-ronchiCorrMatrix   = [[0.212, 1.28], [1.22, -0.243]]  # phase-to-deflector coupling, scaled by 1e-5
 ronchiCorrectC3    = True        # apply C3 correction from mean ks error (diagonal fringe spacing)
 ronchiCorrectConstantIterNumber = 0   # > 0: correct C3 and phase on this many Trials (ronchiMinErrForC3CorrectionRedo and redo_ronchi_after_C3 ignored)
 ronchiMinErrForC3Correction = 0.5     # apply C3 on 1st Trial only if |c3 correction| exceeds this (um)
@@ -133,7 +131,7 @@ if not hasXLens:
 ### Ronchigram settings from calibrations
 if doRonchigram:
     ronchiTargetPhaseA, ronchiTargetPhaseB, ronchiCorrectKs, _ = ronchi_sem_lib.readCalibrations(
-        "T", ronchi_binning=ronchiBinning, ronchi_c3_offset=ronchiC3Offset)
+        "T", ronchi_binning=ronchi_sem_lib.ronchiBinning, ronchi_c3_offset=ronchiC3Offset)
     _avg_norm = (np.linalg.norm(ronchiCorrectKs[0]) + np.linalg.norm(ronchiCorrectKs[1])) / 2.0
     ronchiC3CorrectionFactor = abs(ronchiC3Offset) / _avg_norm  # um offset per um^-1 mean ks error
 
