@@ -41,7 +41,7 @@ def opticsMatch(optics1, optics2):
         if not _valueMatch(optics1['cam_binning'],optics2['cam_binning'], 0):
             return False
     if 'ronchi_binning' in optics1.keys() and 'ronchi_binning' in optics2.keys():
-        if not  _valueMatch(optics1['cam_binning'],optics2['cam_binning'], 0):
+        if not  _valueMatch(optics1['ronchi_binning'],optics2['ronchi_binning'], 0):
             return False
     # records saved before ronchi_c3_offset was added have no such key
     return _valueMatch(optics1.get('ronchi_c3_offset'), optics2.get('ronchi_c3_offset'), ronchiC3OffsetTolerance)

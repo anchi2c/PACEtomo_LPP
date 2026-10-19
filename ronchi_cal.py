@@ -274,6 +274,8 @@ if __name__=='__main__':
         print('new StartC3Offset',new_ronchi_start_c3)
 
     if True:
+        if is_simu:
+            sem.test_rip = True # load -20 c3offset image for testing
         measure_and_save_reference_ronchigram_ks_phases(ronchi_fixed_pixel_size_um, ronchi_binning,
                        corr_scale=corr_scale)
 

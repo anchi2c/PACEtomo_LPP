@@ -35,7 +35,9 @@ mag = 88000
 pixel_size = 1.0  # um
 cam_binning = 2
 added_mdoc_dict = {}
-test_failed = False
+
+## when test_rip is True, a -20 c3offset file is loaded
+test_rip = True
 
 def pause():
     time.sleep(0.1)
@@ -563,16 +565,16 @@ import numpy as np
 # ImageDistanceOffset at which the simulated fringes vanish (the value
 # calibrate_ronchigram_start_c3 should recover).
 ronchi_flat_c3_offset = 0.0
-# ImageDistanceOffset at which the reference image below was acquired; it is
-# reproduced unzoomed (zoom_factor == 1).
-ref_c3_offset = -130.0
 # xt correction per um of defocus (the value defocus_xt_cal.py should recover)
 sim_df_xt_vector = np.array([2.0e-4, -1.0e-4])
-if not test_failed:
+if not test_rip:
+    # ImageDistanceOffset at which the reference image below was acquired; it is
+    # reproduced unzoomed (zoom_factor == 1).
+    ref_c3_offset = -130.0
     sim_arr = mrc.read('./data/c3_offset_-130.mrc') #high underfocus for zoom and croping
     sq_size = int(min(sim_arr.shape)*0.8)
 else:
-    #sim_arr = mrc.read('./data/lamella_failed.mrc') #ronchigram analysis would fail this one
+    ref_c3_offset = -20.0
     sim_arr = mrc.read('./data/c3_offset_-20.mrc') #ronchigram analysis should give [[9,848, -0.779],[0.779,9.381]]
     sq_size = int(min(sim_arr.shape))
 cropped_shape = (sq_size, sq_size)
@@ -627,15 +629,17 @@ def bufferImage(*args, **kwargs) -> Any:
     import ronchi_sem_lib
     working_dir = ReportDirectory()
     cal_dir, session_name = cal_util.getCalibrationsDir(working_dir)
-    pixel_xt_matrix, ronchi_c3_offset = cal_util.readCalibration('pixel_xt_matrix', cal_dir, ronchi_sem_lib.getOpticsKey(ronchi_sem_lib.ronchiC3Offset))
+    pixel_xt_matrix, ronchi_c3_offset = cal_util.readCalibration('pixel_xt_matrix', cal_dir, ronchi_sem_lib.getOpticsKey(ronchi_c3_offset=ronchi_sem_lib.ronchiC3Offset))
     if pixel_xt_matrix is None:
-        pixel_xt_matrix = np.array([[1.338e-6, -2.006312e-7],[2.36091e-7, 1.5751567e-6]])  #starting guess mrad/pixel
+        pixel_xt_matrix, ronchi_c3_offset = cal_util.readCalibration('pixel_xt_matrix', cal_dir, ronchi_sem_lib.getOpticsKey(ronchi_c3_offset=None))
+        if pixel_xt_matrix is None:
+            pixel_xt_matrix = np.array([[1.338e-6, -2.006312e-7],[2.36091e-7, 1.5751567e-6]])  #starting guess mrad/pixel
     else:
         pixel_xt_matrix = np.array(pixel_xt_matrix)
     print('pixel_xt_matrix', pixel_xt_matrix)
 
     # calculate pixel_is_matrix from saved is_xt_matrix
-    is_xt_matrix, ronchi_c3_offset = cal_util.readCalibration('is_xt_matrix', cal_dir, ronchi_sem_lib.getOpticsKey(ronchi_sem_lib.ronchiC3Offset))
+    is_xt_matrix, ronchi_c3_offset = cal_util.readCalibration('is_xt_matrix', cal_dir, ronchi_sem_lib.getOpticsKey(ronchi_c3_offset=None))
     pixel_is_matrix = -np.linalg.inv(is_xt_matrix) @ pixel_xt_matrix
     print('perfect pixel_is_matrix', pixel_is_matrix)
     # for lafis high off-plane
@@ -658,7 +662,7 @@ def bufferImage(*args, **kwargs) -> Any:
         # sem functions is X,Y
         cropped_arr = CropCenterToSize(shift_arr, cropped_shape[1], cropped_shape[0])
         c3_focus = ReportImageDistanceOffset()
-        if not test_failed:
+        if not test_rip:
             # distance from the fringe-free offset; zoom is the ratio of the
             # reference image distance to the current one.
             c3_distance = c3_focus - ronchi_flat_c3_offset
