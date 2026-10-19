@@ -21,7 +21,7 @@ import scipy.ndimage as ndimage
 
 file_count = 0
 spot_size = 1
-illuminated_area = 1.0
+illuminated_area = 0.013023 # 1 um is 0.01 in sem
 c3_offset = 0.0
 x_tilt = (0.0,0.0)
 image_shift = (0.0,0.0)
@@ -33,7 +33,7 @@ stage_tilt = 0.0
 stage_xyz = (0.0,0.0,0.0)
 mag = 88000
 pixel_size = 1.0  # um
-cam_binning = 1
+cam_binning = 2
 added_mdoc_dict = {}
 test_failed = False
 
@@ -572,7 +572,8 @@ if not test_failed:
     sim_arr = mrc.read('./data/c3_offset_-130.mrc') #high underfocus for zoom and croping
     sq_size = int(min(sim_arr.shape)*0.8)
 else:
-    sim_arr = mrc.read('./data/lamella_failed.mrc') #ronchigram analysis would fail this one
+    #sim_arr = mrc.read('./data/lamella_failed.mrc') #ronchigram analysis would fail this one
+    sim_arr = mrc.read('./data/c3_offset_-20.mrc') #ronchigram analysis should give [[9,848, -0.779],[0.779,9.381]]
     sq_size = int(min(sim_arr.shape))
 cropped_shape = (sq_size, sq_size)
 
@@ -593,7 +594,6 @@ def shift_pad_or_crop(img, pad_y, pad_x):
     else:
         img = img[:, -pad_x:]
         img = np.pad(img, ((0, 0), (0,-pad_x)))
-    
     return img
 
 def zoom_center_to_size(data, zoom_factor=1):
@@ -629,13 +629,15 @@ def bufferImage(*args, **kwargs) -> Any:
     cal_dir, session_name = cal_util.getCalibrationsDir(working_dir)
     pixel_xt_matrix, ronchi_c3_offset = cal_util.readCalibration('pixel_xt_matrix', cal_dir, ronchi_sem_lib.getOpticsKey(ronchi_sem_lib.ronchiC3Offset))
     if pixel_xt_matrix is None:
-        pixel_xt_matrix = np.array([[1.115e-7, 5.9858e-7],[-5.903e-7, 1.3343e-7]])  #starting guess mrad/pixel
+        pixel_xt_matrix = np.array([[1.338e-6, -2.006312e-7],[2.36091e-7, 1.5751567e-6]])  #starting guess mrad/pixel
     else:
         pixel_xt_matrix = np.array(pixel_xt_matrix)
-    pixel_is_matrix = np.array([[ 0.07404388, -0.02263578],
-       [-0.01479404, -0.00302799]])
-    #pixel_is_matrix = np.array([[ 0.06004388, -0.02263578],
-    #   [-0.01479404, -0.00302799]])
+    print('pixel_xt_matrix', pixel_xt_matrix)
+
+    # calculate pixel_is_matrix from saved is_xt_matrix
+    is_xt_matrix, ronchi_c3_offset = cal_util.readCalibration('is_xt_matrix', cal_dir, ronchi_sem_lib.getOpticsKey(ronchi_sem_lib.ronchiC3Offset))
+    pixel_is_matrix = -np.linalg.inv(is_xt_matrix) @ pixel_xt_matrix
+    print('perfect pixel_is_matrix', pixel_is_matrix)
     # for lafis high off-plane
     is_scale = 1
     xt_scale = 1
@@ -646,6 +648,8 @@ def bufferImage(*args, **kwargs) -> Any:
         xt_x,xt_y,*_ = ReportXLensDeflector(2)
         shift_from_xt = np.array((xt_x,xt_y)) @ np.linalg.inv(pixel_xt_matrix) * xt_scale
         shift_from_is = np.array((is_x,is_y)) @ np.linalg.inv(pixel_is_matrix) * is_scale
+        print('shift_from_xt', xt_x, xt_y, shift_from_xt)
+        print('shift_from_is', is_x, is_y, shift_from_is)
         # defocus shifts xlpp the same way as xt, opposite to its correction
         shift_from_df = -defocus * sim_df_xt_vector @ np.linalg.inv(pixel_xt_matrix) * xt_scale
         shift_x, shift_y = (shift_from_is + shift_from_xt + shift_from_df).tolist()

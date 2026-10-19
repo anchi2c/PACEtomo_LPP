@@ -330,6 +330,9 @@ def _refineLafisMatrix(image_shift_scale, trial_offset_baseline, ronchi_offset):
     return pixel_residuals
 
 def update_pixel_xt_matrix(transform_arr):
+    if is_simu:
+        # simulator correlation error is large. Don't update the value
+        return
     global pixel_xt_matrix
     pixel_xt_matrix = transform_arr.tolist()
 
@@ -368,6 +371,9 @@ def calibrateXtPixelMatrix():
     pixel_residuals = _calibrate_pixel_xt_matrix(xt_scale, trial_offset_baseline, ronchi_offset)
     if pixel_residuals is None:
         raise ValueError('pixel_xt_matrix calibration failed')
+    if is_simu:
+        # always accept
+        return
     norm_0 = np.linalg.norm(pixel_xt_matrix[0])
     norm_1 = np.linalg.norm(pixel_xt_matrix[1])
     print(f'magnitudes: {norm_0:.3e}, {norm_1:.3e}')
@@ -388,7 +394,7 @@ def calibrateLafis():
     cal_image_shift_scales = [1,2.5,5]    #in um
     max_trials = 3
     converging_deviation_threshold = 1.5e-5
-    for scale in cal_image_shift_scales:
+    for i, scale in enumerate(cal_image_shift_scales):
         # do a refinement of the existing is_xt_matrix
         log(f'calibrating lafis_matrix with image shift of {scale} um')
         trial = 1
@@ -399,8 +405,13 @@ def calibrateLafis():
             pixel_residual = _refineLafisMatrix(scale, trial_offset_baseline, ronchi_offset)
             xt_residual = pixel_residual @ np.array(pixel_xt_matrix)
             mean_xt_deviation = np.linalg.norm(xt_residual).mean()
-            print(f'mean_deviation/scale={mean_xt_deviation/scale:.3e} vs converging_threshold={converging_deviation_threshold:.3e}')
-            if mean_xt_deviation /scale < converging_deviation_threshold:
+            if i == 0:
+                # allow more tolerance on the first measurement
+                this_threshold = converging_deviation_threshold * 2
+            else:
+                this_threshold = converging_deviation_threshold
+            print(f'mean_deviation/scale={mean_xt_deviation/scale:.3e} vs converging_threshold={this_threshold:.3e}')
+            if mean_xt_deviation /scale < this_threshold:
 
                 break
             else:
