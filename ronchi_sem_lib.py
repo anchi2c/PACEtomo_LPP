@@ -76,8 +76,7 @@ SETTING_NAMES = (
 ronchiStartXLensX = None          # set from ReportXLensDeflector(2) in checkRonchigramSetup
 ronchiStartXLensY = None
 ronchiStartC3Offset = None        # set from ReportImageDistanceOffset in checkRonchigramSetup
-ronchiMeasureCount = 0            # incremented in _ronchi_trial_and_analyze to log result in frame stack mdoc
-
+ronchiMeasureCount = 0            # incremented in _ronchi_trial_and_analyze to log result in frame stack mdoc. also used as part of its FrameBaseName
 
 def _default_log(text, color=0, style=0):
     if text.startswith("DEBUG:") and not debug:
@@ -285,7 +284,8 @@ def _report_frame_basename():
 def _ronchi_trial_basename(use_in_frame, current_name, use_in_folder):
     """Frame base name for Trial ronchigram image (active SetFrameBaseName + suffix)."""
     root = (current_name or "").strip()
-    return root + ronchiBaseSuffix, root
+    # include ronchiMeasureCount since FrameBaseName is not used.
+    return f'{root}{ronchiBaseSuffix}{ronchiMeasureCount+1:02d}', root
 
 
 def _set_ronchi_trial_frame_basename():
