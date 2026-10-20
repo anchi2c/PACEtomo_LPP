@@ -450,6 +450,9 @@ Macro	3
 # python for Laser Image-Shift XTilt correction only
 import serialem as sem
 
+### Start User Settings ###
+is_run_testing = False
+### End User Settings ###
 
 df_is_matrix = [[0.041381,0.012342],[ 0.041381,0.012342]]
 
@@ -520,8 +523,8 @@ def main():
    # End result should be at is1==is2 and bt1==bt2
    is1, bt1, xt0, stg0, df0 = get_values()
 
-   #Enable the next line if testing directly.
-   #sem.AdjustBeamTiltforIS()
+   if is_run_testing:
+      sem.AdjustBeamTiltforIS()
    delta = is1
    xt1 = calc_xt_is(xt0, delta)
    df1 = calc_df_is(df0, delta)
@@ -529,10 +532,11 @@ def main():
    sem.SetXLensDeflector(2, xt1[0], xt1[1])
    sem.SetDefocus(df1)
    is2, bt2, xt2, stg2, df2 = get_values()
-   #Enable the next line so the AjustBeamTiltforIS is still applied before script ends.
-   #sem.T()
-   #sem.FixComaByCTF(1,1,0)
-   #sem.SetXLensDeflector(2, xt0[0], xt0[1])
+   if is_run_testing:
+      #Acquire here so the AjustBeamTiltforIS is still applied before script ends.
+      sem.T()
+      #sem.FixComaByCTF(1,1,0)
+      sem.SetXLensDeflector(2, xt0[0], xt0[1])
 
 if __name__=='__main__':
     main()
@@ -1067,7 +1071,7 @@ sem_params = SEMargStrings
 
 
 if sem_params:
-    ronchiMeasureCount = int(sem_params[0])
+ 	ronchiMeasureCount = int(sem_params[0])
 else:
     ronchiMeasureCount = 1
 
@@ -1427,7 +1431,7 @@ number_of_iter = 5
 step = 2.5 # image shift step in um
 with_laser = 1
 do_coma_measurement = 0
-number_of_ronchi_iter = 3
+number_of_ronchi_iter = 0
 data_pattern = p26oct15a_test5
 data_filename = $data_pattern.json
 SetFrameBaseName 1 1 0 $data_pattern
@@ -2964,7 +2968,7 @@ if userInput == 1:
 sem.Exit()
 EndMacro
 Macro	34
-ReportComaVsISmatrix
+ReportComaVsISmatrix 
 EndMacro
 Macro	39
 MacroName IS-Pixel
@@ -2982,6 +2986,9 @@ Else
   Record
 Endif
 FindPixelSize
+EndMacro
+Macro	49
+ListAllCalibrations 
 EndMacro
 Macro	60
 ReportBeamTilt
@@ -3047,6 +3054,10 @@ EndHistory
 OneLineHistory	9
 SetImageShift 0 0
 $%EndLine%$
+SetImageShift -5 -5
+$%EndLine%$
+SetImageShift 5 5
+$%EndLine%$
 SetImageShift -5 5
 $%EndLine%$
 SetImageShift -5 0
@@ -3062,17 +3073,13 @@ SetImageShift 4.9 0
 $%EndLine%$
 SetImageShift 0 4.9
 $%EndLine%$
-SetImageShift 5 5
-$%EndLine%$
 SetImageShift 0 -5
-$%EndLine%$
-SetImageShift -5 -5
 $%EndLine%$
 SetImageShift 5 -5
 $%EndLine%$
-SetImageShift -8 8
+SetImageShift -8 8
 $%EndLine%$
-SetImageShift 8 -8
+SetImageShift 8 -8
 $%EndLine%$
 SetImageShift 8 0
 EndHistory
