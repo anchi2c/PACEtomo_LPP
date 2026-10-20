@@ -3077,9 +3077,9 @@ SetImageShift 0 -5
 $%EndLine%$
 SetImageShift 5 -5
 $%EndLine%$
-SetImageShift -8 8
+SetImageShift -8 8
 $%EndLine%$
-SetImageShift 8 -8
+SetImageShift 8 -8
 $%EndLine%$
 SetImageShift 8 0
 EndHistory
