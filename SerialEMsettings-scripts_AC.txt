@@ -465,10 +465,10 @@ def getOpticsKey(ronchi_binning=32, ronchi_c3_offset=None):
     Optics condition that calibrations such as pixel_xt_matrix depend on.
     ronchi_binning: the binning of the ronchi_image before fft is calculated for
     peak finding
-    ronchi_c3_offset: ronchi_sem_lib.ronchiC3Offset used to acquire
+    ronchi_c3_offset: C3Offset used to acquire
     the ronchigram.
-    This is in ronchi_sem_lib.py instead of cal_util.py to avoid need to
-    import serialem in cal_util.py
+    This is duplicated from ronchi_sem_lib.py because Serial Macro does not support
+    import from another python script that needs to import serialem as sem.
     """
     mag,*_ = sem.ReportMag()
     spot_size = sem.ReportSpotSize()
@@ -490,7 +490,7 @@ def getOpticsKey(ronchi_binning=32, ronchi_c3_offset=None):
 sem.GoToLowDoseArea("T")
 working_dir = sem.ReportDirectory()
 cal_dir, session_name = cal_util.getCalibrationsDir(working_dir)
-optics = getOpticsKey(ronchi_c3_offset=-100)
+optics = getOpticsKey(ronchi_c3_offset=None)
 xt_is_matrix, dummy_c3_offset = cal_util.readCalibration('is_xt_matrix', cal_dir, optics)
 print(xt_is_matrix)
 
@@ -862,11 +862,10 @@ Macro	6
 #!Python
 #ScriptName quick_ronchi_magic_phase_measurment
 # Purpose:       Measure best ronchigram phase offset and standing wave periodicity correction scale.
-#                       Must be measured at C3 parallel illumination offset micromap step size 5 and two clicks down from on-plane
+#                Must be measured starting at C3 parallel illumination offset on-plane
 # Author:        Josh Dickerson, Eric Cooper
 # Additional Documentation: Anchi Cheng
 # ===================================================================
-#be step size 5 and two clicks down from on-plane ( = 0.0020 logical unit in TFS micromap)
 print("=== Collecting Ronchigram ===")
 
 import sys
@@ -875,17 +874,58 @@ import serialem as sem
 import matplotlib.pyplot as pltA
 import matplotlib.colors as colors
 
-c3offset = 0
-pixel_size = 0.98e-4 * 2 #um
-binning = 32
+#### Start UserSettings ####
+c3offset = -20  #equivalent of Micromap step size 5 and two clicks down from on-plane ( = 0.0020 logical unit in TFS micromap)
+#### End UserSettings ####
 
+# Default values that needs to be consistent between measurement
+#(This script) and correction (Script 8)
+# DO NOT CHANGE even if you have a different pixel_size
+pixel_size = 0.98e-4 * 2 #um
+ronchi_binning = 32
+# End default values
+
+#### Start Old measurement ####
+# These are old measurement so that the same code can be used as in Macro 7 for error
+# output. No need to change them
 target_phase_A=   0.86642708 # Vertical Laser
 target_phase_B = -2.75644112  # Horizontal Laser
-   
 
-c3_correction_factor = 20/9.3
-#correct_ks = np.array([[5.722, -0.389] ,  [0.623, 5.878]])
 correct_ks = np.array([[10.160, -0.662]  , [0.934, 9.731]])
+avg_norm = (np.linalg.norm(correct_ks[0]) + np.linalg.norm(correct_ks[1]))/2.0
+c3_correction_factor = 20/avg_norm
+#### End old measurement ####
+
+### settings from cal_util
+sys.path.insert(0, 'C:\\Users\\VALUEDGATANCUSTOMER\\Desktop\\anchi\\PACEtomo_LPP')
+import cal_util
+
+def getOpticsKey(ronchi_binning=32, ronchi_c3_offset=None):
+    """
+    Optics condition that calibrations such as pixel_xt_matrix depend on.
+    ronchi_binning: the binning of the ronchi_image before fft is calculated for
+    peak finding
+    ronchi_c3_offset: C3Offset used to acquire
+    the ronchigram.
+    This is duplicated from ronchi_sem_lib.py because Serial Macro does not support
+    import from another python script that needs to import serialem as sem.
+    """
+    mag,*_ = sem.ReportMag()
+    spot_size = sem.ReportSpotSize()
+    cam_binning = sem.ReportBinning('T')
+    try:
+        illuminated_area = float(sem.ReportIlluminatedArea())
+    except Exception as e:
+        # only available on some Thermo Scientific microscopes
+        log('WARNING: illuminated area not available', e)
+        illuminated_area = None
+    if ronchi_c3_offset is not None:
+        ronchi_c3_offset = float(ronchi_c3_offset)
+    else:
+        ronchi_c3_offset = None
+    kv_pairs = {'mag': int(mag), 'spot_size': int(spot_size), 'illuminated_area': illuminated_area,
+            'cam_binning': cam_binning, 'ronchi_binning': ronchi_binning, 'ronchi_c3_offset':ronchi_c3_offset}
+    return kv_pairs
 
 def plot_complex_image(Fourier):
     # 1. Amplitude and Phase calculation
@@ -998,12 +1038,20 @@ def convert_to_plane_offset(ks, focal_length = 7):
   offset = ks / (2/1064e-3) * focal_length # ks are in um^-1
   return offset
 
+sem.GoToLowDoseArea("T")
+working_dir = sem.ReportDirectory()
+cal_dir, session_name = cal_util.getCalibrationsDir(working_dir)
+optics = getOpticsKey(ronchi_c3_offset=c3offset)
+
+def saveCalibrations(ks, phases):
+    optics = getOpticsKey(ronchi_binning=ronchi_binning, ronchi_c3_offset=c3offset)
+    cal_util.saveCalibration('ronchi_ref_ks', cal_dir, session_name,ks, optics)
+    cal_util.saveCalibration('ronchi_ref_phase', cal_dir, session_name,phases, optics)
 
 xtX, xtY = sem.ReportXLensDeflector(2)
 
 start_offset = sem.ReportImageDistanceOffset()
 new_offset = start_offset + c3offset
-print(new_offset)
 
 sem.SetImageDistanceOffset(new_offset)
 base = sem.ReportFrameBaseName()
@@ -1018,9 +1066,9 @@ sem.SetImageDistanceOffset(start_offset)
 
 imageA = np.asarray(sem.bufferImage("A"))
 print(imageA.shape)
-binnedImage = bin_image(imageA, binning = binning)
+binnedImage = bin_image(imageA, binning = ronchi_binning)
 imageFFT = find_fourier_centered(binnedImage)
-ks, phases = find_ks_phases(imageFFT, pixel_size * binning)
+ks, phases = find_ks_phases(imageFFT, pixel_size * ronchi_binning)
 sem.Echo("A")
 sem.Echo("Measured Fringe Spacing")
 sem.Echo(np.array2string(ks, formatter = {'float_kind':lambda x: "%.3f" % x}))
@@ -1029,6 +1077,8 @@ ks_err = ks-correct_ks
 sem.Echo(np.array2string(ks_err,  formatter = {'float_kind':lambda x: "%.3f" % x}))
 sem.Echo("Measured Phase")
 sem.Echo(np.array2string(phases))
+
+saveCalibrations(ks, phases)
 
 phase_err_A = np.mod(phases[0] - target_phase_A + np.pi, 2*np.pi) - np.pi
 phase_err_B = np.mod(phases[1] - target_phase_B + np.pi, 2*np.pi) - np.pi
@@ -1084,10 +1134,10 @@ def getOpticsKey(ronchi_binning=32, ronchi_c3_offset=None):
     Optics condition that calibrations such as pixel_xt_matrix depend on.
     ronchi_binning: the binning of the ronchi_image before fft is calculated for
     peak finding
-    ronchi_c3_offset: ronchi_sem_lib.ronchiC3Offset used to acquire
+    ronchi_c3_offset: c3Offset used to acquire
     the ronchigram.
-    This is in ronchi_sem_lib.py instead of cal_util.py to avoid need to
-    import serialem in cal_util.py
+    This is duplicated from ronchi_sem_lib.py because Serial Macro does not support
+    import from another python script that needs to import serialem as sem.
     """
     mag,*_ = sem.ReportMag()
     spot_size = sem.ReportSpotSize()
@@ -1109,7 +1159,7 @@ def getOpticsKey(ronchi_binning=32, ronchi_c3_offset=None):
 sem.GoToLowDoseArea("T")
 working_dir = sem.ReportDirectory()
 cal_dir, session_name = cal_util.getCalibrationsDir(working_dir)
-optics = getOpticsKey(ronchi_c3_offset=c3offset)
+optics = getOpticsKey(ronchi_c3_offset=None)
 ref_correct_ks, c3offset = cal_util.readCalibration('ronchi_ref_ks', cal_dir, optics)
 ref_phases, c3offset = cal_util.readCalibration('ronchi_ref_phase', cal_dir, optics)
 
@@ -1744,9 +1794,10 @@ target_phase_A= 1.40851107   # Vertical Laser
 target_phase_B = -1.25431823  # Horizontal Laser
   
 
+correct_ks = np.array([[5.527,-0.389] ,  [0.584, 5.177]])
+
 c3_correction_factor = 20/5.6
 #correct_ks = np.array([[5.722, -0.389] ,  [0.623, 5.878]])
-correct_ks = np.array([[5.527,-0.389] ,  [0.584, 5.177]])
 
 def plot_complex_image(Fourier):
     # 1. Amplitude and Phase calculation
