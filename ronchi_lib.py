@@ -47,6 +47,21 @@ def _ronchi_find_peaks(fourier, radius=100, npeaks=4):
         phases.append(np.angle(fourier[peak_coords]))
     return np.array(peak_locations) - size / 2, np.array(phases)
 
+def analyze_ronchigram_stig(ks):
+    """
+    Analyze ks in magnitude difference ratio (1= equal) and angle between
+    the two vectors.
+    """
+    norm_0 = np.linalg.norm(ks[0])
+    norm_1 = np.linalg.norm(ks[1])
+    print(f'magnitudes: {norm_0:.3e}, {norm_1:.3e}')
+    norm_diff_ratio = (norm_0-norm_1)/((norm_0+norm_1)/2)
+    print(f'magnitude difference: {abs(norm_diff_ratio)*100:.2f} %')
+    cos_theta = np.dot(ks[0], ks[1]) / (norm_0 * norm_1)
+    angle_rad = np.arccos(np.clip(cos_theta, -1.0, 1.0))
+    angle_degrees = np.degrees(angle_rad)
+    print(f'angle in degrees between the two axis {np.degrees(angle_rad):.2}')
+    return norm_diff_ratio, angle_degrees
 
 def _ronchi_find_ks_phases(corrected_fourier, pixel_size_um, npeaks=2, radius=100, binning=1, fourier_size=None):
     """
