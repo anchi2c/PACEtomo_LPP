@@ -167,8 +167,22 @@ ronchiC3CorrectionFactor = abs(ronchiC3Offset) / avg_norm  # um offset per um^-1
 # Requires hasXLens = True and beamTiltComp = True to be meaningful.
 
 #xt_is_matrix = [[0.000324, -0.000347],[0.001100, 0.00028125]]  #26jul23
-xt_is_matrix = [[0.00024965200894843043, -0.0002568478985382952], [0.0008983, 0.000260]] #26sep29a recal
+xt_is_matrix = [[0.00024965200894843043, -0.0002568478985382952], [0.0008983, 0.000260]] #26sep29a recal, default if not in calibrations
 df_is_matrix = [[0.041381,0.012342], [0.041381,0.012342]]
+
+### settings from cal_util
+# is_xt_matrix saved by lafis_cal.py at the current optics (still in Trial
+# low dose area from ronchi_sem_lib.readCalibrations above). LAFIS
+# calibration uses its own C3 offset, so match any ronchi_c3_offset.
+import cal_util
+lafis_cal_dir, _ = cal_util.getCalibrationsDir(sem.ReportDirectory())
+lafis_optics = ronchi_sem_lib.getOpticsKey(ronchi_binning=None, ronchi_c3_offset=None)
+lafis_cal_matrix, _ = cal_util.readCalibration("is_xt_matrix", lafis_cal_dir, lafis_optics)
+if lafis_cal_matrix:
+    xt_is_matrix = lafis_cal_matrix
+else:
+    ronchi_sem_lib.log(f"WARNING: no is_xt_matrix calibration in {lafis_cal_dir} for optics {lafis_optics}; using default xt_is_matrix")
+### END settings from cal_util
 
 lafisZeroImageShiftDefocus = None            # set from saveZeroImageShiftDefocusXLens before doLafis
 lafisZeroImageShiftXLens = None            # set from saveZeroImageShiftDefocusXLens before doLafis
