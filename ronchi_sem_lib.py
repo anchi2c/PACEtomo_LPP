@@ -16,6 +16,8 @@
 #             reset_ronchi_measure_count(), add_lpp_meta_to_next_mdoc()
 ##############################################################################
 import sys
+import os
+import glob
 import platform
 if platform.system() == 'Windows':
     is_simu = False
@@ -284,8 +286,16 @@ def _report_frame_basename():
 def _ronchi_trial_basename(use_in_frame, current_name, use_in_folder):
     """Frame base name for Trial ronchigram image (active SetFrameBaseName + suffix)."""
     root = (current_name or "").strip()
+    global ronchiMeasureCount
     # include ronchiMeasureCount since FrameBaseName is not used.
-    return f'{root}{ronchiBaseSuffix}{ronchiMeasureCount+1:02d}', root
+    while True:
+        my_name = f'{root}{ronchiBaseSuffix}{ronchiMeasureCount+1:02d}'
+        fullpath = os.path.join(sem.ReportFrameSavingPath(),my_name)
+        r = glob.glob(fullpath+'*.*')
+        if r:
+            ronchiMeasureCount += 1
+        else:
+            return my_name, root
 
 
 def _set_ronchi_trial_frame_basename():
@@ -349,11 +359,11 @@ def _acquire_ronchi_trial(trial_offset_baseline, pass_label=""):
     sem.GoToLowDoseArea("T")
     sem.SetImageShift(0, 0)
     sem.SetImageShift(is_x, is_y)
-    saved_basename = _set_ronchi_trial_frame_basename()
+    saved_basename_params = _set_ronchi_trial_frame_basename()
     try:
         my_image = acquire_ronchi_image(trial_offset_baseline, ronchiC3Offset, 'T', pass_label)
     finally:
-        _restore_frame_basename(saved_basename)
+        _restore_frame_basename(saved_basename_params)
     return np.asarray(my_image)
 
 ###############
