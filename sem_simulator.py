@@ -18,8 +18,9 @@ import time
 from pyami import mrc
 import numpy as np
 import scipy.ndimage as ndimage
+import os
+import sys
 
-file_count = 0
 spot_size = 1
 illuminated_area = 0.013023 # 1 um is 0.01 in sem
 c3_offset = 0.0
@@ -34,7 +35,14 @@ stage_xyz = (0.0,0.0,0.0)
 mag = 88000
 pixel_size = 1.0  # um
 cam_binning = 2
+frame_saving_path = "./"
+frame_base_name = ""
+sequential_frame_num = 1
+frame_name_format_angle = False
+frame_name_format_sequential_num = True
+
 added_mdoc_dict = {}
+
 
 ## when test_rip is True, a -20 c3offset file is loaded
 test_rip = True
@@ -44,7 +52,7 @@ def pause():
 
 def _log(name: str, *args, **kwargs) -> None:
     arg_str = ", ".join([repr(a) for a in args] + [f"{k}={v!r}" for k, v in kwargs.items()])
-    #print(f"[sem stub] {name}({arg_str})")
+    print(f"[sem stub] {name}({arg_str})")
 
 def Echo(msg):
     _log(msg)
@@ -53,7 +61,7 @@ def Echo(msg):
 # ---------------------------------------------------------------------------
 
 def IsVersionAtLeast(*args, **kwargs) -> bool:
-    _log("IsVersionAtLeast", *args, **kwargs)
+    #_log("IsVersionAtLeast", *args, **kwargs)
     return True
 
 
@@ -493,10 +501,13 @@ def SetMag(*args, **kwargs) -> None:
 # ---------------------------------------------------------------------------
 
 def R(*args, **kwargs) -> None:
-    global file_count
-    file_count += 1
+    global sequential_frame_num
     _log("R", *args, **kwargs)
-    file_root = f"pt1_ts_{file_count:03d}"
+    file_root = f"{ReportFrameBaseName()[1]}"
+    if frame_name_format_sequential_num:
+        file_root += f"_{sequential_frame_num:03d}"
+    if frame_name_format_angle:
+        file_root += f"_{ReportTiltAngle():03.2f}"
     f=open(file_root+".mrc.mdoc",'w')
     pre_text = '''
 PixelSpacing = 3.2
@@ -528,6 +539,23 @@ StageZ = 80.2568
     global buffer_image_shift
     b_is_x, b_is_y, *_ = ReportImageShift() 
     buffer_image_shift = (b_is_x, b_is_y)
+    #Save fake tif file
+    frame_dir = ReportFrameSavingPath()
+    base_name = f"{ReportFrameBaseName()[1]}"
+    if frame_name_format_sequential_num:
+        base_name += f"_{sequential_frame_num:03d}"
+        sequential_frame_num += 1
+    if frame_name_format_angle:
+        base_name += f"_{ReportTiltAngle():03.2f}"
+    file_name = base_name+".tif"
+    full_path = os.path.join(frame_dir,file_name)
+    print(full_path)
+    if os.path.exists(full_path):
+        print(f'Existing path: {full_path}')
+        sys.exit()
+    f=open(full_path,'w')
+    f.write('fake tif\n')
+    f.close()
 
 def S(*args, **kwargs) -> None:
     _log("S", *args, **kwargs)
@@ -553,9 +581,25 @@ def F(*args, **kwargs) -> None:
 
 def T(*args, **kwargs) -> None:
     _log("T", *args, **kwargs)
-    global buffer_image_shift
+    global sequential_frame_num, buffer_image_shift
     b_is_x, b_is_y, *_ = ReportImageShift() 
     buffer_image_shift = (b_is_x, b_is_y)
+    frame_dir = ReportFrameSavingPath()
+    base_name = f"{ReportFrameBaseName()[1]}"
+    if frame_name_format_sequential_num:
+        base_name += f"_{sequential_frame_num:03d}"
+        sequential_frame_num += 1
+    if frame_name_format_angle:
+        base_name += f"_{ReportTiltAngle():03.2f}"
+    file_name = base_name+".tif"
+    full_path = os.path.join(frame_dir,file_name)
+    print(full_path)
+    if os.path.exists(full_path):
+        print(f'Existing path: {full_path}')
+        sys.exit()
+    f=open(full_path,'w')
+    f.write('fake tif\n')
+    f.close()
 
 
 def AcquireToMatchBuffer(*args, **kwargs) -> None:
@@ -791,27 +835,54 @@ def AllowFileOverwrite(*args, **kwargs) -> None:
     _log("AllowFileOverwrite", *args, **kwargs)
 
 
-def SetFrameBaseName(*args, **kwargs) -> None:
-    _log("SetFrameBaseName", *args, **kwargs)
-
-
 def ReportFrameBaseName(*args, **kwargs) -> str:
     _log("ReportFrameBaseName", *args, **kwargs)
-    return 0, 'test', 0
+    return 1, frame_base_name, 0
+
+def SetFrameBaseName(*args, **kwargs) -> None:
+    _log("SetFrameBaseName", *args, **kwargs)
+    global frame_base_name, sequential_frame_num
+    frame_base_name = args[3]
+    sequential_frame_num = 1
 
 
 def SetFrameNameFormat(*args, **kwargs) -> None:
     _log("SetFrameNameFormat", *args, **kwargs)
+    global frame_name_format_num, frame_name_format_angle
+    if args[2] == 0x40:
+        # turn off Sequential number
+        frame_name_format_sequential_num = False
+    if args[2] == 0x400:
+        # turn on tilt angle
+        frame_name_format_angle = True
 
+
+def SetFrameSavingPath(*args, **kwargs) -> None:
+    _log("SetFrameSavingPath", *args, **kwargs)
+    global frame_saving_path
+    frame_saving_path = args[0]
 
 def ReportFrameSavingPath(*args, **kwargs) -> str:
     _log("ReportFrameSavingPath", *args, **kwargs)
-    return "NONE"
+    return frame_saving_path
+
+
+def SetSequentialFrameNum(*args, **kwargs) -> None:
+    _log("SetFrameSavingPath", *args, **kwargs)
+    global sequential_frame_num
+    sequential_frame_num = args[0]
+
+def ReportSequentialFrameNum(*args, **kwargs) -> str:
+    _log("ReportFrameSavingPath", *args, **kwargs)
+    return sequential_frame_num
 
 
 def ReportLastFrameFile(*args, **kwargs) -> tuple:
     _log("ReportLastFrameFile", *args, **kwargs)
-    return ("", "", "")
+    dirname = ReportFrameSavingPath()
+    basename = ReportFrameBaseName()[1]
+    fullname = basename+f'_{ReportSequentialFrameNum():03d}.tif'
+    return (os.path.join(dirname,fullname), dirname, basename)
 
 def AddToNextFrameStackMdoc(*args, **kwargs) -> None:
     _log("AddToNextFrameStackMdoc", *args, **kwargs)
