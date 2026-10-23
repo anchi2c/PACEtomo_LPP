@@ -48,7 +48,7 @@ def saveCalibrations():
     working_dir = sem.ReportDirectory()
     cal_dir, session_name = cal_util.getCalibrationsDir(working_dir)
     os.makedirs(cal_dir, exist_ok=True)
-    optics = cal_util.getOpticsKey(ronchi_sem_lib.ronchiC3Offset)
+    optics = ronchi_sem_lib.getOpticsKey(ronchi_binning=None, ronchi_c3_offset=ronchi_sem_lib.ronchiC3Offset)
     cal_util.saveCalibration('pixel_xt_matrix', cal_dir, session_name,pixel_xt_matrix, optics)
     cal_util.saveCalibration('df_xt_vector', cal_dir, session_name,df_xt_vector)
 
