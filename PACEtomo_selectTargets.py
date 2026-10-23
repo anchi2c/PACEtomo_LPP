@@ -24,7 +24,8 @@ beamDiameter    = 0         # beam diameter [microns] (if 0, ReportIlluminatedAr
 maxTilt         = 60        # tilt angle [degrees] to calculate stretching of beam perpendicular to tilt axis
 
 # Advanced settings
-sampleName      = ""        # optional prefix for all files created
+# Use the standard name for live processing consistency
+sampleName      = "Position"        # optional prefix for all files created
 useSearch       = False     # use Search mode instead of View mode to find targets by dragging
 vecA            = (0, 0)    # vectors for grid pattern [microns specimen shift] are determined automatically...
 vecB            = (0, 0)    # ...only change if you want to setup pattern without alignToP reference
@@ -81,6 +82,7 @@ ronchiXLensTolerance = 0.000125   # reset XLensDeflector(2) to start if |x-x0| o
 
 ########## END SETTINGS ########## 
 import sys
+sys.path.insert(0, 'C:\\Users\\VALUEDGATANCUSTOMER\\Desktop\\anchi\\PACEtomo_LPP')
 sys.path.insert(0, 'C:\Program Files\SerialEM\PythonModules')
 import serialem as sem
 import os
@@ -1761,7 +1763,8 @@ if int(round(float(sem.ReportTiltAngle()))) != 0 and sem.IsVariableDefined("warn
     sem.SetPersistentVar("warningStageTilt", "")
 
 # Set tgts directory
-sem.UserSetDirectory("Please choose a directory for saving targets and tilt series!")
+#
+#sem.UserSetDirectory("Please choose a directory for saving targets and tilt series!")
 curDir = sem.ReportDirectory()
 
 # Warning if user selects different tgts area than last in same session
@@ -1846,16 +1849,18 @@ if editTgts == 0:
             vertices = np.vstack([navItems[navID - 1]["PtsX"], navItems[navID - 1]["PtsY"]]).transpose()
             polygon = matplotlib.path.Path(vertices)
 
-    sem.EnterString("userName", "Please provide a rootname for the PACE-tomo collection area!")
-    userName = sampleName + sem.GetVariable("userName").strip()
+    # Remove user input and use the standard name for live processing consistency
+    #sem.EnterString("userName", "Please provide a rootname for the PACE-tomo collection area!")
+    userName = sampleName
 
-    tgtsFilePath = os.path.join(curDir, userName + "_tgts.txt")
+    # Use sampleName and rely on counter unique mechanism below to auto increment
+    counter = 1
+    tgtsFilePath = os.path.join(curDir, f"{userName}_{counter:04d}_tgts.txt")
 
     # Make sure tgts file is unique
-    counter = 1
     while os.path.exists(tgtsFilePath):
         counter += 1
-        tgtsFilePath = os.path.join(curDir, userName + str(counter) + "_tgts.txt") 
+        tgtsFilePath = os.path.join(curDir, f"{userName}_{counter:04d}_tgts.txt")
     if counter > 1:
         userName = userName + str(counter)
 
