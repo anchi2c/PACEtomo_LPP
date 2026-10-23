@@ -84,7 +84,8 @@ ronchiXLensTolerance = 0.000125   # reset XLensDeflector(2) to start if |x-x0| o
 import sys
 sys.path.insert(0, 'C:\\Users\\VALUEDGATANCUSTOMER\\Desktop\\anchi\\PACEtomo_LPP')
 sys.path.insert(0, 'C:\Program Files\SerialEM\PythonModules')
-import serialem as sem
+import ronchi_sem_lib
+sem = ronchi_sem_lib.sem
 import os
 import copy
 import glob
@@ -102,8 +103,8 @@ import matplotlib.path
 from matplotlib.patches import Circle, Ellipse, Rectangle
 from matplotlib.backend_bases import MouseButton
 from matplotlib.backends.backend_tkagg import (FigureCanvasTkAgg, NavigationToolbar2Tk)
+
 import PACEtomo_beamTiltDefocus as btdef
-import ronchi_sem_lib
 
 try:
     listToSEMarray = sem.listToSEMarray
@@ -136,6 +137,8 @@ if doRonchigram:
         "T", ronchi_binning=ronchi_sem_lib.ronchiBinning, ronchi_c3_offset=ronchiC3Offset)
     _avg_norm = (np.linalg.norm(ronchiCorrectKs[0]) + np.linalg.norm(ronchiCorrectKs[1])) / 2.0
     ronchiC3CorrectionFactor = abs(ronchiC3Offset) / _avg_norm  # um offset per um^-1 mean ks error
+
+sem.SetFrameBaseName(0, 1, 0, "PACEtomo_select")                                                 # change frame name at start to avoid overwriting in case sets other than Record save frames
 
 ########### FUNCTIONS ###########
 
@@ -260,31 +263,31 @@ def saveNewTarget(targetFile, targetNo, target):
     if targetPattern and usePolygon != 1:
         if targetNo == 1:
             mapIndex = int(sem.AddStagePosAsNavPoint(target["stageX"], target["stageY"], stageZ))
-            sem.ChangeItemNote(mapIndex, userName + "_tgts.txt")
+            sem.ChangeItemNote(mapIndex, uniqueName + "_tgts.txt")
             sem.SetItemAcquire(mapIndex)
     else:
         # save map
-        sem.OpenNewFile(userName + "_tgt_" + str(targetNo).zfill(3) + ".mrc")
+        sem.OpenNewFile(uniqueName + "_tgt_" + str(targetNo).zfill(3) + ".mrc")
         sem.S("A")
         if targetNo == 1:
-            mapIndex = int(sem.NewMap(0, userName + "_tgts.txt"))
+            mapIndex = int(sem.NewMap(0, uniqueName + "_tgts.txt"))
             sem.SetItemAcquire(mapIndex)
         else:
-            mapIndex = int(sem.NewMap(0, userName + "_tgt_" + str(targetNo).zfill(3) + ".mrc"))
+            mapIndex = int(sem.NewMap(0, uniqueName + "_tgt_" + str(targetNo).zfill(3) + ".mrc"))
         sem.CloseFile()
     sem.ChangeItemLabel(mapIndex, str(targetNo).zfill(3))
 
     # write target file
     output = "_tgt = " + str(targetNo).zfill(3) + "\n"
     if not targetPattern:
-        output += "tgtfile = " + userName + "_tgt_" + str(targetNo).zfill(3) + ".mrc" + "\n"
-    output += "tsfile = " + userName + "_ts_" + str(targetNo).zfill(3) + ".mrc" + "\n"
+        output += "tgtfile = " + uniqueName + "_tgt_" + str(targetNo).zfill(3) + ".mrc" + "\n"
+    output += "tsfile = " + uniqueName + "_ts_" + str(targetNo).zfill(3) + ".mrc" + "\n"
     for key in target.keys():
         output += key + " = " + str(target[key]) + "\n"
     output += "skip = False" + 2 * "\n"
     with open(targetFile, "a") as f:
         f.write(output)
-    log(f"Target {str(targetNo).zfill(3)} ({userName}_tgt_{str(targetNo).zfill(3)}.mrc) with image shifts {round(target['SSX'], 3)}, {round(target['SSY'], 3)} was added.")
+    log(f"Target {str(targetNo).zfill(3)} ({uniqueName}_tgt_{str(targetNo).zfill(3)}.mrc) with image shifts {round(target['SSX'], 3)}, {round(target['SSY'], 3)} was added.")
 
 def parseNav(navFile):
     with open(navFile) as f:
@@ -875,13 +878,13 @@ def gui(targetFile):
                     mapIndex = int(sem.NavIndexWithNote(targets[0]["tgtfile"].rsplit(".mrc", 1)[0] + "_view.mrc")) # find map index of tracking tilt series view image from file name
                     log("DEBUG: Loading View reference from 'tgtfile' name.")
                 else:
-                    mapIndex = int(sem.NavIndexWithNote(userName + "_tgt_001_view.mrc")) # use tgt_001_view in case tgtfile does not exist
+                    mapIndex = int(sem.NavIndexWithNote(uniqueName + "_tgt_001_view.mrc")) # use tgt_001_view in case tgtfile does not exist
                     log("DEBUG: Default to loading 'tgt_001_view' as reference.")
                 if mapIndex == 0:
-                    mapIndex = int(sem.NavIndexWithNote(userName + "_tgts.txt")) # use tgt entry in case no view file exists
+                    mapIndex = int(sem.NavIndexWithNote(uniqueName + "_tgts.txt")) # use tgt entry in case no view file exists
                     log("DEBUG: Default to using map of tracking target in nav as reference.")
             else:
-                mapIndex = int(sem.NavIndexWithNote(userName + "_tgts.txt"))
+                mapIndex = int(sem.NavIndexWithNote(uniqueName + "_tgts.txt"))
                 log("DEBUG: Using tracking target in nav as reference.")
             if mapIndex == 0:
                 log("ERROR: No map found at tracking target. Can't run realign to item.")
@@ -892,7 +895,7 @@ def gui(targetFile):
             except:
                 # Try to catch "The only available map image is too small to align to" error in SerialEM
                 if rough and targets[0]["tgtfile"] is not None:
-                    mapIndex = int(sem.NavIndexWithNote(userName + "_tgts.txt"))
+                    mapIndex = int(sem.NavIndexWithNote(uniqueName + "_tgts.txt"))
                     log("WARNING: Realignment failed. Trying again with preview image...")
                     sem.RealignToOtherItem(mapIndex, 1)             # realign to tracking TS
                 else:
@@ -988,7 +991,7 @@ def gui(targetFile):
             if not realignTrack(rough=True):                        # realign to view map of old tracking area
                 log("ERROR: Realignment failed. Cannot change tracking target.")
                 return
-            mapIndex = int(sem.NavIndexWithNote(userName + "_tgts.txt")) # find index of old tracking map and change acquire state and navNote
+            mapIndex = int(sem.NavIndexWithNote(uniqueName + "_tgts.txt")) # find index of old tracking map and change acquire state and navNote
             sem.SetItemAcquire(mapIndex, 0)
             sem.ChangeItemNote(mapIndex, targets[0]["tgtfile"])
 
@@ -1002,7 +1005,7 @@ def gui(targetFile):
 
             mapIndex = int(sem.NavIndexWithNote(targets[0]["tgtfile"])) # find index of new tracking map and change acquire state and navNote
             sem.SetItemAcquire(mapIndex)
-            sem.ChangeItemNote(mapIndex, userName + "_tgts.txt")
+            sem.ChangeItemNote(mapIndex, uniqueName + "_tgts.txt")
 
             viewIndex = int(sem.NavIndexWithNote(targets[0]["tgtfile"].rsplit(".mrc", 1)[0] + "_view.mrc"))
             if viewIndex > 0:                                       # if view map exists already, align to new tracking target
@@ -1203,7 +1206,7 @@ def gui(targetFile):
             if targets[i]["tgtfile"] is not None:
                 viewName = targets[i]["tgtfile"].rsplit(".mrc", 1)[0] + "_view.mrc" # if tgtfile is present, retain numbering
             else:
-                viewName = userName + "_tgt_" + str(i + 1).zfill(3) + "_view.mrc" # if not, renumber
+                viewName = uniqueName + "_tgt_" + str(i + 1).zfill(3) + "_view.mrc" # if not, renumber
             viewIndex = int(sem.NavIndexWithNote(viewName))
             if viewIndex == 0:                                      # take view image if it does not exist
                 log("DEBUG: Applying image shift and taking View image...")
@@ -1261,7 +1264,7 @@ def gui(targetFile):
             groupIndex = int(sem.GetUniqueNavID())
             for i in range(len(targetsTemp)):                       # add stage position number to ts file names
                 if "tsfile" in targetsTemp[i].keys():
-                    targetsTemp[i]["tsfile"] = userName + "_p" + str(copied).zfill(2) + "_ts_" + str(i + 1).zfill(3) + ".mrc"
+                    targetsTemp[i]["tsfile"] = uniqueName + "_p" + str(copied).zfill(2) + "_ts_" + str(i + 1).zfill(3) + ".mrc"
                 if i > 0:                                           # if not tracking tgt, add tgt nav point
                     stageShift = ss2sMatrix @ np.array([targetsTemp[i]["SSX"], targetsTemp[i]["SSY"]])
                     ptIndex = int(sem.AddStagePosAsNavPoint(targetsTemp[0]["stageX"] + stageShift[0], targetsTemp[0]["stageY"] + stageShift[1], item[3], groupIndex))
@@ -1283,7 +1286,7 @@ def gui(targetFile):
                     col = targetsTemp[i]["tgtfile"].split("_tgt_")  # if tgtfile is present, retain numbering
                     targetsTemp[i]["tsfile"] = col[0] + "_ts_" + col[1]    
                 else:
-                    targetsTemp[i]["tsfile"] = userName + "_ts_" + str(i + 1).zfill(3) + ".mrc" # if not, renumber (there should not be a mixed case)
+                    targetsTemp[i]["tsfile"] = uniqueName + "_ts_" + str(i + 1).zfill(3) + ".mrc" # if not, renumber (there should not be a mixed case)
                     targetsTemp[i].pop("tgtfile")                   # don't save tgtfile to tgts file if False
         os.replace(targetFile, targetFile + "~")                    # make backup
         writeTargets(targetFile, targetsTemp, geoPoints, savedRun, resume, settings)
@@ -1792,9 +1795,9 @@ fileStem = navNote.rsplit(".txt", 1)[0]
 curDir = sem.ReportDirectory()
 
 if fileStem != "":
-    userName = fileStem.split("_tgts")[0]
-    tf = sorted(glob.glob(os.path.join(curDir, userName + "_tgts.txt")))      # find original tgts file
-    tfp = sorted(glob.glob(os.path.join(curDir, userName + "_tgts_p??.txt"))) # find tgts files copied to other positions
+    uniqueName = fileStem.split("_tgts")[0]
+    tf = sorted(glob.glob(os.path.join(curDir, uniqueName + "_tgts.txt")))      # find original tgts file
+    tfp = sorted(glob.glob(os.path.join(curDir, uniqueName + "_tgts_p??.txt"))) # find tgts files copied to other positions
     tfr = sorted(glob.glob(os.path.join(curDir, fileStem + "_run??.txt")))    # find run files of current nav item but not other copied tgts file
     tf.extend(tfr)                                                  # only add run files to list of considered files
 else:
@@ -1851,18 +1854,17 @@ if editTgts == 0:
 
     # Remove user input and use the standard name for live processing consistency
     #sem.EnterString("userName", "Please provide a rootname for the PACE-tomo collection area!")
-    userName = sampleName
-
     # Use sampleName and rely on counter unique mechanism below to auto increment
     counter = 1
-    tgtsFilePath = os.path.join(curDir, f"{userName}_{counter:04d}_tgts.txt")
+    uniqueName = f"{sampleName}_{counter:04d}"
+
+    tgtsFilePath = os.path.join(curDir, f"{uniqueName}_tgts.txt")
 
     # Make sure tgts file is unique
     while os.path.exists(tgtsFilePath):
         counter += 1
-        tgtsFilePath = os.path.join(curDir, f"{userName}_{counter:04d}_tgts.txt")
-    if counter > 1:
-        userName = userName + str(counter)
+        uniqueName = f"{sampleName}_{counter:04d}"
+        tgtsFilePath = os.path.join(curDir, f"{uniqueName}_tgts.txt")
 
     # align center
     #sem.TiltTo(0)
@@ -1914,7 +1916,7 @@ if editTgts == 0:
     stageX, stageY, stageZ = sem.ReportStageXYZ()
     target["stageX"], target["stageY"] = sem.AdjustStagePosForNav(stageX, stageY, ISX0, ISY0)
     target["SSX"], target["SSY"] = [0, 0]
-    target["viewfile"] = userName + "_tgt_001_view.mrc"
+    target["viewfile"] = uniqueName + "_tgt_001_view.mrc"
 
     # Save tilt angle of target setup
     output = f"_set tiltTargets = {int(round(float(sem.ReportTiltAngle())))}" + 2 * "\n"
@@ -1956,9 +1958,9 @@ if editTgts == 0:
     sem.SetImageShift(0, 0)
     sem.SetImageShift(is_x, is_y)
     sem.V()
-    sem.OpenNewFile(userName + "_tgt_001_view.mrc")
+    sem.OpenNewFile(uniqueName + "_tgt_001_view.mrc")
     sem.S("A")
-    sem.NewMap(0, userName + "_tgt_001_view.mrc")
+    sem.NewMap(0, uniqueName + "_tgt_001_view.mrc")
     sem.CloseFile()
     sem.RestoreCameraSet("V")
 
@@ -2079,7 +2081,7 @@ if editTgts == 0:
             targetNo += 1
 
             output += "_tgt = " + str(targetNo).zfill(3) + "\n"
-            output += "tsfile = " + userName + "_ts_" + str(targetNo).zfill(3) + ".mrc" + "\n"
+            output += "tsfile = " + uniqueName + "_ts_" + str(targetNo).zfill(3) + ".mrc" + "\n"
             output += "SSX = " + str(SSX) + "\n"
             output += "SSY = " + str(SSY) + "\n"
             output += "stageX = " + str(target["stageX"] + stageShift[0]) + "\n"
@@ -2089,7 +2091,7 @@ if editTgts == 0:
             ptIndex = int(sem.AddStagePosAsNavPoint(target["stageX"] + stageShift[0], target["stageY"] + stageShift[1], stageZ))
             sem.ChangeItemLabel(ptIndex, str(targetNo).zfill(3))
 
-            log(f"Target {str(targetNo).zfill(3)} ({userName}_tgt_{str(targetNo).zfill(3)}.mrc) with image shifts {SSX}, {SSY} was added.", color=3)
+            log(f"Target {str(targetNo).zfill(3)} ({uniqueName}_tgt_{str(targetNo).zfill(3)}.mrc) with image shifts {SSX}, {SSY} was added.", color=3)
 
         with open(tgtsFilePath, "a") as f:
             f.write(output)    
