@@ -42,10 +42,12 @@ frame_name_format_angle = False
 frame_name_format_sequential_num = True
 
 added_mdoc_dict = {}
+# script variables set by SetVariable and by sem calls such as ReportNavItem
+sim_variables = {}
 
 
 ## when test_rip is True, a -20 c3offset file is loaded
-test_rip = True
+test_rip = False
 
 def pause():
     time.sleep(0.1)
@@ -78,7 +80,19 @@ def SetPersistentVar(name: str, value: Any = "") -> None:
     _log("SetPersistentVar", name, value)
 
 
+def SetVariable(name: str, value: Any = "") -> None:
+    _log("SetVariable", name, value)
+    sim_variables[name] = value
+
+
+def listToSEMarray(values) -> str:
+    """python list to SerialEM array variable string"""
+    return "\n".join(str(v) for v in values)
+
+
 def GetVariable(name: str) -> str:
+    if name in sim_variables:
+        return sim_variables[name]
     if name == 'navIndex':
         return 1
     if name == 'navNote':
@@ -110,7 +124,8 @@ def ProgramTimeStamps(*args, **kwargs) -> None:
 
 def YesNoBox(message: str) -> int:
     _log("YesNoBox", message)
-    return 1
+    answer = input(message).lower() == 'y'
+    return int(answer)
 
 
 def OKBox(message: str) -> None:
@@ -119,6 +134,18 @@ def OKBox(message: str) -> None:
 
 def Pause(message: str) -> None:
     _log("Pause", message)
+
+
+def EnterDefaultedNumber(*args, **kwargs) -> float:
+    """default, number of decimal places, prompt; returns the default"""
+    _log("EnterDefaultedNumber", *args, **kwargs)
+    return args[0]
+
+
+def EnterString(*args, **kwargs) -> None:
+    """variable name, prompt; sets the variable to 'sim'"""
+    _log("EnterString", *args, **kwargs)
+    sim_variables[args[0]] = 'sim'
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +267,15 @@ def ImageShiftByMicrons(*args, **kwargs) -> None:
     _log("ImageShiftByMicrons", *args, **kwargs)
     global image_shift
     image_shift = (image_shift[0]+args[0], image_shift[1]+args[1])
+
+def ResetImageShift(*args, **kwargs) -> None:
+    """move stage by the image shift and set image shift to zero"""
+    _log("ResetImageShift", *args, **kwargs)
+    global image_shift, stage_xyz
+    # IS to specimen and specimen to stage are identity in the simulator
+    stage_xyz = (stage_xyz[0] + image_shift[0], stage_xyz[1] + image_shift[1], stage_xyz[2])
+    image_shift = (0.0, 0.0)
+
 
 def ImageShiftByUnits(*args, **kwargs) -> None:
     _log("ImageShiftByUnits", *args, **kwargs)
@@ -430,8 +466,9 @@ def SetBinning(*args, **kwargs) -> None:
 
 
 def ImageProperties(*args, **kwargs) -> tuple:
+    """width, height, binning, exposure, pixel size (nm), mode"""
     _log("ImageProperties", *args, **kwargs)
-    return (0, 0, 1, 1.0)
+    return (sq_size, sq_size, cam_binning, 1.0, pixel_size * 1000, 1)
 
 
 def ImageConditions(*args, **kwargs) -> tuple:
@@ -457,8 +494,9 @@ def ReportCameraProperty(*args, **kwargs) -> float:
 
 
 def CameraProperties(*args, **kwargs) -> tuple:
+    """unbinned width, height, rotation/flip, physical pixel size (um), pixel size at current mag (nm)"""
     _log("CameraProperties", *args, **kwargs)
-    return (0, 0)
+    return (sq_size * cam_binning, sq_size * cam_binning, 0, 5.0, pixel_size * 1000 / cam_binning)
 
 
 def ReportBinning(*args, **kwargs) -> int:
@@ -566,6 +604,10 @@ def S(*args, **kwargs) -> None:
 
 def V(*args, **kwargs) -> None:
     _log("V", *args, **kwargs)
+
+
+def Search(*args, **kwargs) -> None:
+    _log("Search", *args, **kwargs)
 
 
 def L(*args, **kwargs) -> None:
@@ -765,16 +807,220 @@ def AddBufToStackWindow(*args, **kwargs) -> None:
     _log("AddBufToStackWindow", *args, **kwargs)
 
 
+def ReportCurrentBuffer(*args, **kwargs) -> str:
+    _log("ReportCurrentBuffer", *args, **kwargs)
+    return "A"
+
+
+def ReduceImage(*args, **kwargs) -> None:
+    """buffer, binning; result goes to buffer A. Image is not reduced in the simulator"""
+    _log("ReduceImage", *args, **kwargs)
+
+
+def SnapshotToFile(*args, **kwargs) -> None:
+    _log("SnapshotToFile", *args, **kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Navigator
 # ---------------------------------------------------------------------------
 
-def ReportNavItem(*args, **kwargs) -> None:
+# Simulated navigator table. Indices used by the sem API are 1-based.
+# Item 1 matches the navNote returned by GetVariable before any nav call.
+nav_items = [
+    {'x': 0.0, 'y': 0.0, 'z': 0.0, 'type': 0, 'group': 0, 'acquire': 0, 'color': 0, 'draw': 1,
+     'label': '1', 'note': '/Users/anchi.cheng/packages/sem-scripts/pt1_tgts.txt'},
+]
+nav_current_index = 1
+nav_next_group_id = 1000
+nav_file = os.path.abspath('./sim_navigator.nav')
+# nav item type: 0 point, 1 polygon, 2 map
+NAV_POINT, NAV_POLYGON, NAV_MAP = 0, 1, 2
+
+def _nav_index(index):
+    """Convert sem index (1-based, 0 = current, negative = from end) to list index."""
+    index = int(index)
+    if index == 0:
+        index = nav_current_index
+    elif index < 0:
+        index = len(nav_items) + 1 + index
+    if not 1 <= index <= len(nav_items):
+        raise IndexError(f'[sem stub] Navigator index {index} out of range 1-{len(nav_items)}')
+    return index - 1
+
+def _nav_add(x, y, z, item_type, group=0, note=''):
+    nav_items.append({'x': float(x), 'y': float(y), 'z': float(z), 'type': item_type,
+                      'group': int(group), 'acquire': 0, 'color': 0, 'draw': 1,
+                      'label': str(len(nav_items) + 1), 'note': note})
+    return len(nav_items)
+
+def _nav_report(i):
+    """Set nav variables as SerialEM does and return (index, x, y, z, type)."""
+    item = nav_items[i]
+    sim_variables['navLabel'] = item['label']
+    sim_variables['navNote'] = item['note']
+    sim_variables['navIndex'] = i + 1
+    sim_variables['navAcqIndex'] = item['acquire']
+    return (i + 1, item['x'], item['y'], item['z'], item['type'])
+
+
+def ReportNavItem(*args, **kwargs) -> tuple:
     _log("ReportNavItem", *args, **kwargs)
+    return _nav_report(_nav_index(0))
+
+
+def ReportOtherItem(*args, **kwargs) -> tuple:
+    _log("ReportOtherItem", *args, **kwargs)
+    return _nav_report(_nav_index(args[0]))
+
+
+def ReportNumTableItems(*args, **kwargs) -> int:
+    _log("ReportNumTableItems", *args, **kwargs)
+    return len(nav_items)
+
+
+def ReportGroupStatus(*args, **kwargs) -> tuple:
+    """index of current item, its group ID, number of items in the group"""
+    _log("ReportGroupStatus", *args, **kwargs)
+    i = _nav_index(0)
+    group = nav_items[i]['group']
+    n_in_group = len([item for item in nav_items if group and item['group'] == group])
+    return (i + 1, group, n_in_group)
+
+
+def ReportIfNavOpen(*args, **kwargs) -> int:
+    """0 no navigator, 1 open, 2 open with a file"""
+    _log("ReportIfNavOpen", *args, **kwargs)
+    return 2
+
+
+def ReportNavFile(*args, **kwargs) -> str:
+    _log("ReportNavFile", *args, **kwargs)
+    return nav_file
+
+
+def ReportItemAcquire(*args, **kwargs) -> int:
+    _log("ReportItemAcquire", *args, **kwargs)
+    return nav_items[_nav_index(args[0] if args else 0)]['acquire']
+
+
+def SetItemAcquire(*args, **kwargs) -> None:
+    _log("SetItemAcquire", *args, **kwargs)
+    value = int(args[1]) if len(args) > 1 else 1
+    nav_items[_nav_index(args[0] if args else 0)]['acquire'] = value
+
+
+def ChangeItemNote(*args, **kwargs) -> None:
+    _log("ChangeItemNote", *args, **kwargs)
+    nav_items[_nav_index(args[0])]['note'] = str(args[1]) if len(args) > 1 else ''
+
+
+def ChangeItemLabel(*args, **kwargs) -> None:
+    _log("ChangeItemLabel", *args, **kwargs)
+    nav_items[_nav_index(args[0])]['label'] = str(args[1])
+
+
+def ChangeItemColor(*args, **kwargs) -> None:
+    _log("ChangeItemColor", *args, **kwargs)
+    nav_items[_nav_index(args[0])]['color'] = int(args[1])
+
+
+def ChangeItemDraw(*args, **kwargs) -> None:
+    """toggle drawing if no value is given"""
+    _log("ChangeItemDraw", *args, **kwargs)
+    item = nav_items[_nav_index(args[0])]
+    item['draw'] = int(args[1]) if len(args) > 1 else 1 - item['draw']
+
+
+def DeleteNavigatorItem(*args, **kwargs) -> None:
+    _log("DeleteNavigatorItem", *args, **kwargs)
+    global nav_current_index
+    i = _nav_index(args[0])
+    del nav_items[i]
+    if nav_current_index > len(nav_items):
+        nav_current_index = max(1, len(nav_items))
+
+
+def NavIndexWithNote(*args, **kwargs) -> int:
+    """index of the first item with the note, 0 if none"""
+    _log("NavIndexWithNote", *args, **kwargs)
+    for i, item in enumerate(nav_items):
+        if item['note'] == args[0]:
+            return i + 1
+    return 0
+
+
+def NavIndexWithLabel(*args, **kwargs) -> int:
+    """index of the first item with the label, 0 if none"""
+    _log("NavIndexWithLabel", *args, **kwargs)
+    for i, item in enumerate(nav_items):
+        if item['label'] == str(args[0]):
+            return i + 1
+    return 0
+
+
+def GetUniqueNavID(*args, **kwargs) -> int:
+    _log("GetUniqueNavID", *args, **kwargs)
+    global nav_next_group_id
+    nav_next_group_id += 1
+    return nav_next_group_id
+
+
+def AddStagePosAsNavPoint(*args, **kwargs) -> int:
+    """x, y, z [group ID]; returns index of the new point"""
+    _log("AddStagePosAsNavPoint", *args, **kwargs)
+    group = args[3] if len(args) > 3 else 0
+    return _nav_add(args[0], args[1], args[2], NAV_POINT, group)
+
+
+def AddImagePosAsNavPoint(*args, **kwargs) -> int:
+    """buffer, image x, y [z] [group ID]; returns index of the new point"""
+    _log("AddImagePosAsNavPoint", *args, **kwargs)
+    width, height, _, _, pixel_nm, *_ = ImageProperties(args[0])
+    stage_x, stage_y, stage_z = stage_xyz
+    # camera to stage is identity in the simulator (see CameraToSpecimenMatrix)
+    x = stage_x + (float(args[1]) - width / 2) * pixel_nm / 1000
+    y = stage_y + (float(args[2]) - height / 2) * pixel_nm / 1000
+    group = args[4] if len(args) > 4 else 0
+    return _nav_add(x, y, stage_z, NAV_POINT, group)
+
+
+def AddStagePointsAsPolygon(*args, **kwargs) -> int:
+    """names of variables holding x and y arrays, z; returns index of the new polygon"""
+    _log("AddStagePointsAsPolygon", *args, **kwargs)
+    xs = [float(v) for v in str(sim_variables[args[0]]).split()]
+    ys = [float(v) for v in str(sim_variables[args[1]]).split()]
+    index = _nav_add(np.mean(xs), np.mean(ys), args[2], NAV_POLYGON)
+    nav_items[index - 1]['pts'] = (xs, ys)
+    return index
+
+
+def GetNavGroupStageCoords(*args, **kwargs) -> None:
+    """group ID, names of variables to set with x, y, z arrays of the group items"""
+    _log("GetNavGroupStageCoords", *args, **kwargs)
+    group_items = [item for item in nav_items if item['group'] == int(args[0])]
+    for key, var_name in zip(('x', 'y', 'z'), args[1:4]):
+        sim_variables[var_name] = listToSEMarray([item[key] for item in group_items])
+
+
+def NewMap(*args, **kwargs) -> int:
+    """[0] [note]; map at current stage position, returns its index"""
+    _log("NewMap", *args, **kwargs)
+    note = str(args[1]) if len(args) > 1 else ''
+    return _nav_add(*stage_xyz, NAV_MAP, note=note)
+
+
+def AdjustStagePosForNav(*args, **kwargs) -> tuple:
+    """stage x, y, IS x, IS y -> stage position of the image-shifted area"""
+    _log("AdjustStagePosForNav", *args, **kwargs)
+    # IS to specimen and specimen to stage are identity in the simulator
+    return (float(args[0]) + float(args[2]), float(args[1]) + float(args[3]))
 
 
 def SetSelectedNavItem(*args, **kwargs) -> None:
     _log("SetSelectedNavItem", *args, **kwargs)
+    global nav_current_index
+    nav_current_index = _nav_index(args[0]) + 1
 
 
 def MoveToNavItem(*args, **kwargs) -> None:
@@ -790,7 +1036,30 @@ def LoadOtherMap(*args, **kwargs) -> None:
 
 
 def SaveNavigator(*args, **kwargs) -> None:
+    """write nav_items as a minimal navigator autodoc file"""
     _log("SaveNavigator", *args, **kwargs)
+    global nav_file
+    if args:
+        nav_file = os.path.abspath(args[0])
+    lines = ['AdocVersion = 2.00', '']
+    for item in nav_items:
+        lines += [f"[Item = {item['label']}]",
+                  f"Color = {item['color']}",
+                  f"StageXYZ = {item['x']} {item['y']} {item['z']}",
+                  f"Type = {item['type']}",
+                  f"GroupID = {item['group']}",
+                  f"Acquire = {item['acquire']}",
+                  f"Draw = {item['draw']}"]
+        if item['note']:
+            lines.append(f"Note = {item['note']}")
+        if 'pts' in item:
+            xs, ys = item['pts']
+            lines += [f"NumPts = {len(xs)}",
+                      "PtsX = " + " ".join(str(v) for v in xs),
+                      "PtsY = " + " ".join(str(v) for v in ys)]
+        lines.append('')
+    with open(nav_file, 'w') as f:
+        f.write("\n".join(lines))
 
 
 # ---------------------------------------------------------------------------
@@ -833,6 +1102,11 @@ def SetNewFileType(*args, **kwargs) -> None:
 
 def AllowFileOverwrite(*args, **kwargs) -> None:
     _log("AllowFileOverwrite", *args, **kwargs)
+
+
+def DoesFileExist(*args, **kwargs) -> int:
+    _log("DoesFileExist", *args, **kwargs)
+    return int(os.path.exists(args[0]))
 
 
 def ReportFrameBaseName(*args, **kwargs) -> str:
@@ -912,6 +1186,11 @@ def CameraToSpecimenMatrix(*args, **kwargs) -> tuple:
     return (1.0, 0.0, 0.0, 1.0)
 
 
+def SpecimenToStageMatrix(*args, **kwargs) -> tuple:
+    _log("SpecimenToStageMatrix", *args, **kwargs)
+    return (1.0, 0.0, 0.0, 1.0)
+
+
 def SpecimenToCameraMatrix(*args, **kwargs) -> tuple:
     _log("SpecimenToCameraMatrix", *args, **kwargs)
     return (1.0, 0.0, 0.0, 1.0)
@@ -988,7 +1267,7 @@ def NoMessageBoxOnError(*args, **kwargs) -> None:
 
 def KeyBreak(*args, **kwargs) -> int:
     _log("KeyBreak", *args, **kwargs)
-    return 0
+    return 1
 
 
 def SaveSettings(*args, **kwargs) -> None:
