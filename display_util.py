@@ -173,9 +173,7 @@ def showTransformFit():
 def addScatterFit(xs,ys,slope,intercept):
     global Scatter_X,Scatter_Y,Scatter_Fit_Slope,Scatter_Fit_Intercept
     Scatter_X.append(xs)
-    print(Scatter_X)
     Scatter_Y.append(ys)
-    print(Scatter_Y)
     Scatter_Fit_Slope.append(slope)
     Scatter_Fit_Intercept.append(intercept)
 
@@ -193,7 +191,6 @@ def showScatterFit():
     for i in range(number_of_scatter_fit):
         x = Scatter_X[i]
         y = Scatter_Y[i]
-        print(Scatter_Y)
         xf = np.array([x.min(), x.max()])
         slope = Scatter_Fit_Slope[i]
         intercept = Scatter_Fit_Intercept[i]

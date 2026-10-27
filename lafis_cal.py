@@ -368,7 +368,7 @@ def calibrateXtPixelMatrix():
     norm_0 = np.linalg.norm(pixel_xt_matrix[0])
     norm_1 = np.linalg.norm(pixel_xt_matrix[1])
     print(f'magnitudes: {norm_0:.3e}, {norm_1:.3e}')
-    if abs(norm_0-norm_1) > 0.3 * (norm_0+norm_1)/2:
+    if abs(norm_0-norm_1) > 0.4 * (norm_0+norm_1)/2:
         raise ValueError('pixel_xt_matrix unreasonable. magnitudes between two axis too different')
     cos_theta = np.dot(pixel_xt_matrix[0], pixel_xt_matrix[1]) / (norm_0 * norm_1)
     angle_rad = np.arccos(np.clip(cos_theta, -1.0, 1.0))

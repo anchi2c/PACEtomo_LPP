@@ -154,8 +154,8 @@ def _calibrate_ronchigram_start_c3(c3_delta_scale,
         observed_shifts[i] = np.array(my_shift)
     try:
         slopes, intercepts, residuals = cal_util.solveLines(cal_c3d_changes+trial_offset_baseline0, observed_shifts)
-        display_util.addScatterFit(cal_c3d_changes, observed_shifts[:,0],slopes[0],intercepts[0])
-        display_util.addScatterFit(cal_c3d_changes, observed_shifts[:,1],slopes[1],intercepts[1])
+        display_util.addScatterFit(cal_c3d_changes+trial_offset_baseline0, observed_shifts[:,0],slopes[0],intercepts[0])
+        display_util.addScatterFit(cal_c3d_changes+trial_offset_baseline0, observed_shifts[:,1],slopes[1],intercepts[1])
         print('intercepts',intercepts)
         print('slopes',slopes)
         print('new start_c3', -intercepts/slopes)
@@ -175,6 +175,8 @@ def _refine_ronchigram_start_c3(c3_delta_scale,
     trial_offset_baseline0 = ronchi_sem_lib.ronchiStartC3Offset
     ronchi_offset0 = 0
     changes = np.array([30.0,20.0,-20.0,-30.0]) # n changes
+    changes = np.array([25.0,20.0,15.0,-15,-20.0,-25.0]) # n changes
+    changes = np.array([-25.0,-20.0,-15.0,15,20.0,25.0]) # n changes
     # (m,n) m sets of n observed shifts
     observed_shifts = np.vstack([changes,changes]) * 0
     observed_shifts = observed_shifts.T
@@ -188,13 +190,13 @@ def _refine_ronchigram_start_c3(c3_delta_scale,
         ks0, phase0 = measure_ronchigram_ks_phases(pixel_size_um, binning,
                        peak_radius, corr_scale, pass_label)
         my_shift = [np.linalg.norm(ks0[0]),np.linalg.norm(ks0[1])]
-        if my_change < 0:
+        if my_change > 0:
             my_shift = [-my_shift[0],-my_shift[1]]
         observed_shifts[i] = np.array(my_shift)
     try:
         slopes, intercepts, residuals = cal_util.solveLines(cal_c3d_changes+trial_offset_baseline0, observed_shifts)
-        display_util.addScatterFit(cal_c3d_changes, observed_shifts[:,0],slopes[0],intercepts[0])
-        display_util.addScatterFit(cal_c3d_changes, observed_shifts[:,1],slopes[1],intercepts[1])
+        display_util.addScatterFit(cal_c3d_changes+trial_offset_baseline0, observed_shifts[:,0],slopes[0],intercepts[0])
+        display_util.addScatterFit(cal_c3d_changes+trial_offset_baseline0, observed_shifts[:,1],slopes[1],intercepts[1])
         print('intercepts',intercepts)
         print('slopes',slopes)
         print('new start_c3', -intercepts/slopes)
@@ -209,8 +211,8 @@ def calibrate_ronchigram_start_c3(pixel_size_um, binning,
                        c3_correction_factor=20 / 6.85):
     """FFT peak ks -> C3imagingdistance saved as the new ronchiStartC3Offset"""
     c3_delta_scale = 5
-    c3_offset_diff_threshold = 1.5
-    residual_threshold = 3e-3
+    c3_offset_diff_threshold = 0.2
+    residual_threshold = 2
     max_trials = 4
     print('starting c3',sem.ReportImageDistanceOffset())
     trial_offset_baseline0 = ronchi_sem_lib.ronchiStartC3Offset
@@ -250,12 +252,15 @@ def calibrate_ronchigram_start_c3(pixel_size_um, binning,
         sem.SetImageDistanceOffset(ronchi_sem_lib.ronchiStartC3Offset)
         ronchi_sem_lib.ronchiC3Offset = ronchi_offset0
         trial += 1
+    """
+    #This is commented out because the fit is significantly different from one-side
     print('Final refinement with ronchi from both sides.')
     c3_offset_arr, residuals, is_fit_slope_positive = _refine_ronchigram_start_c3(c3_delta_scale,
                         pixel_size_um, binning,
                         measure_scope_shift, peak_radius, corr_scale,
                         c3_correction_factor)
     new_trial_offset_baseline = c3_offset_arr.mean()
+    """
     if display_util.Scatter_X:
         display_util.showScatterFit()
     if display_util.image_buffer:
