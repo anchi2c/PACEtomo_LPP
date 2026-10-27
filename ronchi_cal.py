@@ -154,6 +154,8 @@ def _calibrate_ronchigram_start_c3(c3_delta_scale,
         observed_shifts[i] = np.array(my_shift)
     try:
         slopes, intercepts, residuals = cal_util.solveLines(cal_c3d_changes+trial_offset_baseline0, observed_shifts)
+        display_util.addScatterFit(cal_c3d_changes, observed_shifts[:,0],slopes[0],intercepts[0])
+        display_util.addScatterFit(cal_c3d_changes, observed_shifts[:,1],slopes[1],intercepts[1])
         print('intercepts',intercepts)
         print('slopes',slopes)
         print('new start_c3', -intercepts/slopes)
@@ -191,6 +193,8 @@ def _refine_ronchigram_start_c3(c3_delta_scale,
         observed_shifts[i] = np.array(my_shift)
     try:
         slopes, intercepts, residuals = cal_util.solveLines(cal_c3d_changes+trial_offset_baseline0, observed_shifts)
+        display_util.addScatterFit(cal_c3d_changes, observed_shifts[:,0],slopes[0],intercepts[0])
+        display_util.addScatterFit(cal_c3d_changes, observed_shifts[:,1],slopes[1],intercepts[1])
         print('intercepts',intercepts)
         print('slopes',slopes)
         print('new start_c3', -intercepts/slopes)
@@ -252,6 +256,8 @@ def calibrate_ronchigram_start_c3(pixel_size_um, binning,
                         measure_scope_shift, peak_radius, corr_scale,
                         c3_correction_factor)
     new_trial_offset_baseline = c3_offset_arr.mean()
+    if display_util.Scatter_X:
+        display_util.showScatterFit()
     if display_util.image_buffer:
         sem.SetImageDistanceOffset(new_trial_offset_baseline)
         sem.T()

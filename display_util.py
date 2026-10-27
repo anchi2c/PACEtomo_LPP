@@ -14,6 +14,11 @@ Fit_UV = []
 Fit_T = []
 Fit_SubTitle = []
 
+Scatter_X = []
+Scatter_Y = []
+Scatter_Fit_Slope = []
+Scatter_Fit_Intercept = []
+
 def addImage(arr, peaks=[]):
     """
     Add image to image_buffer for display
@@ -165,3 +170,37 @@ def showTransformFit():
     plt.tight_layout()
     plt.show()
 
+def addScatterFit(xs,ys,slope,intercept):
+    global Scatter_X,Scatter_Y,Scatter_Fit_Slope,Scatter_Fit_Intercept
+    Scatter_X.append(xs)
+    print(Scatter_X)
+    Scatter_Y.append(ys)
+    print(Scatter_Y)
+    Scatter_Fit_Slope.append(slope)
+    Scatter_Fit_Intercept.append(intercept)
+
+def resetScatterFit():
+    global Scatter_X,Scatter_Y,Scatter_Fit_Slope,Scatter_Fit_Intercept
+    Scatter_X = []
+    Scatter_Y = []
+    Scatter_Fit_Slope = []
+    Scatter_Fit_Intercept = []
+
+def showScatterFit():
+    import matplotlib.pyplot as plt
+    number_of_scatter_fit = len(Scatter_X)
+
+    for i in range(number_of_scatter_fit):
+        x = Scatter_X[i]
+        y = Scatter_Y[i]
+        print(Scatter_Y)
+        xf = np.array([x.min(), x.max()])
+        slope = Scatter_Fit_Slope[i]
+        intercept = Scatter_Fit_Intercept[i]
+        plt.scatter(x, y, s=15, label=f'data{i+1}')
+        plt.plot(xf, slope * xf + intercept, "r-",
+             label=f"fit {i+1}: y = {slope:.2f}x + {intercept:.2f}")
+        plt.legend()
+        plt.xlabel("x")
+    plt.ylabel("y")
+    plt.show()
