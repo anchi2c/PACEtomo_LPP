@@ -12,28 +12,19 @@
 # Settings set in ronchi_sem_lib.py
 ########## END Ronchigram settings ##########
 
-import sys
-import platform
-if platform.system() == 'Windows':
-    is_simu = False
-    sys.path.insert(0, 'C:\Program Files\SerialEM\PythonModules')
-    import serialem as sem
-else:
-    is_simu = True
-    print('testing on Mac/Linux with simulator')
-    import sem_simulator as sem
+import ronchi_sem_lib
+sem = ronchi_sem_lib.sem
+is_simu = ronchi_sem_lib.is_simu
 
 import os
 import copy
 import time
 import struct
-import platform
 from datetime import datetime, timezone
 import json
 import glob
 import numpy as np
 from scipy import optimize, ndimage
-import ronchi_sem_lib
 import cal_util
 import display_util
 
@@ -41,12 +32,6 @@ import display_util
 # calibration matrix applied when beamTiltComp == True on xlpp
 # Requires ronchi_sem_lib.hasXLens = True and beamTiltComp = True to be meaningful.
 count = 0
-# all transform matrix are to be used with [x,y] as in SerialEM convention
-is_xt_matrix = [[0.00028763286791300477, -0.00012083706524300338], [0.0009948701965659995, 0.00014791197022821008]]  #simu_testing
-is_xt_matrix = [[0.00024180881486977201, -0.00042928950183638887], [0.0010020323076790395, 0.0002672870290525659]]
-df_is_matrix = [[0.041381,0.012342], [0.041381,0.012342]]
-
-pixel_xt_matrix = [[1.0866279077999436e-06, -1.7905014130717222e-07], [2.861300907326552e-07, 1.8702918955272723e-06]] #starting guess mrad/pixel
 
 lafisZeroImageShiftDefocus = None            # set from saveZeroImageShiftDefocusXLens before doLafis
 lafisZeroImageShiftXLens = None            # set from saveZeroImageShiftDefocusXLens before doLafis
@@ -65,13 +50,8 @@ print(optics)
 # ScriptName Script 11 Recall xt0 and other origin values from temp_xt0.json
 
 def getResetOpticsPath():
-    if platform.system() == 'Windows':
-        # TODO: should use working directory
-        working_dir = sem.ReportDirectory()
-        filepath = os.path.join(working_dir,'temp_xt0.json')
-        
-    else:
-        filepath = './temp_xt0.json'
+    working_dir = sem.ReportDirectory()
+    filepath = os.path.join(working_dir,'temp_xt0.json')
     if not os.path.exists(filepath):
         raise ValueError(f'optics not saved in {filepath} to be used for reset')
     return filepath
@@ -147,8 +127,13 @@ def checkRonchigramSetup():
     #sem.Pause('Please set C3 offset to where you can clearly see the global xLPP center')
     #ronchi_sem_lib.ronchiC3Offset = float(sem.ReportImageDistanceOffset()) - ronchi_sem_lib.ronchiStartC3Offset
 
+def setRunFrameBaseName(my_name):
+    sem.SetFrameBaseName(0,1,0,my_name)
+    ronchi_sem_lib._set_ronchi_trial_frame_basename()
+
 def readCalibrations():
-    global pixel_xt_matrix, is_xt_matrix, df_is_matrix
+    global pixel_xt_matrix, is_xt_matrix, is_df_matrix
+    # all transform matrix are to be used with [x,y] as in SerialEM convention
     # read calibrations from file. Only replace hardcoded default if
     # there is saved value
     r, ronchi_c3_offset = cal_util.readCalibration('pixel_xt_matrix', cal_dir, optics)
@@ -161,9 +146,14 @@ def readCalibrations():
         is_xt_matrix = r
     else:
         log(f'WARNING: no is_xt_matrix saved for {optics}, using default')
-    r, dummy = cal_util.readCalibration('df_is_matrix', cal_dir)
+    r, dummy = cal_util.readCalibration('is_df_matrix', cal_dir, optics=None)
     if r:
-        df_is_matrix = r
+        is_df_matrix = r
+    else:
+        log(f'WARNING: Must have is_df_matrix. Saving one without correction for you....')
+        zero_is_df_matrix = [[0.0,0.0],[0.0,0.0]]
+        cal_util.saveCalibration('is_df_matrix', cal_dir, session_name,zero_is_df_matrix, optics)
+        is_df_matrix = zerp_is_df_matrix
 
 def add_lpp_meta_to_next_mdoc():
     for k,v in (
@@ -182,7 +172,7 @@ def calc_xt_is(xt0, is_delta):
 def calc_df_is(df0, is_delta):
     # This form works for both array and list of list
     df1 = 0.0
-    df1 =df0+is_delta[0]*df_is_matrix[0][0]+is_delta[1]*df_is_matrix[1][1]
+    df1 =df0+is_delta[0]*is_df_matrix[0][0]+is_delta[1]*is_df_matrix[1][1]
     return df1
 
 def saveZeroImageShiftDefocusXLens():
@@ -314,7 +304,7 @@ def update_is_xt_matrix(transform_arr):
     is_xt_matrix = transform_arr.tolist()
     print('updated_is_xt_matrix', is_xt_matrix)
 
-def _refineLafisMatrix(image_shift_scale, trial_offset_baseline, ronchi_offset):
+def _refineLafisMatrix(image_shift_scale, trial_offset_baseline, ronchi_offset,trial):
     cal_image_shift_bases = np.array([[1,0],[0,1],[-1,0],[0,-1]])
     cal_image_shifts = image_shift_scale * cal_image_shift_bases
     print('image_shifts for cal', cal_image_shifts)
@@ -326,7 +316,8 @@ def _refineLafisMatrix(image_shift_scale, trial_offset_baseline, ronchi_offset):
     except Exception as e:
         log(f'Error: Calibration not updated {e} Bad xt residuals {xt_residuals_arr}')
         transform_matrix = is_xt_matrix
-    display_util.addTransformFitData(transform_matrix, old_cal_xts, xt_residuals_arr, cal_image_shifts)
+    plot_subtitle = f'Calibrated at {image_shift_scale} um iter {trial}'
+    display_util.addTransformFitData(transform_matrix, old_cal_xts, xt_residuals_arr/image_shift_scale, cal_image_shifts, plot_subtitle)
     return pixel_residuals
 
 def update_pixel_xt_matrix(transform_arr):
@@ -402,7 +393,7 @@ def calibrateLafis():
             if trial > max_trials:
                 raise ValueError('Lafis calibration did not converge.')
             log(f'calibrating lafis_matrix trial {trial:d} with image shift of {scale} um')
-            pixel_residual = _refineLafisMatrix(scale, trial_offset_baseline, ronchi_offset)
+            pixel_residual = _refineLafisMatrix(scale, trial_offset_baseline, ronchi_offset,trial)
             xt_residual = pixel_residual @ np.array(pixel_xt_matrix)
             mean_xt_deviation = np.linalg.norm(xt_residual).mean()
             if i == 0:
@@ -454,6 +445,7 @@ def testLafis():
 if __name__=='__main__':
     #saveCalibrations()
     checkRonchigramSetup()
+    setRunFrameBaseName('lafis_cal')
     print(ronchi_sem_lib.ronchiC3Offset)
     saveZeroImageShiftDefocusXLens()
     readCalibrations()

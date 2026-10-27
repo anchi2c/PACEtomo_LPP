@@ -12,6 +12,7 @@ image_buffer = []
 Fit_X = []
 Fit_UV = []
 Fit_T = []
+Fit_SubTitle = []
 
 def addImage(arr, peaks=[]):
     """
@@ -85,19 +86,21 @@ def showImages(ncols=8,panel_width=2,cmap=None,title='',savefig=False):
         plt.savefig(title+'.png', dpi=300, bbox_inches="tight")
     plt.show()
 
-def addTransformFitData(new_transform,old_cal_xts,xt_residuals_from_old,is_shifts):
+def addTransformFitData(new_transform,old_cal_xts,xt_residuals_from_old,is_shifts, subtitle=''):
     xt_residuals_from_new = is_shifts @ np.linalg.inv(new_transform)
     
-    global Fit_X,Fit_UV,Fit_T
+    global Fit_X,Fit_UV,Fit_T,Fit_SubTitle
     Fit_X.append(is_shifts)
     Fit_UV.append([xt_residuals_from_old, xt_residuals_from_new])
     Fit_T.append(new_transform)
+    Fit_SubTitle.append(subtitle)
 
 def resetTransformFitData():
-    global Fit_X,Fit_UV,Fit_T
+    global Fit_X,Fit_UV,Fit_T,Fit_SubTitle
     Fit_X = []
     Fit_UV = []
     Fit_T = []
+    Fit_SubTitle = []
 
 def showTransformFit():
     """
@@ -120,6 +123,7 @@ def showTransformFit():
     aspect = 1
     panel_width = 3
     fig, ax = plt.subplots(nrows, ncols, sharex=True, sharey=True, figsize=(ncols * panel_width, nrows * panel_width * aspect), squeeze=False)
+    fig.suptitle("Calibration residual normalized by image shift magnitude", fontweight="bold")
 
     U1 = []
     U2 = []
@@ -140,7 +144,8 @@ def showTransformFit():
         magnitude = np.sqrt(U1[0]**2 + V1[0]**2)
 
         # Plot the vectors
-        q1 = ax[row][col].quiver(X, Y, U1[n], V1[n], label='residual', color='orange', scale=50)
+        q1 = ax[row][col].quiver(X, Y, U1[n], V1[n], label='norm_res', color='orange', scale=50)
+        p1 = ax[row][col].scatter(X, Y, color='orange', s=8)
         #q2 = ax[row][col].quiver(X, Y, U2[n], V2[n], label='LAFIS new', color='green', scale=50)
 
 
@@ -153,7 +158,7 @@ def showTransformFit():
 
         ax[row][col].set_xlabel('Image Shift X (um)')
         ax[row][col].set_ylabel('Image Shift Y (um)')
-        ax[row][col].set_title(f'Residual at {Fit_X[n].max()} um')
+        ax[row][col].set_title(Fit_SubTitle[n])
         ax[row][col].set_aspect('equal')
 
         ax[row][col].legend(loc='lower right', fontsize=11, bbox_to_anchor=(0.995, 0.035))

@@ -150,8 +150,9 @@ ronchiXLensTolerance = 0.000125     # reset XLensDeflector(2) to start if |x-x0|
 import sys
 sys.path.insert(0, 'C:\\Users\\VALUEDGATANCUSTOMER\\Desktop\\anchi\\PACEtomo_LPP')
 sys.path.insert(0, 'C:\Program Files\SerialEM\PythonModules')
-import serialem as sem
 import ronchi_sem_lib
+# use serialem instance in ronchi_sem_lib so its global variables is used
+sem = ronchi_sem_lib.sem
 ronchiTargetPhaseA, ronchiTargetPhaseB, ronchiCorrectKs, _ = ronchi_sem_lib.readCalibrations(
     "T", ronchi_binning=ronchi_sem_lib.ronchiBinning, ronchi_c3_offset=ronchiC3Offset)
 ### END settings from cal_util
@@ -166,10 +167,6 @@ ronchiC3CorrectionFactor = abs(ronchiC3Offset) / avg_norm  # um offset per um^-1
 # calibration matrix applied when beamTiltComp == True on xlpp
 # Requires hasXLens = True and beamTiltComp = True to be meaningful.
 
-#xt_is_matrix = [[0.000324, -0.000347],[0.001100, 0.00028125]]  #26jul23
-xt_is_matrix = [[0.00024965200894843043, -0.0002568478985382952], [0.0008983, 0.000260]] #26sep29a recal, default if not in calibrations
-df_is_matrix = [[0.041381,0.012342], [0.041381,0.012342]]
-
 ### settings from cal_util
 # is_xt_matrix saved by lafis_cal.py at the current optics (still in Trial
 # low dose area from ronchi_sem_lib.readCalibrations above). LAFIS
@@ -179,9 +176,12 @@ lafis_cal_dir, _ = cal_util.getCalibrationsDir(sem.ReportDirectory())
 lafis_optics = ronchi_sem_lib.getOpticsKey(ronchi_binning=None, ronchi_c3_offset=None)
 lafis_cal_matrix, _ = cal_util.readCalibration("is_xt_matrix", lafis_cal_dir, lafis_optics)
 if lafis_cal_matrix:
-    xt_is_matrix = lafis_cal_matrix
+    is_xt_matrix = lafis_cal_matrix
 else:
-    ronchi_sem_lib.log(f"WARNING: no is_xt_matrix calibration in {lafis_cal_dir} for optics {lafis_optics}; using default xt_is_matrix")
+    ronchi_sem_lib.log(f"WARNING: no is_xt_matrix calibration in {lafis_cal_dir} for optics {lafis_optics}; using default is_xt_matrix")
+is_df_matrix, _ = cal_util.readCalibration("is_df_matrix", lafis_cal_dir,optics=None)
+if not is_df_matrix:
+    raise ValueError('Must have is_df_matrix')
 ### END settings from cal_util
 
 lafisZeroImageShiftDefocus = None            # set from saveZeroImageShiftDefocusXLens before doLafis
@@ -475,13 +475,13 @@ def _save_c3_offset_for_target(pos, pn):
 
 def calc_xt_is(xt0, is_delta):
    xt1 = [0.0,0.0]
-   xt1[0] = xt0[0]+is_delta[0]*xt_is_matrix[0][0]+is_delta[1]*xt_is_matrix[1][0]
-   xt1[1] = xt0[1]+is_delta[0]*xt_is_matrix[0][1]+is_delta[1]*xt_is_matrix[1][1]
+   xt1[0] = xt0[0]+is_delta[0]*is_xt_matrix[0][0]+is_delta[1]*is_xt_matrix[1][0]
+   xt1[1] = xt0[1]+is_delta[0]*is_xt_matrix[0][1]+is_delta[1]*is_xt_matrix[1][1]
    return xt1
 
 def calc_df_is(df0, is_delta):
    df1 = 0.0
-   df1 =df0+is_delta[0]*df_is_matrix[0][0]+is_delta[1]*df_is_matrix[1][1]
+   df1 =df0+is_delta[0]*is_df_matrix[0][0]+is_delta[1]*is_df_matrix[1][1]
    return df1
 
 def saveZeroImageShiftDefocusXLens():
