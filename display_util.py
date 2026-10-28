@@ -201,3 +201,87 @@ def showScatterFit():
         plt.xlabel("x")
     plt.ylabel("y")
     plt.show()
+
+Contrast_Phases = []
+Contrast_Std = []
+Contrast_Fit = []
+Contrast_SubTitle = []
+
+def addContrastGrid(phases, std_grid, fit_params, u_max, v_max, subtitle=''):
+    """
+    Add x-tilt contrast scan for display.
+        phases: phase coordinates (rad) of the scan along each ronchiCorrMatrix vector
+        std_grid: image standard deviation, indexed [u, v]
+        fit_params: (c, a_u, f_u, p_u, a_v, f_v, p_v) of the 2D cosine fit
+        u_max, v_max: fitted maximum contrast phase coordinates
+    """
+    global Contrast_Phases, Contrast_Std, Contrast_Fit, Contrast_SubTitle
+    Contrast_Phases.append(np.asarray(phases, dtype=float))
+    Contrast_Std.append(np.asarray(std_grid, dtype=float))
+    Contrast_Fit.append((tuple(fit_params), u_max, v_max))
+    Contrast_SubTitle.append(subtitle)
+
+def resetContrastGrid():
+    global Contrast_Phases, Contrast_Std, Contrast_Fit, Contrast_SubTitle
+    Contrast_Phases = []
+    Contrast_Std = []
+    Contrast_Fit = []
+    Contrast_SubTitle = []
+
+def _cosine_2d_model(u, v, fit_params):
+    c, a_u, f_u, p_u, a_v, f_v, p_v = fit_params
+    return c + a_u * np.cos(f_u * u - p_u) + a_v * np.cos(f_v * v - p_v)
+
+def showContrastGrid(panel_width=3.5, cmap='viridis', title='', savefig=False):
+    """
+    Heatmaps of x-tilt contrast scans, one row per scan:
+    measured std, 2D cosine fit, and residual (measured - fit).
+    Axes are phase offsets (rad) along the two ronchiCorrMatrix vectors
+    from the starting x-tilt (+). The fitted maximum contrast is marked (x).
+    """
+    import matplotlib.pyplot as plt
+    number_of_scans = len(Contrast_Std)
+    ncols = 3
+    nrows = number_of_scans
+    fig, ax = plt.subplots(nrows, ncols, figsize=(ncols * panel_width, nrows * panel_width), squeeze=False)
+    fig.suptitle(title or "Image std vs x-tilt along ronchiCorrMatrix vectors", fontweight="bold")
+    for n in range(number_of_scans):
+        phases = Contrast_Phases[n]
+        std_grid = Contrast_Std[n]
+        fit_params, u_max, v_max = Contrast_Fit[n]
+        step = phases[1] - phases[0] if len(phases) > 1 else 1.0
+        extent = [phases[0] - step / 2, phases[-1] + step / 2, phases[0] - step / 2, phases[-1] + step / 2]
+        u_grid, v_grid = np.meshgrid(phases, phases, indexing='ij')
+        fit_grid = _cosine_2d_model(u_grid, v_grid, fit_params)
+        # smooth fit on a finer grid for display
+        fine = np.linspace(extent[0], extent[1], 101)
+        u_fine, v_fine = np.meshgrid(fine, fine, indexing='ij')
+        fit_fine = _cosine_2d_model(u_fine, v_fine, fit_params)
+        vmin = min(std_grid.min(), fit_grid.min())
+        vmax = max(std_grid.max(), fit_grid.max())
+        residual = std_grid - fit_grid
+        rmax = np.abs(residual).max() or 1.0
+        rms = np.sqrt(np.mean(residual ** 2))
+        subtitle = Contrast_SubTitle[n]
+        panels = (
+            (std_grid, 'measured std', cmap, vmin, vmax),
+            (fit_fine, 'cosine fit', cmap, vmin, vmax),
+            (residual, f'residual (rms {rms:.3g})', 'RdBu_r', -rmax, rmax),
+        )
+        for col, (data, label, panel_cmap, lo, hi) in enumerate(panels):
+            a = ax[n][col]
+            # transpose so u is on the horizontal axis
+            im = a.imshow(data.T, origin='lower', extent=extent, cmap=panel_cmap, vmin=lo, vmax=hi,
+                          interpolation='nearest')
+            fig.colorbar(im, ax=a, fraction=0.046, pad=0.04)
+            a.plot(0, 0, '+', color='white', markersize=10, markeredgewidth=2, label='start')
+            a.plot(u_max, v_max, 'x', color='red', markersize=10, markeredgewidth=2, label='max fit')
+            a.set_xlabel('phase u along corr row 0 (rad)')
+            a.set_ylabel('phase v along corr row 1 (rad)')
+            a.set_title(f'{subtitle} {label}'.strip())
+            a.set_aspect('equal')
+        ax[n][0].legend(loc='lower right', fontsize=8)
+    plt.tight_layout()
+    if savefig:
+        plt.savefig((title or 'contrast_grid') + '.png', dpi=300, bbox_inches="tight")
+    plt.show()
