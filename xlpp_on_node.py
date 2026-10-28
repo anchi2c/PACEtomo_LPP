@@ -73,31 +73,21 @@ def fit_cosine_2d(u, v, values, frequency=1.0):
     v_max = (np.mod(p_v + np.pi, 2 * np.pi) - np.pi) / f_v
     return (c, a_u, f_u, p_u, a_v, f_v, p_v), u_max, v_max
 
-def find_maximum_contrast_xts(number_of_changes, box_size=None, box_center=None, settle_delay_s=0.0,
-                              frequency=1.0, show_plot=True):
+def _scan_contrast_grid(center_xt, phases, corr, box_size=None, box_center=None, settle_delay_s=0.0):
     """
-    Scan XLensDeflector(2) on a number_of_changes x number_of_changes grid
-    oriented along the two row vectors of ronchiCorrMatrix (xt change per rad
-    of phase of each k vector, as solved by ronchi_cal), covering one
-    phase period (2 pi) along each. Acquire a Trial image at each point, take
-    the standard deviation of a boxed area as the contrast, and fit a 2D
-    cosine to find the x-tilt of maximum contrast.
-    frequency: expected contrast periods per 2 pi of phase, used to start the fit.
-    show_plot: show std_grid heatmaps with the fit (display_util.showContrastGrid).
-    XLensDeflector(2) is restored to its starting value at the end.
-    Returns (best_xt, fit_params, std_grid, xt_grid).
+    Acquire a Trial image at each xt = center_xt + u*corr[0] + v*corr[1] for u, v
+    in phases and return (std_grid, xt_grid) indexed [u, v].
+    XLensDeflector(2) is restored to its value before the scan.
     """
-    corr = np.asarray(ronchiCorrMatrix, dtype=float) * corr_scale
-    xt0 = np.array(ronchi_cal.sem.ReportXLensDeflector(2), dtype=float)
-    # phase coordinates centered on the start, one period per axis
-    phases = 2 * np.pi * (np.arange(number_of_changes) - (number_of_changes - 1) / 2.0) / number_of_changes
-    std_grid = np.zeros((number_of_changes, number_of_changes))
-    xt_grid = np.zeros((number_of_changes, number_of_changes, 2))
+    xt_before = np.array(ronchi_cal.sem.ReportXLensDeflector(2), dtype=float)
+    n = len(phases)
+    std_grid = np.zeros((n, n))
+    xt_grid = np.zeros((n, n, 2))
     try:
         for i, u in enumerate(phases):
             for j, v in enumerate(phases):
                 # row vector of ronchiCorrMatrix corresponds to one k vector
-                xt = xt0 + u * corr[0] + v * corr[1]
+                xt = center_xt + u * corr[0] + v * corr[1]
                 xt_grid[i, j] = xt
                 ronchi_cal.sem.SetXLensDeflector(2, xt[0], xt[1])
                 if settle_delay_s > 0:
@@ -107,7 +97,48 @@ def find_maximum_contrast_xts(number_of_changes, box_size=None, box_center=None,
                 std_grid[i, j] = _box_std(image, box_size, box_center)
                 print(f'phase ({u:.2f}, {v:.2f}) rad xt ({xt[0]:.6e}, {xt[1]:.6e}) std {std_grid[i, j]:.3f}')
     finally:
-        ronchi_cal.sem.SetXLensDeflector(2, xt0[0], xt0[1])
+        ronchi_cal.sem.SetXLensDeflector(2, xt_before[0], xt_before[1])
+    return std_grid, xt_grid
+
+def fit_quadratic_2d(u, v, values):
+    """
+    Fit values = a + b*u + c*v + d*u^2 + e*u*v + f*v^2 by least squares.
+    Returns (coeffs, u_max, v_max, is_maximum) where (u_max, v_max) is the
+    stationary point and is_maximum tells if it is a maximum (negative definite).
+    """
+    u = np.asarray(u, dtype=float).ravel()
+    v = np.asarray(v, dtype=float).ravel()
+    values = np.asarray(values, dtype=float).ravel()
+    design = np.column_stack([np.ones_like(u), u, v, u * u, u * v, v * v])
+    coeffs, *_ = np.linalg.lstsq(design, values, rcond=None)
+    a, b, c, d, e, f = coeffs
+    hessian = np.array([[2 * d, e], [e, 2 * f]])
+    is_maximum = bool(np.all(np.linalg.eigvalsh(hessian) < 0))
+    try:
+        u_max, v_max = np.linalg.solve(hessian, [-b, -c])
+    except np.linalg.LinAlgError:
+        u_max, v_max, is_maximum = 0.0, 0.0, False
+    return tuple(coeffs), float(u_max), float(v_max), is_maximum
+
+def find_maximum_contrast_xts(number_of_changes, box_size=None, box_center=None, settle_delay_s=0.0,
+                              frequency=1.0, show_plot=True):
+    """
+    Scan x-tilt on a number_of_changes x number_of_changes grid
+    oriented along the two row vectors of ronchiCorrMatrix (xt change per rad
+    of phase of each k vector), covering one
+    phase period (2 pi) along each. Acquire a Trial image at each point, take
+    the standard deviation of a boxed area as the contrast, and fit a 2D
+    cosine to find the x-tilt of maximum contrast.
+    frequency: expected contrast periods per 2 pi of phase, used to start the fit.
+    show_plot: show std_grid heatmaps with the fit (display_util.showContrastGrid).
+    XLensDeflector(2) is X-tilt and is restored to its starting value at the end.
+    Returns (best_xt, fit_params, std_grid, xt_grid).
+    """
+    corr = np.asarray(ronchiCorrMatrix, dtype=float) * corr_scale
+    xt0 = np.array(ronchi_cal.sem.ReportXLensDeflector(2), dtype=float)
+    # phase coordinates centered on the start, one period per axis
+    phases = 2 * np.pi * (np.arange(number_of_changes) - (number_of_changes - 1) / 2.0) / number_of_changes
+    std_grid, xt_grid = _scan_contrast_grid(xt0, phases, corr, box_size, box_center, settle_delay_s)
     u_grid, v_grid = np.meshgrid(phases, phases, indexing='ij')
     params, u_max, v_max = fit_cosine_2d(u_grid, v_grid, std_grid, frequency)
     best_xt = xt0 + u_max * corr[0] + v_max * corr[1]
@@ -115,19 +146,81 @@ def find_maximum_contrast_xts(number_of_changes, box_size=None, box_center=None,
     print(f'cosine fit: offset {c:.3f}, amplitude u {a_u:.3f} v {a_v:.3f}, frequency u {f_u:.3f} v {f_v:.3f}')
     print(f'maximum contrast at phase ({u_max:.3f}, {v_max:.3f}) rad from start')
     print(f'maximum contrast xt: ({best_xt[0]:.6e}, {best_xt[1]:.6e}); start xt ({xt0[0]:.6e}, {xt0[1]:.6e})')
-    display_util.addContrastGrid(phases, std_grid, params, u_max, v_max,
-                                 subtitle=f'{number_of_changes}x{number_of_changes}')
     if show_plot:
-        display_util.showContrastGrid()
+        display_util.addContrastGrid(phases, std_grid, params, u_max, v_max,
+                                 subtitle=f'{number_of_changes}x{number_of_changes}')
     return best_xt, params, std_grid, xt_grid
 
+def refine_maximum_contrast_xts(best_xt, number_of_changes=5, fraction_of_period=1.0 / 3,
+                                box_size=None, box_center=None, settle_delay_s=0.0, show_plot=True):
+    """
+    Refine best_xt from find_maximum_contrast_xts. Scan a
+    number_of_changes x number_of_changes grid centered at best_xt along the
+    two row vectors of ronchiCorrMatrix, spanning fraction_of_period of one
+    phase period (2 pi) of each k vector. Fit the boxed image std with a 2D
+    second degree polynomial and take its maximum.
+    If the fit has no maximum, the best measured grid point is used. A maximum
+    outside the grid is clipped to the grid edge.
+    XLensDeflector(2) is restored to its value before the scan.
+    Returns (refined_xt, coeffs, std_grid, xt_grid).
+    """
+    corr = np.asarray(ronchiCorrMatrix, dtype=float) * corr_scale
+    best_xt = np.asarray(best_xt, dtype=float)
+    half_span = np.pi * fraction_of_period
+    phases = np.linspace(-half_span, half_span, number_of_changes)
+    std_grid, xt_grid = _scan_contrast_grid(best_xt, phases, corr, box_size, box_center, settle_delay_s)
+    u_grid, v_grid = np.meshgrid(phases, phases, indexing='ij')
+    coeffs, u_max, v_max, is_maximum = fit_quadratic_2d(u_grid, v_grid, std_grid)
+    if not is_maximum:
+        i, j = np.unravel_index(np.argmax(std_grid), std_grid.shape)
+        u_max, v_max = phases[i], phases[j]
+        print(f'WARNING: quadratic fit has no maximum, using best measured grid point ({u_max:.3f}, {v_max:.3f}) rad')
+    elif abs(u_max) > half_span or abs(v_max) > half_span:
+        print(f'WARNING: quadratic fit maximum ({u_max:.3f}, {v_max:.3f}) rad is outside the grid, clipped to the grid edge')
+        u_max = float(np.clip(u_max, -half_span, half_span))
+        v_max = float(np.clip(v_max, -half_span, half_span))
+    refined_xt = best_xt + u_max * corr[0] + v_max * corr[1]
+    print(f'quadratic fit coefficients (1, u, v, u^2, uv, v^2): {np.array2string(np.array(coeffs), precision=4)}')
+    print(f'refined maximum contrast at phase ({u_max:.3f}, {v_max:.3f}) rad from best_xt')
+    print(f'refined maximum contrast xt: ({refined_xt[0]:.6e}, {refined_xt[1]:.6e}); best_xt ({best_xt[0]:.6e}, {best_xt[1]:.6e})')
+    if show_plot:
+        display_util.addContrastGrid(phases, std_grid, coeffs, u_max, v_max,
+                                 subtitle=f'refine {number_of_changes}x{number_of_changes}', model='quadratic')
+    return refined_xt, coeffs, std_grid, xt_grid
+
+def phase_distance(xt_a, xt_b):
+    """
+    Magnitude (rad) of the phase change between two x-tilts, using
+    xt = u*corr[0] + v*corr[1] with the row vectors of ronchiCorrMatrix.
+    """
+    corr = np.asarray(ronchiCorrMatrix, dtype=float) * corr_scale
+    delta = np.asarray(xt_b, dtype=float) - np.asarray(xt_a, dtype=float)
+    uv = np.linalg.solve(corr.T, delta)
+    return float(np.linalg.norm(uv))
+
 if __name__=='__main__':
-    # ronchiStartC3 calibration
+    # measure xt value at high contrast
     if ronchi_cal.ronchi_sem_lib.is_simu == True:
         # offset from on-plane to simulate constrast change
         ronchi_cal.ronchi_sem_lib.ronchiC3Offset = 1
     best_xt, params, std_grid, xt_grid = find_maximum_contrast_xts(5, box_size=None, box_center=None, settle_delay_s=0.0,
                               frequency=1.0, show_plot=True)
-    print(f'Set X-tilt to {best_xt[0]:.6f}, {best_xt[1]:.6f}')
+    max_refine_iterations = 5
+    # stop refining when best_xt moves less than this phase magnitude (rad)
+    refine_phase_threshold = 2 * np.pi / 20
+    for i in range(max_refine_iterations):
+        previous_xt = best_xt
+        best_xt, coeffs, std_grid, xt_grid = refine_maximum_contrast_xts(best_xt, number_of_changes=5,
+                              fraction_of_period=1.0 / 3, show_plot=True)
+        print(f'Set X-tilt to {best_xt[0]:.6f}, {best_xt[1]:.6f}')
+        moved = phase_distance(previous_xt, best_xt)
+        print(f'refinement {i + 1}: best_xt moved {moved:.3f} rad (threshold {refine_phase_threshold:.3f} rad)')
+        if moved < refine_phase_threshold:
+            print(f'refinement converged after {i + 1} iterations')
+            break
+    else:
+        print(f'WARNING: refinement did not converge within {max_refine_iterations} iterations')
     ronchi_cal.sem.SetXLensDeflector(2, best_xt[0], best_xt[1])
-    
+    if display_util.Contrast_Phases:
+        display_util.showContrastGrid()
+
