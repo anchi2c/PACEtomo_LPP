@@ -288,11 +288,12 @@ if __name__=='__main__':
                               frequency=1.0, show_plot=True)
     max_refine_iterations = 5
     # stop refining when best_xt moves less than this phase magnitude (rad)
-    refine_phase_threshold = 2 * np.pi / 20
+    refine_phase_threshold = 2 * np.pi / 30
     for i in range(max_refine_iterations):
+        fraction = 3+i if i <=1 else 4
         previous_xt = best_xt
         best_xt, coeffs, std_grid, xt_grid = refine_maximum_contrast_xts(best_xt, number_of_changes=5,
-                              fraction_of_period=1.0 / 3, show_plot=True)
+                              fraction_of_period=1.0 / (3+i), show_plot=True)
         print(f'Set X-tilt to {best_xt[0]:.6f}, {best_xt[1]:.6f}')
         moved = phase_distance(previous_xt, best_xt)
         print(f'refinement {i + 1}: best_xt moved {moved:.3f} rad (threshold {refine_phase_threshold:.3f} rad)')
@@ -302,6 +303,7 @@ if __name__=='__main__':
     else:
         print(f'WARNING: refinement did not converge within {max_refine_iterations} iterations')
     ronchi_cal.sem.SetXLensDeflector(2, best_xt[0], best_xt[1])
+    ronchi_cal.sem.T()
     if display_util.Contrast_Phases:
         display_util.showContrastGrid()
     if display_util.Quadrant_Stats:
