@@ -362,3 +362,68 @@ def showQuadrantStats(panel_width=3.5, title='', savefig=False):
     if savefig:
         plt.savefig((title or 'quadrant_stats') + '.png', dpi=300, bbox_inches="tight")
     plt.show()
+
+C3Scan_Offsets = []
+C3Scan_RegionStds = []
+C3Scan_RegionNames = []
+C3Scan_Best = []
+C3Scan_Start = []
+
+def addC3ContrastScan(offsets, region_stds, region_names, best_offset, start_offset):
+    """
+    Add a C3 (ImageDistanceOffset) contrast scan for display.
+        offsets: scanned ImageDistanceOffset values
+        region_stds: std/mean, array (number of offsets, number of regions); region 0 is the center
+        region_names: names of the regions
+    """
+    global C3Scan_Offsets, C3Scan_RegionStds, C3Scan_RegionNames, C3Scan_Best, C3Scan_Start
+    C3Scan_Offsets.append(np.asarray(offsets, dtype=float))
+    C3Scan_RegionStds.append(np.asarray(region_stds, dtype=float))
+    C3Scan_RegionNames.append(tuple(region_names))
+    C3Scan_Best.append(best_offset)
+    C3Scan_Start.append(start_offset)
+
+def resetC3ContrastScan():
+    global C3Scan_Offsets, C3Scan_RegionStds, C3Scan_RegionNames, C3Scan_Best, C3Scan_Start
+    C3Scan_Offsets = []
+    C3Scan_RegionStds = []
+    C3Scan_RegionNames = []
+    C3Scan_Best = []
+    C3Scan_Start = []
+
+def showC3ContrastScan(panel_width=4.5, title='', savefig=False):
+    """
+    One row per C3 scan: std/mean of each region against ImageDistanceOffset,
+    and the difference center - mean of corners. The start (gray dotted) and
+    picked best offset (red dashed) are marked.
+    """
+    import matplotlib.pyplot as plt
+    number_of_scans = len(C3Scan_Offsets)
+    fig, ax = plt.subplots(number_of_scans, 2, figsize=(2 * panel_width, number_of_scans * panel_width * 0.75), squeeze=False)
+    fig.suptitle(title or "Image std/mean vs ImageDistanceOffset", fontweight="bold")
+    for n in range(number_of_scans):
+        offsets = C3Scan_Offsets[n]
+        region_stds = C3Scan_RegionStds[n]
+        names = C3Scan_RegionNames[n]
+        diffs = region_stds[:, 0] - region_stds[:, 1:].mean(axis=1)
+        a = ax[n][0]
+        for r in range(region_stds.shape[1]):
+            a.plot(offsets, region_stds[:, r], marker='o', markersize=3,
+                   linewidth=2.0 if r == 0 else 1.0, color='black' if r == 0 else None, label=names[r])
+        a.set_ylabel('std/mean')
+        a.set_title('regions')
+        a.legend(fontsize=7)
+        b = ax[n][1]
+        b.plot(offsets, diffs, marker='o', markersize=3, color='tab:purple')
+        b.axhline(0, color='gray', linewidth=0.8)
+        b.set_ylabel('center - corners std/mean')
+        b.set_title('difference')
+        for c in (a, b):
+            c.axvline(C3Scan_Start[n], color='gray', linestyle=':', label='start')
+            c.axvline(C3Scan_Best[n], color='red', linestyle='--', label='best')
+            c.set_xlabel('ImageDistanceOffset')
+        b.legend(fontsize=7)
+    plt.tight_layout()
+    if savefig:
+        plt.savefig((title or 'c3_contrast_scan') + '.png', dpi=300, bbox_inches="tight")
+    plt.show()
