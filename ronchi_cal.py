@@ -263,10 +263,11 @@ def calibrate_ronchigram_start_c3(pixel_size_um, binning,
     """
     if display_util.Scatter_X:
         display_util.showScatterFit()
-    if display_util.image_buffer:
-        sem.SetImageDistanceOffset(new_trial_offset_baseline)
-        sem.T()
-        print('displaying images for validation....')
+
+    sem.SetImageDistanceOffset(new_trial_offset_baseline)
+    sem.T()
+    print('displaying images for validation....')
+    if False and display_util.image_buffer:
         display_util.showImages()
     if input('Is this a good ronchiStartC3 ? (Y/N/y/n)').lower() == 'y':
         new_trial_offset_baseline = c3_offset_arr.mean()
