@@ -427,3 +427,203 @@ def showC3ContrastScan(panel_width=4.5, title='', savefig=False):
     if savefig:
         plt.savefig((title or 'c3_contrast_scan') + '.png', dpi=300, bbox_inches="tight")
     plt.show()
+
+Cross_Images = []
+Cross_Results = []
+Cross_SubTitle = []
+Cross_Display_Binning = 8
+
+def addCrossFit(image, result, subtitle=''):
+    """
+    Add one on-cross scan for display.
+        image: ronchigram (unbinned)
+        result: dict from xlpp_on_cross.find_cross_center with center (row, col),
+                coeffs of a + b*row + c*col + d*row^2 + e*row*col + f*col^2,
+                positions, is_node, contrast and used of the lattice points
+    The image is kept binned by Cross_Display_Binning to save memory.
+    """
+    global Cross_Images, Cross_Results, Cross_SubTitle
+    b = Cross_Display_Binning
+    arr = np.asarray(image, dtype=float)
+    arr = arr[:arr.shape[0] // b * b, :arr.shape[1] // b * b]
+    Cross_Images.append(arr.reshape(arr.shape[0] // b, b, arr.shape[1] // b, b).mean(axis=(1, 3)))
+    Cross_Results.append(result)
+    Cross_SubTitle.append(subtitle)
+
+def resetCrossFit():
+    global Cross_Images, Cross_Results, Cross_SubTitle
+    Cross_Images = []
+    Cross_Results = []
+    Cross_SubTitle = []
+
+def showCrossFit(panel_width=4.5, title='', savefig=False):
+    """
+    One row per scan:
+    left: ronchigram with nodes (o) and antinodes (s) colored by local fringe
+    contrast; points used in the fit have a black edge.
+    right: contrast of the fitted points with contours of the 2D quadratic fit.
+    The fitted cross center is a red +, the image center a cyan x.
+    """
+    import matplotlib.pyplot as plt
+    number_of_scans = len(Cross_Images)
+    b = Cross_Display_Binning
+    fig, ax = plt.subplots(number_of_scans, 2, figsize=(2 * panel_width, number_of_scans * panel_width * 0.8), squeeze=False)
+    fig.suptitle(title or "Laser fringe cross center fit", fontweight="bold")
+    for n in range(number_of_scans):
+        image = Cross_Images[n]
+        r = Cross_Results[n]
+        pos = np.asarray(r['positions'])
+        contrast = np.asarray(r['contrast'])
+        valid = ~np.isnan(contrast)
+        used = np.asarray(r['used'])
+        is_node = np.asarray(r['is_node'])
+        center = r['center']
+        rows, cols = r['image_shape']
+        vmax = np.percentile(contrast[valid], 98) if valid.any() else 1.0
+        # left: image with lattice points (display pixels = unbinned / b)
+        a = ax[n][0]
+        lo, hi = np.percentile(image, [1, 99])
+        a.imshow(image, cmap='gray', vmin=lo, vmax=hi)
+        for marker, mask in (('o', is_node), ('s', ~is_node)):
+            m = mask & valid
+            a.scatter(pos[m, 1] / b, pos[m, 0] / b, c=contrast[m], cmap='viridis', vmin=0, vmax=vmax,
+                      marker=marker, s=14, edgecolors=np.where(used[m], 'black', 'none'), linewidths=0.6)
+        a.plot(center[1] / b, center[0] / b, '+', color='red', markersize=14, markeredgewidth=2.5)
+        a.plot(cols / 2 / b, rows / 2 / b, 'x', color='cyan', markersize=10, markeredgewidth=2)
+        a.set_title(f'{Cross_SubTitle[n]} nodes (o) antinodes (s)'.strip(), fontsize=9)
+        a.set_xlabel(f'x (px / {b})')
+        a.set_ylabel(f'y (px / {b})')
+        # right: fitted points and quadratic fit contours
+        c = ax[n][1]
+        sc = c.scatter(pos[used, 1], pos[used, 0], c=contrast[used], cmap='viridis', vmin=0, vmax=vmax, s=16)
+        fig.colorbar(sc, ax=c, fraction=0.046, pad=0.04, label='contrast')
+        rr, cc = np.meshgrid(np.linspace(0, rows, 80), np.linspace(0, cols, 80), indexing='ij')
+        a0, a1, a2, a3, a4, a5 = r['coeffs']
+        fit = a0 + a1 * rr + a2 * cc + a3 * rr * rr + a4 * rr * cc + a5 * cc * cc
+        cs = c.contour(cc, rr, fit, levels=np.linspace(0, vmax, 8), colors='gray', linewidths=0.8)
+        c.clabel(cs, fontsize=6, fmt='%.0f')
+        c.plot(center[1], center[0], '+', color='red', markersize=14, markeredgewidth=2.5)
+        c.plot(cols / 2, rows / 2, 'x', color='cyan', markersize=10, markeredgewidth=2)
+        c.set_xlim(0, cols)
+        c.set_ylim(rows, 0)
+        c.set_aspect('equal')
+        c.set_title(f'{Cross_SubTitle[n]} fit, cross (x, y) = ({center[1]:.0f}, {center[0]:.0f})'.strip(), fontsize=9)
+        c.set_xlabel('x (px)')
+        c.set_ylabel('y (px)')
+    plt.tight_layout()
+    if savefig:
+        plt.savefig((title or 'cross_fit') + '.png', dpi=300, bbox_inches="tight")
+    plt.show()
+
+CrossCenter_C3 = []
+CrossCenter_XY = []
+CrossCenter_Axis = []
+CrossCenter_Drift = []
+
+def addCrossCenters(c3_offsets, centers_xy, axis_xy, drift_xy):
+    """
+    Add cross centers of an on-cross C3 scan and their fit
+    center = axis + drift / |C3 offset| for display.
+    """
+    global CrossCenter_C3, CrossCenter_XY, CrossCenter_Axis, CrossCenter_Drift
+    CrossCenter_C3.append(np.asarray(c3_offsets, dtype=float))
+    CrossCenter_XY.append(np.asarray(centers_xy, dtype=float))
+    CrossCenter_Axis.append(np.asarray(axis_xy, dtype=float))
+    CrossCenter_Drift.append(np.asarray(drift_xy, dtype=float))
+
+def resetCrossCenters():
+    global CrossCenter_C3, CrossCenter_XY, CrossCenter_Axis, CrossCenter_Drift
+    CrossCenter_C3 = []
+    CrossCenter_XY = []
+    CrossCenter_Axis = []
+    CrossCenter_Drift = []
+
+def showCrossCenters(panel_width=4.5, title='', savefig=False):
+    """
+    One row per C3 scan: cross center x and y against 1/|C3 offset| with the
+    linear fit (intercept = beam axis, slope = drift, zero on-cross), and the
+    path of the cross center in the image with the fitted axis.
+    """
+    import matplotlib.pyplot as plt
+    number_of_scans = len(CrossCenter_C3)
+    fig, ax = plt.subplots(number_of_scans, 2, figsize=(2 * panel_width, number_of_scans * panel_width * 0.8), squeeze=False)
+    fig.suptitle(title or "Cross center vs C3 offset", fontweight="bold")
+    for n in range(number_of_scans):
+        c3 = CrossCenter_C3[n]
+        xy = CrossCenter_XY[n]
+        axis_xy = CrossCenter_Axis[n]
+        drift = CrossCenter_Drift[n]
+        inv_c3 = 1.0 / np.abs(c3)
+        line = np.linspace(0, inv_c3.max() * 1.05, 20)
+        a = ax[n][0]
+        for k, (label, color) in enumerate((('x', 'tab:blue'), ('y', 'tab:orange'))):
+            a.plot(inv_c3, xy[:, k], 'o', color=color, label=f'{label} measured')
+            a.plot(line, axis_xy[k] + drift[k] * line, '-', color=color, linewidth=1,
+                   label=f'{label} = {axis_xy[k]:.0f} + {drift[k]:.0f}/|C3|')
+        a.set_xlabel('1 / |C3 offset|')
+        a.set_ylabel('cross center (px)')
+        a.legend(fontsize=7)
+        b = ax[n][1]
+        sc = b.scatter(xy[:, 0], xy[:, 1], c=c3, cmap='plasma', s=25)
+        b.plot(xy[:, 0], xy[:, 1], '-', color='gray', linewidth=0.8)
+        b.plot(axis_xy[0], axis_xy[1], '*', color='red', markersize=14, label='beam axis (fit)')
+        fig.colorbar(sc, ax=b, fraction=0.046, pad=0.04, label='C3 offset')
+        b.invert_yaxis()
+        b.set_aspect('equal', adjustable='datalim')
+        b.set_xlabel('x (px)')
+        b.set_ylabel('y (px)')
+        b.legend(fontsize=7)
+    plt.tight_layout()
+    if savefig:
+        plt.savefig((title or 'cross_centers') + '.png', dpi=300, bbox_inches="tight")
+    plt.show()
+
+CrossCorrection_C3 = []
+CrossCorrection_XT = []
+CrossCorrection_Fit = []
+
+def addCrossCorrection(c3_offsets, scan_xt_deltas, xt_delta, xt_slope):
+    """
+    Add on-cross xt corrections from each scan and their linear fit
+    xt change = xt_delta + xt_slope * C3 offset for display.
+    """
+    global CrossCorrection_C3, CrossCorrection_XT, CrossCorrection_Fit
+    CrossCorrection_C3.append(np.asarray(c3_offsets, dtype=float))
+    CrossCorrection_XT.append(np.asarray(scan_xt_deltas, dtype=float))
+    CrossCorrection_Fit.append((np.asarray(xt_delta, dtype=float), np.asarray(xt_slope, dtype=float)))
+
+def resetCrossCorrection():
+    global CrossCorrection_C3, CrossCorrection_XT, CrossCorrection_Fit
+    CrossCorrection_C3 = []
+    CrossCorrection_XT = []
+    CrossCorrection_Fit = []
+
+def showCrossCorrection(panel_width=4.5, title='', savefig=False):
+    """
+    One panel per correction: xt change from each scan against C3 offset with
+    the linear fit extrapolated to C3 offset 0 (star = applied correction).
+    """
+    import matplotlib.pyplot as plt
+    number_of_corrections = len(CrossCorrection_C3)
+    fig, ax = plt.subplots(1, number_of_corrections, figsize=(number_of_corrections * panel_width, panel_width * 0.8), squeeze=False)
+    fig.suptitle(title or "On-cross xt correction extrapolated to C3 offset 0", fontweight="bold")
+    for n in range(number_of_corrections):
+        c3 = CrossCorrection_C3[n]
+        xt = CrossCorrection_XT[n]
+        xt_delta, xt_slope = CrossCorrection_Fit[n]
+        line = np.linspace(min(c3.min(), 0), max(c3.max(), 0), 20)
+        a = ax[0][n]
+        for k, (label, color) in enumerate((('xt x', 'tab:blue'), ('xt y', 'tab:orange'))):
+            a.plot(c3, xt[:, k], 'o', color=color, label=f'{label} per scan')
+            a.plot(line, xt_delta[k] + xt_slope[k] * line, '-', color=color, linewidth=1)
+            a.plot(0, xt_delta[k], '*', color=color, markersize=14, markeredgecolor='black',
+                   label=f'{label} at C3 0: {xt_delta[k]:.3e}')
+        a.axvline(0, color='gray', linestyle=':', linewidth=0.8)
+        a.axhline(0, color='gray', linewidth=0.5)
+        a.set_xlabel('C3 offset')
+        a.set_ylabel('xt change (rad)')
+        a.legend(fontsize=7)
+    plt.tight_layout()
+    if savefig:
+        plt.savefig((title or 'cross_correction') + '.png', dpi=300, bbox_inches="tight")
+    plt.show()
