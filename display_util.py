@@ -296,3 +296,69 @@ def showContrastGrid(panel_width=3.5, cmap='viridis', title='', savefig=False):
     if savefig:
         plt.savefig((title or 'contrast_grid') + '.png', dpi=300, bbox_inches="tight")
     plt.show()
+
+Quadrant_Stats = []
+Quadrant_Selected = []
+Quadrant_Names = []
+Quadrant_SubTitle = []
+
+def addQuadrantStats(quadrant_stats, selected, quadrant_names, subtitle=''):
+    """
+    Add quadrant pixel statistics of one x-tilt scan for display.
+        quadrant_stats: {stat: array (n, n, 4)} indexed [u, v, quadrant], e.g. mean, min, max, std
+        selected: indices of the quadrants used as contrast, or None if the whole box is used
+        quadrant_names: names of the 4 quadrants
+    """
+    global Quadrant_Stats, Quadrant_Selected, Quadrant_Names, Quadrant_SubTitle
+    Quadrant_Stats.append({stat: np.asarray(values, dtype=float) for stat, values in quadrant_stats.items()})
+    Quadrant_Selected.append(None if selected is None else list(selected))
+    Quadrant_Names.append(tuple(quadrant_names))
+    Quadrant_SubTitle.append(subtitle)
+
+def resetQuadrantStats():
+    global Quadrant_Stats, Quadrant_Selected, Quadrant_Names, Quadrant_SubTitle
+    Quadrant_Stats = []
+    Quadrant_Selected = []
+    Quadrant_Names = []
+    Quadrant_SubTitle = []
+
+def showQuadrantStats(panel_width=3.5, title='', savefig=False):
+    """
+    Line plots of each quadrant's pixel statistics against acquisition order,
+    one row per scan and one column per statistic. Quadrants used as contrast
+    are solid lines; excluded quadrants are dashed. Dotted vertical lines mark
+    the start of each row (u value) of the scan grid.
+    """
+    import matplotlib.pyplot as plt
+    number_of_scans = len(Quadrant_Stats)
+    stats = list(Quadrant_Stats[0].keys())
+    ncols = len(stats)
+    nrows = number_of_scans
+    fig, ax = plt.subplots(nrows, ncols, figsize=(ncols * panel_width, nrows * panel_width * 0.8), squeeze=False)
+    fig.suptitle(title or "Box quadrant statistics in acquisition order", fontweight="bold")
+    colors = ('tab:blue', 'tab:orange', 'tab:green', 'tab:red')
+    for n in range(number_of_scans):
+        selected = Quadrant_Selected[n]
+        names = Quadrant_Names[n]
+        for col, stat in enumerate(stats):
+            values = Quadrant_Stats[n][stat]
+            grid_size = values.shape[0]
+            # acquisition order: v changes fastest, as in _scan_contrast_grid
+            values = values.reshape(-1, values.shape[-1])
+            index = np.arange(1, values.shape[0] + 1)
+            a = ax[n][col]
+            for q in range(values.shape[1]):
+                used = selected is None or q in selected
+                a.plot(index, values[:, q], color=colors[q % len(colors)], linestyle='-' if used else '--',
+                       linewidth=1.8 if used else 1.0, marker='o', markersize=3,
+                       label=names[q] + ('' if used else ' (excluded)'))
+            for row_start in range(grid_size + 1, values.shape[0] + 1, grid_size):
+                a.axvline(row_start - 0.5, color='gray', linestyle=':', linewidth=0.8)
+            a.set_xlabel('image number')
+            a.set_ylabel(stat)
+            a.set_title(f'{Quadrant_SubTitle[n]} quadrant {stat}'.strip())
+        ax[n][0].legend(fontsize=7)
+    plt.tight_layout()
+    if savefig:
+        plt.savefig((title or 'quadrant_stats') + '.png', dpi=300, bbox_inches="tight")
+    plt.show()

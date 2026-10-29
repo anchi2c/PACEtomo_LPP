@@ -13,6 +13,8 @@ ronchi_binning = 32
 ronchi_fixed_pixel_size_um = 0.98e-4 * 2
 
 ronchiCorrMatrix = ronchi_cal.ronchi_sem_lib.ronchiCorrMatrix
+# quadrants selected by the last find_maximum_contrast_xts, reused in refinement
+last_selected_quadrants = None
 
 def _box_std(image, box_size=None, box_center=None):
     """Standard deviation of a square box of the image. Default box is centered half of the image."""
@@ -25,6 +27,28 @@ def _box_std(image, box_size=None, box_center=None):
     r0 = max(0, int(box_center[0]) - half)
     c0 = max(0, int(box_center[1]) - half)
     return float(image[r0:r0 + box_size, c0:c0 + box_size].std())
+
+QUADRANT_NAMES = ('top-left', 'top-right', 'bottom-left', 'bottom-right')
+QUADRANT_STATS = ('mean', 'min', 'max', 'std')
+
+def _quadrant_stats(image, box_size=None, box_center=None):
+    """
+    Pixel statistics of the four quadrants of the box used by _box_std.
+    Returns {stat: array of 4} for stat in QUADRANT_STATS, quadrants in the
+    order of QUADRANT_NAMES (numpy row 0 is top).
+    """
+    image = np.asarray(image, dtype=float)
+    if box_size is None:
+        box_size = min(image.shape) // 2
+    if box_center is None:
+        box_center = (image.shape[0] // 2, image.shape[1] // 2)
+    half = box_size // 2
+    r0 = max(0, int(box_center[0]) - half)
+    c0 = max(0, int(box_center[1]) - half)
+    box = image[r0:r0 + box_size, c0:c0 + box_size]
+    rm, cm = box.shape[0] // 2, box.shape[1] // 2
+    quadrants = (box[:rm, :cm], box[:rm, cm:], box[rm:, :cm], box[rm:, cm:])
+    return {stat: np.array([getattr(q, stat)() for q in quadrants]) for stat in QUADRANT_STATS}
 
 def _cosine_2d(uv, c, a_u, f_u, p_u, a_v, f_v, p_v):
     u, v = uv
@@ -76,12 +100,15 @@ def fit_cosine_2d(u, v, values, frequency=1.0):
 def _scan_contrast_grid(center_xt, phases, corr, box_size=None, box_center=None, settle_delay_s=0.0):
     """
     Acquire a Trial image at each xt = center_xt + u*corr[0] + v*corr[1] for u, v
-    in phases and return (std_grid, xt_grid) indexed [u, v].
+    in phases and return (std_grid, xt_grid, quadrant_stats) indexed [u, v].
+    std_grid is the std of the whole box; quadrant_stats[stat][u, v] has the
+    stat of each box quadrant in the order of QUADRANT_NAMES.
     XLensDeflector(2) is restored to its value before the scan.
     """
     xt_before = np.array(ronchi_cal.sem.ReportXLensDeflector(2), dtype=float)
     n = len(phases)
     std_grid = np.zeros((n, n))
+    quadrant_stats = {stat: np.zeros((n, n, 4)) for stat in QUADRANT_STATS}
     xt_grid = np.zeros((n, n, 2))
     try:
         for i, u in enumerate(phases):
@@ -95,10 +122,25 @@ def _scan_contrast_grid(center_xt, phases, corr, box_size=None, box_center=None,
                 ronchi_cal.sem.T()
                 image = np.asarray(ronchi_cal.sem.bufferImage("A"))
                 std_grid[i, j] = _box_std(image, box_size, box_center)
+                for stat, values in _quadrant_stats(image, box_size, box_center).items():
+                    quadrant_stats[stat][i, j] = values
                 print(f'phase ({u:.2f}, {v:.2f}) rad xt ({xt[0]:.6e}, {xt[1]:.6e}) std {std_grid[i, j]:.3f}')
     finally:
         ronchi_cal.sem.SetXLensDeflector(2, xt_before[0], xt_before[1])
-    return std_grid, xt_grid
+    return std_grid, xt_grid, quadrant_stats
+
+def _select_low_std_quadrants(quadrant_std_grid, number_of_quadrants=2):
+    """
+    Pick the quadrants with the lowest median std over the whole scan, so
+    quadrants with ice chunks or other strong features are excluded, and return
+    (contrast_grid, selected) where contrast_grid is the mean std of the
+    selected quadrants. The same quadrants are used for every grid point.
+    """
+    medians = np.median(quadrant_std_grid.reshape(-1, 4), axis=0)
+    selected = [int(q) for q in np.argsort(medians)[:number_of_quadrants]]
+    print('quadrant median std: ' + ', '.join(f'{QUADRANT_NAMES[q]} {medians[q]:.3f}' for q in range(4)))
+    print('using quadrants: ' + ', '.join(QUADRANT_NAMES[q] for q in selected))
+    return quadrant_std_grid[:, :, selected].mean(axis=2), selected
 
 def fit_quadratic_2d(u, v, values):
     """
@@ -121,7 +163,7 @@ def fit_quadratic_2d(u, v, values):
     return tuple(coeffs), float(u_max), float(v_max), is_maximum
 
 def find_maximum_contrast_xts(number_of_changes, box_size=None, box_center=None, settle_delay_s=0.0,
-                              frequency=1.0, show_plot=True):
+                              frequency=1.0, show_plot=True, number_of_quadrants=2):
     """
     Scan x-tilt on a number_of_changes x number_of_changes grid
     oriented along the two row vectors of ronchiCorrMatrix (xt change per rad
@@ -129,8 +171,12 @@ def find_maximum_contrast_xts(number_of_changes, box_size=None, box_center=None,
     phase period (2 pi) along each. Acquire a Trial image at each point, take
     the standard deviation of a boxed area as the contrast, and fit a 2D
     cosine to find the x-tilt of maximum contrast.
+    number_of_quadrants: the box is split into four quadrants and only the
+    number_of_quadrants with the lowest median std over the scan are used as
+    the contrast, to exclude areas with ice chunks. 4 uses the whole box.
     frequency: expected contrast periods per 2 pi of phase, used to start the fit.
-    show_plot: show std_grid heatmaps with the fit (display_util.showContrastGrid).
+    show_plot: add std_grid heatmaps with the fit (display_util.showContrastGrid)
+    and quadrant statistics (display_util.showQuadrantStats) for display.
     XLensDeflector(2) is X-tilt and is restored to its starting value at the end.
     Returns (best_xt, fit_params, std_grid, xt_grid).
     """
@@ -138,7 +184,13 @@ def find_maximum_contrast_xts(number_of_changes, box_size=None, box_center=None,
     xt0 = np.array(ronchi_cal.sem.ReportXLensDeflector(2), dtype=float)
     # phase coordinates centered on the start, one period per axis
     phases = 2 * np.pi * (np.arange(number_of_changes) - (number_of_changes - 1) / 2.0) / number_of_changes
-    std_grid, xt_grid = _scan_contrast_grid(xt0, phases, corr, box_size, box_center, settle_delay_s)
+    box_std_grid, xt_grid, quadrant_stats = _scan_contrast_grid(xt0, phases, corr, box_size, box_center, settle_delay_s)
+    global last_selected_quadrants
+    if number_of_quadrants < 4:
+        std_grid, last_selected_quadrants = _select_low_std_quadrants(quadrant_stats['std'], number_of_quadrants)
+    else:
+        std_grid = box_std_grid
+        last_selected_quadrants = None
     u_grid, v_grid = np.meshgrid(phases, phases, indexing='ij')
     params, u_max, v_max = fit_cosine_2d(u_grid, v_grid, std_grid, frequency)
     best_xt = xt0 + u_max * corr[0] + v_max * corr[1]
@@ -149,16 +201,25 @@ def find_maximum_contrast_xts(number_of_changes, box_size=None, box_center=None,
     if show_plot:
         display_util.addContrastGrid(phases, std_grid, params, u_max, v_max,
                                  subtitle=f'{number_of_changes}x{number_of_changes}')
+        display_util.addQuadrantStats(quadrant_stats, last_selected_quadrants, QUADRANT_NAMES,
+                                      subtitle=f'{number_of_changes}x{number_of_changes}')
     return best_xt, params, std_grid, xt_grid
 
 def refine_maximum_contrast_xts(best_xt, number_of_changes=5, fraction_of_period=1.0 / 3,
-                                box_size=None, box_center=None, settle_delay_s=0.0, show_plot=True):
+                                box_size=None, box_center=None, settle_delay_s=0.0, show_plot=True,
+                                quadrants=None, number_of_quadrants=2):
     """
     Refine best_xt from find_maximum_contrast_xts. Scan a
     number_of_changes x number_of_changes grid centered at best_xt along the
     two row vectors of ronchiCorrMatrix, spanning fraction_of_period of one
     phase period (2 pi) of each k vector. Fit the boxed image std with a 2D
     second degree polynomial and take its maximum.
+    The contrast is the mean std of the box quadrants given by quadrants
+    (indices into QUADRANT_NAMES). If quadrants is None, the quadrants selected
+    by the last find_maximum_contrast_xts are used; if there are none, the
+    number_of_quadrants with the lowest median std in this scan are used
+    (4 uses the whole box). Use the same box_size and box_center as
+    find_maximum_contrast_xts so the quadrants are the same areas.
     If the fit has no maximum, the best measured grid point is used. A maximum
     outside the grid is clipped to the grid edge.
     XLensDeflector(2) is restored to its value before the scan.
@@ -168,7 +229,17 @@ def refine_maximum_contrast_xts(best_xt, number_of_changes=5, fraction_of_period
     best_xt = np.asarray(best_xt, dtype=float)
     half_span = np.pi * fraction_of_period
     phases = np.linspace(-half_span, half_span, number_of_changes)
-    std_grid, xt_grid = _scan_contrast_grid(best_xt, phases, corr, box_size, box_center, settle_delay_s)
+    box_std_grid, xt_grid, quadrant_stats = _scan_contrast_grid(best_xt, phases, corr, box_size, box_center, settle_delay_s)
+    if quadrants is None:
+        quadrants = last_selected_quadrants
+    if quadrants is not None:
+        quadrants = [int(q) for q in quadrants]
+        print('using quadrants: ' + ', '.join(QUADRANT_NAMES[q] for q in quadrants))
+        std_grid = quadrant_stats['std'][:, :, quadrants].mean(axis=2)
+    elif number_of_quadrants < 4:
+        std_grid, quadrants = _select_low_std_quadrants(quadrant_stats['std'], number_of_quadrants)
+    else:
+        std_grid = box_std_grid
     u_grid, v_grid = np.meshgrid(phases, phases, indexing='ij')
     coeffs, u_max, v_max, is_maximum = fit_quadratic_2d(u_grid, v_grid, std_grid)
     if not is_maximum:
@@ -186,6 +257,8 @@ def refine_maximum_contrast_xts(best_xt, number_of_changes=5, fraction_of_period
     if show_plot:
         display_util.addContrastGrid(phases, std_grid, coeffs, u_max, v_max,
                                  subtitle=f'refine {number_of_changes}x{number_of_changes}', model='quadratic')
+        display_util.addQuadrantStats(quadrant_stats, quadrants, QUADRANT_NAMES,
+                                      subtitle=f'refine {number_of_changes}x{number_of_changes}')
     return refined_xt, coeffs, std_grid, xt_grid
 
 def phase_distance(xt_a, xt_b):
@@ -223,4 +296,6 @@ if __name__=='__main__':
     ronchi_cal.sem.SetXLensDeflector(2, best_xt[0], best_xt[1])
     if display_util.Contrast_Phases:
         display_util.showContrastGrid()
+    if display_util.Quadrant_Stats:
+        display_util.showQuadrantStats()
 
