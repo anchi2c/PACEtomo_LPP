@@ -515,115 +515,98 @@ def showCrossFit(panel_width=4.5, title='', savefig=False):
         plt.savefig((title or 'cross_fit') + '.png', dpi=300, bbox_inches="tight")
     plt.show()
 
-CrossCenter_C3 = []
-CrossCenter_XY = []
-CrossCenter_Axis = []
-CrossCenter_Drift = []
+CrossSteps_C3 = []
+CrossSteps_Centers = []
+CrossSteps_Target = []
+CrossSteps_XT = []
+CrossSteps_Final = []
+CrossSteps_Applied = []
 
-def addCrossCenters(c3_offsets, centers_xy, axis_xy, drift_xy):
+def addCrossSteps(c3_offsets, centers_xy, target_xy, xt_values, final_center_xy, applied=None):
     """
-    Add cross centers of an on-cross C3 scan and their fit
-    center = axis + drift / |C3 offset| for display.
+    Add an on-cross correction run for display.
+        c3_offsets: C3 offset of each step
+        centers_xy: cross center (x, y) found at each step, before its correction
+        target_xy: target (x, y) of the cross
+        xt_values: xt at the start and after each step's correction
+        final_center_xy: cross center (x, y) of the final check at the last C3 offset
+        applied: whether each step's correction was applied (default all)
     """
-    global CrossCenter_C3, CrossCenter_XY, CrossCenter_Axis, CrossCenter_Drift
-    CrossCenter_C3.append(np.asarray(c3_offsets, dtype=float))
-    CrossCenter_XY.append(np.asarray(centers_xy, dtype=float))
-    CrossCenter_Axis.append(np.asarray(axis_xy, dtype=float))
-    CrossCenter_Drift.append(np.asarray(drift_xy, dtype=float))
+    global CrossSteps_C3, CrossSteps_Centers, CrossSteps_Target, CrossSteps_XT, CrossSteps_Final, CrossSteps_Applied
+    CrossSteps_C3.append(np.asarray(c3_offsets, dtype=float))
+    CrossSteps_Centers.append(np.asarray(centers_xy, dtype=float))
+    CrossSteps_Target.append(np.asarray(target_xy, dtype=float))
+    CrossSteps_XT.append(np.asarray(xt_values, dtype=float))
+    CrossSteps_Final.append(np.asarray(final_center_xy, dtype=float))
+    CrossSteps_Applied.append(np.ones(len(c3_offsets), dtype=bool) if applied is None else np.asarray(applied, dtype=bool))
 
-def resetCrossCenters():
-    global CrossCenter_C3, CrossCenter_XY, CrossCenter_Axis, CrossCenter_Drift
-    CrossCenter_C3 = []
-    CrossCenter_XY = []
-    CrossCenter_Axis = []
-    CrossCenter_Drift = []
+def resetCrossSteps():
+    global CrossSteps_C3, CrossSteps_Centers, CrossSteps_Target, CrossSteps_XT, CrossSteps_Final, CrossSteps_Applied
+    CrossSteps_C3 = []
+    CrossSteps_Centers = []
+    CrossSteps_Target = []
+    CrossSteps_XT = []
+    CrossSteps_Final = []
+    CrossSteps_Applied = []
 
-def showCrossCenters(panel_width=4.5, title='', savefig=False):
+def showCrossSteps(panel_width=4.5, title='', savefig=False):
     """
-    One row per C3 scan: cross center x and y against 1/|C3 offset| with the
-    linear fit (intercept = beam axis, slope = drift, zero on-cross), and the
-    path of the cross center in the image with the fitted axis.
+    One row per on-cross correction run:
+    left: cross offset from the target (x, y) at each step before its
+    correction (hollow: correction skipped as unreliable), and the final
+    check (star) at the last C3 offset.
+    middle: xt (x, y) at the start and after each step's correction.
+    right: path of the cross center in the image with the target.
     """
     import matplotlib.pyplot as plt
-    number_of_scans = len(CrossCenter_C3)
-    fig, ax = plt.subplots(number_of_scans, 2, figsize=(2 * panel_width, number_of_scans * panel_width * 0.8), squeeze=False)
-    fig.suptitle(title or "Cross center vs C3 offset", fontweight="bold")
-    for n in range(number_of_scans):
-        c3 = CrossCenter_C3[n]
-        xy = CrossCenter_XY[n]
-        axis_xy = CrossCenter_Axis[n]
-        drift = CrossCenter_Drift[n]
-        inv_c3 = 1.0 / np.abs(c3)
-        line = np.linspace(0, inv_c3.max() * 1.05, 20)
+    number_of_runs = len(CrossSteps_C3)
+    fig, ax = plt.subplots(number_of_runs, 3, figsize=(3 * panel_width, number_of_runs * panel_width * 0.8), squeeze=False)
+    fig.suptitle(title or "On-cross correction steps", fontweight="bold")
+    for n in range(number_of_runs):
+        c3 = CrossSteps_C3[n]
+        centers = CrossSteps_Centers[n]
+        target = CrossSteps_Target[n]
+        xt = CrossSteps_XT[n]
+        final = CrossSteps_Final[n]
+        applied = CrossSteps_Applied[n]
+        step = np.arange(1, len(c3) + 1)
+        offsets = centers - target
+        final_offset = final - target
         a = ax[n][0]
         for k, (label, color) in enumerate((('x', 'tab:blue'), ('y', 'tab:orange'))):
-            a.plot(inv_c3, xy[:, k], 'o', color=color, label=f'{label} measured')
-            a.plot(line, axis_xy[k] + drift[k] * line, '-', color=color, linewidth=1,
-                   label=f'{label} = {axis_xy[k]:.0f} + {drift[k]:.0f}/|C3|')
-        a.set_xlabel('1 / |C3 offset|')
-        a.set_ylabel('cross center (px)')
+            a.plot(step, offsets[:, k], '-', color=color, label=f'{label}')
+            a.plot(step[applied], offsets[applied, k], 'o', color=color)
+            a.plot(step[~applied], offsets[~applied, k], 'o', markerfacecolor='none', color=color)
+            a.plot(len(c3) + 1, final_offset[k], '*', color=color, markersize=14, markeredgecolor='black',
+                   label=f'{label} final {final_offset[k]:.1f}')
+        a.axhline(0, color='gray', linewidth=0.8)
+        a.set_xticks(list(step) + [len(c3) + 1])
+        a.set_xticklabels([f'{v:.0f}' for v in c3] + [f'final\n{c3[-1]:.0f}'], fontsize=7)
+        a.set_xlabel('C3 offset of step')
+        a.set_ylabel('cross offset from target (px)')
         a.legend(fontsize=7)
         b = ax[n][1]
-        sc = b.scatter(xy[:, 0], xy[:, 1], c=c3, cmap='plasma', s=25)
-        b.plot(xy[:, 0], xy[:, 1], '-', color='gray', linewidth=0.8)
-        b.plot(axis_xy[0], axis_xy[1], '*', color='red', markersize=14, label='beam axis (fit)')
-        fig.colorbar(sc, ax=b, fraction=0.046, pad=0.04, label='C3 offset')
-        b.invert_yaxis()
-        b.set_aspect('equal', adjustable='datalim')
-        b.set_xlabel('x (px)')
-        b.set_ylabel('y (px)')
-        b.legend(fontsize=7)
-    plt.tight_layout()
-    if savefig:
-        plt.savefig((title or 'cross_centers') + '.png', dpi=300, bbox_inches="tight")
-    plt.show()
-
-CrossCorrection_C3 = []
-CrossCorrection_XT = []
-CrossCorrection_Fit = []
-
-def addCrossCorrection(c3_offsets, scan_xt_deltas, xt_delta, xt_slope):
-    """
-    Add on-cross xt corrections from each scan and their linear fit
-    xt change = xt_delta + xt_slope * C3 offset for display.
-    """
-    global CrossCorrection_C3, CrossCorrection_XT, CrossCorrection_Fit
-    CrossCorrection_C3.append(np.asarray(c3_offsets, dtype=float))
-    CrossCorrection_XT.append(np.asarray(scan_xt_deltas, dtype=float))
-    CrossCorrection_Fit.append((np.asarray(xt_delta, dtype=float), np.asarray(xt_slope, dtype=float)))
-
-def resetCrossCorrection():
-    global CrossCorrection_C3, CrossCorrection_XT, CrossCorrection_Fit
-    CrossCorrection_C3 = []
-    CrossCorrection_XT = []
-    CrossCorrection_Fit = []
-
-def showCrossCorrection(panel_width=4.5, title='', savefig=False):
-    """
-    One panel per correction: xt change from each scan against C3 offset with
-    the linear fit extrapolated to C3 offset 0 (star = applied correction).
-    """
-    import matplotlib.pyplot as plt
-    number_of_corrections = len(CrossCorrection_C3)
-    fig, ax = plt.subplots(1, number_of_corrections, figsize=(number_of_corrections * panel_width, panel_width * 0.8), squeeze=False)
-    fig.suptitle(title or "On-cross xt correction extrapolated to C3 offset 0", fontweight="bold")
-    for n in range(number_of_corrections):
-        c3 = CrossCorrection_C3[n]
-        xt = CrossCorrection_XT[n]
-        xt_delta, xt_slope = CrossCorrection_Fit[n]
-        line = np.linspace(min(c3.min(), 0), max(c3.max(), 0), 20)
-        a = ax[0][n]
+        xt_step = np.arange(len(xt))
         for k, (label, color) in enumerate((('xt x', 'tab:blue'), ('xt y', 'tab:orange'))):
-            a.plot(c3, xt[:, k], 'o', color=color, label=f'{label} per scan')
-            a.plot(line, xt_delta[k] + xt_slope[k] * line, '-', color=color, linewidth=1)
-            a.plot(0, xt_delta[k], '*', color=color, markersize=14, markeredgecolor='black',
-                   label=f'{label} at C3 0: {xt_delta[k]:.3e}')
-        a.axvline(0, color='gray', linestyle=':', linewidth=0.8)
-        a.axhline(0, color='gray', linewidth=0.5)
-        a.set_xlabel('C3 offset')
-        a.set_ylabel('xt change (rad)')
-        a.legend(fontsize=7)
+            b.plot(xt_step, xt[:, k], 'o-', color=color, label=label)
+        b.set_xticks(xt_step)
+        b.set_xticklabels(['start'] + [f'{v:.0f}' for v in c3], fontsize=7)
+        b.set_xlabel('after correction at C3 offset')
+        b.set_ylabel('xt (rad)')
+        b.legend(fontsize=7)
+        c = ax[n][2]
+        path = np.vstack([centers, final])
+        c.plot(path[:, 0], path[:, 1], '-', color='gray', linewidth=0.8)
+        sc = c.scatter(centers[:, 0], centers[:, 1], c=c3, cmap='plasma', s=25)
+        c.plot(final[0], final[1], '*', color='green', markersize=14, markeredgecolor='black', label='final')
+        c.plot(target[0], target[1], '+', color='red', markersize=14, markeredgewidth=2.5, label='target')
+        fig.colorbar(sc, ax=c, fraction=0.046, pad=0.04, label='C3 offset')
+        c.invert_yaxis()
+        c.set_aspect('equal', adjustable='datalim')
+        c.set_xlabel('x (px)')
+        c.set_ylabel('y (px)')
+        c.legend(fontsize=7)
     plt.tight_layout()
     if savefig:
-        plt.savefig((title or 'cross_correction') + '.png', dpi=300, bbox_inches="tight")
+        plt.savefig((title or 'cross_steps') + '.png', dpi=300, bbox_inches="tight")
     plt.show()
