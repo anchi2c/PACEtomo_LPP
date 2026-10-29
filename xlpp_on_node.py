@@ -175,8 +175,8 @@ def find_maximum_contrast_xts(number_of_changes, box_size=None, box_center=None,
     """
     Scan x-tilt on a number_of_changes x number_of_changes grid
     oriented along the two row vectors of ronchiCorrMatrix (xt change per rad
-    of phase of each k vector), covering one
-    phase period (2 pi) along each. Acquire a Trial image at each point, take
+    of phase of each k vector), from -pi to +pi of phase along each
+    (the edges are one full period apart). Acquire a Trial image at each point, take
     the normalized standard deviation (std / mean) of a boxed area as the
     contrast, and fit a 2D cosine to find the x-tilt of maximum contrast.
     number_of_quadrants: if less than 4, the box is split into four quadrants
@@ -190,8 +190,8 @@ def find_maximum_contrast_xts(number_of_changes, box_size=None, box_center=None,
     """
     corr = np.asarray(ronchiCorrMatrix, dtype=float) * corr_scale
     xt0 = np.array(ronchi_cal.sem.ReportXLensDeflector(2), dtype=float)
-    # phase coordinates centered on the start, one period per axis
-    phases = 2 * np.pi * (np.arange(number_of_changes) - (number_of_changes - 1) / 2.0) / number_of_changes
+    # phase coordinates centered on the start, edges at -pi and +pi
+    phases = np.linspace(-np.pi, np.pi, number_of_changes)
     box_contrast_grid, xt_grid, quadrant_stats = _scan_contrast_grid(xt0, phases, corr, box_size, box_center, settle_delay_s)
     global last_selected_quadrants
     if number_of_quadrants < 4:
