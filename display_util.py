@@ -212,7 +212,7 @@ def addContrastGrid(phases, std_grid, fit_params, u_max, v_max, subtitle='', mod
     """
     Add x-tilt contrast scan for display.
         phases: phase coordinates (rad) of the scan along each ronchiCorrMatrix vector
-        std_grid: image standard deviation, indexed [u, v]
+        std_grid: image contrast (normalized std = std / mean), indexed [u, v]
         fit_params: (c, a_u, f_u, p_u, a_v, f_v, p_v) of the 2D cosine fit, or
                     (a, b, c, d, e, f) of a + b*u + c*v + d*u^2 + e*u*v + f*v^2
         u_max, v_max: fitted maximum contrast phase coordinates
@@ -244,7 +244,7 @@ def _quadratic_2d_model(u, v, fit_params):
 def showContrastGrid(panel_width=3.5, cmap='viridis', title='', savefig=False):
     """
     Heatmaps of x-tilt contrast scans, one row per scan:
-    measured std, 2D fit (cosine or quadratic), and residual (measured - fit).
+    measured contrast (std / mean), 2D fit (cosine or quadratic), and residual (measured - fit).
     Axes are phase offsets (rad) along the two ronchiCorrMatrix vectors
     from the scan center x-tilt (+). The fitted maximum contrast is marked (x).
     """
@@ -253,7 +253,7 @@ def showContrastGrid(panel_width=3.5, cmap='viridis', title='', savefig=False):
     ncols = 3
     nrows = number_of_scans
     fig, ax = plt.subplots(nrows, ncols, figsize=(ncols * panel_width, nrows * panel_width), squeeze=False)
-    fig.suptitle(title or "Image std vs x-tilt along ronchiCorrMatrix vectors", fontweight="bold")
+    fig.suptitle(title or "Image std/mean vs x-tilt along ronchiCorrMatrix vectors", fontweight="bold")
     for n in range(number_of_scans):
         phases = Contrast_Phases[n]
         std_grid = Contrast_Std[n]
@@ -275,7 +275,7 @@ def showContrastGrid(panel_width=3.5, cmap='viridis', title='', savefig=False):
         rms = np.sqrt(np.mean(residual ** 2))
         subtitle = Contrast_SubTitle[n]
         panels = (
-            (std_grid, 'measured std', cmap, vmin, vmax),
+            (std_grid, 'measured std/mean', cmap, vmin, vmax),
             (fit_fine, f'{model} fit', cmap, vmin, vmax),
             (residual, f'residual (rms {rms:.3g})', 'RdBu_r', -rmax, rmax),
         )
