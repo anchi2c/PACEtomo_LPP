@@ -24,9 +24,10 @@ from datetime import datetime, timezone
 import json
 import glob
 import numpy as np
-from scipy import optimize, ndimage
+from scipy import optimize
 import cal_util
 import display_util
+import ronchi_lib
 
 ######### LAFIS: lpp afis correction #########
 # calibration matrix applied when beamTiltComp == True on xlpp
@@ -230,57 +231,58 @@ def _acquire_ronchi_image(trial_offset_baseline, ronchi_offset, pass_label=''):
     #TODO corp off outside the beam if needed automatically
     return full_ronchi[:,int(0.25*full_shape[1]):]
 
-def cross_correlate(img1, img2, shift=True):
-    f1 = np.fft.fft2(img1)
-    f2 = np.fft.fft2(img2)
-    corr = np.fft.ifft2(f1 * np.conj(f2)).real
-    if shift:
-        corr = np.fft.fftshift(corr)  # swap quadrants: Q1<->Q3, Q2<->Q4
-    return corr
+def _measure_cross(image, label=''):
+    """
+    Measure the laser fringe cross of a highly off-plane xlpp image: ks and
+    phases of the two fringe sets and the cross center by
+    ronchi_lib.find_cross_center (2D quadratic fit of the local fringe
+    contrast at nodes and antinodes). The fit is added to display_util for
+    display with showCrossFit. Returns the find_cross_center result with ks
+    and phases added; center is (row, col).
+    """
+    ks, phases = ronchi_lib.measure_ks_phases(image, ronchi_sem_lib.ronchiPixelSize, ronchi_sem_lib.ronchiBinning,
+                                              ronchi_sem_lib.ronchiPeakRadius)
+    result = ronchi_lib.find_cross_center(image, ks, phases, ronchi_sem_lib.ronchiPixelSize,
+                                          ronchi_sem_lib.ronchiBinning)
+    result.update({'ks': ks, 'phases': phases})
+    if result['relief'] < 0.3 or not result['inside']:
+        log(f"WARNING: cross center {label} may be unreliable: contrast relief {result['relief']:.2f}, "
+            f"center inside image {result['inside']}")
+    display_util.addCrossFit(image, result, subtitle=label)
+    return result
 
-def xlpp_center_finding(shifted_corr_arr, threshold_factor=0.5):
+def _cross_shift_sem(reference, measured, label=''):
     """
-    Find correlation peak by center of mass of a thresholded binary map.
-    shifted_corr_arr should be a swapped/shifted correlation map where
-    the center of the image is the origin if self correlated.
-    Note: These are numpy convension with axes y,x
+    Shift of the fringe pattern from the reference to the measured cross
+    (results of _measure_cross), refined with the fringe phases
+    (ronchi_lib.fringe_shift); the cross center shift chooses the whole
+    number of fringes. Returns sem convention (x, y) = (col, row).
     """
-    c_shape = shifted_corr_arr.shape
-    c_center = c_shape[0]//2, c_shape[1]//2
-    my_max = shifted_corr_arr.max()
-    my_mean = shifted_corr_arr.mean()
-    # center of mass in the thresholded correlation map gives a better
-    # estimate of cc peak we should use.
-    laser_threshold = my_mean+(my_max-my_mean)*threshold_factor
-    laser=np.where(shifted_corr_arr > laser_threshold, 1, 0)
-    laser_center = np.array(ndimage.center_of_mass(laser))
-    # peak shift np array 
-    corr_shift = np.array(c_center) - laser_center
-    display_util.addImage(laser, [corr_shift,])
-    return corr_shift
-
-def _find_shift_numpy(img0, img1):
-    """
-    find shift of the highly off-plane xlpp image from img0 to img1
-    return in numpy convention (row, col)
-    """
-    cor_image = cross_correlate(img0,img1, shift=True)
-    # TODO need auto thresholding
-    factor = 0.5 if is_simu else 0.8
-    peak = xlpp_center_finding(cor_image, threshold_factor=factor)
-    return peak
+    shift, info = ronchi_lib.fringe_shift(reference['ks'], reference['phases'], reference['center'],
+                                          measured['ks'], measured['phases'], measured['center'],
+                                          ronchi_sem_lib.ronchiPixelSize)
+    center_shift = info['center_shift']
+    if not info['phase_refined']:
+        log(f"WARNING: {label} fringe spacing changed by {info['ks_change']:.1%}; "
+            f"using the cross center shift without phase refinement")
+    elif info['ambiguity'] > 0.35:
+        log(f"WARNING: {label} whole fringe count is ambiguous ({info['ambiguity']:.2f} of 0.5); "
+            f"the phase refined shift may be off by a fringe")
+    log(f"{label} shift (x, y) phase refined ({shift[1]:.1f}, {shift[0]:.1f}) px, "
+        f"cross center ({center_shift[1]:.1f}, {center_shift[0]:.1f}) px")
+    return shift[::-1].copy()
 
 def _find_shift_sem(img0, img1):
     """
-    find shift of the highly off-plane xlpp image from img0 to img1
+    find shift of the highly off-plane xlpp image from img0 to img1 from their
+    fringe phases, with the whole number of fringes from their cross centers
     return in sem convention (col, row)
     """
-    peak = _find_shift_numpy(img0, img1)
-    peak_sem =  peak[::-1].copy()
-    return peak_sem
+    return _cross_shift_sem(_measure_cross(img0, 'reference'), _measure_cross(img1, 'shifted'))
 
 def _measureLafisResidual(cal_image_shifts, trial_offset_baseline, ronchi_offset):
     img0_array = _acquire_ronchi_image(trial_offset_baseline, ronchi_offset)
+    cross0 = _measure_cross(img0_array, 'IS 0')
     residual_shifts = np.zeros(cal_image_shifts.shape, dtype=np.float32)
     #display_util.addImage(img0_array)
     old_cal_xts = []
@@ -289,7 +291,8 @@ def _measureLafisResidual(cal_image_shifts, trial_offset_baseline, ronchi_offset
         doLafis(my_is[0],my_is[1])
         img_array = _acquire_ronchi_image(trial_offset_baseline, ronchi_offset)
         display_util.addImage(img_array)
-        residual = _find_shift_sem(img0_array, img_array)
+        label = f'IS {my_is[0]:g},{my_is[1]:g}'
+        residual = _cross_shift_sem(cross0, _measure_cross(img_array, label), label)
         residual_shifts[i] = np.array(residual)
         sem.SetImageShift(0,0)
         old_cal_xt_x = lafisXtCorrectionX
@@ -329,6 +332,7 @@ def update_pixel_xt_matrix(transform_arr):
 
 def _calibrate_pixel_xt_matrix(xt_scale, trial_offset_baseline, ronchi_c3_value):
     img0_array = _acquire_ronchi_image(trial_offset_baseline, ronchi_c3_value)
+    cross0 = _measure_cross(img0_array, 'xt 0')
     changes = np.array([[1.0,1.0],[1.0,-1.0],[-1,-1],[-1,1]])
     cal_xt_changes = xt_scale * changes
     pixel_shifts = changes * 0
@@ -338,7 +342,8 @@ def _calibrate_pixel_xt_matrix(xt_scale, trial_offset_baseline, ronchi_c3_value)
         sem.SetXLensDeflector(2, my_xt[0], my_xt[1])
         log(f'xt set to {sem.ReportXLensDeflector(2)} in pixel_xt calibration')
         img_array = _acquire_ronchi_image(trial_offset_baseline, ronchi_c3_value)
-        my_shift = _find_shift_sem(img0_array, img_array)
+        label = f'xt change {i + 1}'
+        my_shift = _cross_shift_sem(cross0, _measure_cross(img_array, label), label)
         pixel_shifts[i] = np.array(my_shift)
         sem.SetXLensDeflector(2, xt0[0], xt0[1])
     try:
@@ -459,6 +464,9 @@ if __name__=='__main__':
             display_util.showImages()
             # reset image_buffer
             display_util.image_buffer = []
+        if display_util.Cross_Images:
+            display_util.showCrossFit(title='pixel_xt_matrix calibration cross centers')
+            display_util.resetCrossFit()
     except Exception as e:
         log(f'ERROR: Failed: {e}')
         log('Aborting....')
@@ -482,5 +490,7 @@ if __name__=='__main__':
     print(f'final pixel_xt_matrix: {pixel_xt_matrix}')
     if not failed_xt_pixel:
         print(f'final is_xt_matrix: {is_xt_matrix}')
+    if display_util.Cross_Images:
+        display_util.showCrossFit(title='LAFIS calibration cross centers')
     if display_util.Fit_X:
         display_util.showTransformFit()
