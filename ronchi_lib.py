@@ -215,7 +215,7 @@ def _ronchi_fit_quadratic_2d(x, y, values):
     return tuple(coeffs), float(x_max), float(y_max), is_maximum
 
 def find_cross_center(image, ks, phases, pixel_size_um, binning, box_fraction=0.25, fit_fraction=0.3,
-                      beam_fraction=0.25):
+                      beam_fraction=0.25, top_fraction=None, reference_points=None):
     """
     Center (row, col) of the laser fringe cross in unbinned pixels, from the
     local fringe contrast at the nodes and antinodes of the two fringe sets
@@ -225,6 +225,18 @@ def find_cross_center(image, ks, phases, pixel_size_um, binning, box_fraction=0.
     fit_fraction: only points with contrast above fit_fraction of the 95th
     percentile contrast are fitted, so the quadratic describes the cross and
     not the flat area outside it.
+    top_fraction: if given, fit only this fraction of the points with the
+    highest contrast instead of using fit_fraction. The contrast map is a
+    "+": a strong core where both fringe sets overlap and weaker arms of one
+    fringe set. When the cross is off center, the arms and weak fringes pull
+    the fit; fitting only the strongest points keeps it on the core. Do not
+    use it when the core fills the image (high zoom), where the strongest
+    points are noise peaks.
+    reference_points: if given with top_fraction, top_fraction applies to an
+    image with this many valid nodes/antinodes and is scaled by
+    reference_points / number of valid points (up to 1). When the core fills
+    more of the image the fringes are larger (smaller ks) and there are fewer
+    points, so a larger fraction of them is fitted.
     Returns a dict with the center, fit and lattice data.
     """
     image = np.asarray(image, dtype=float)
@@ -237,7 +249,16 @@ def find_cross_center(image, ks, phases, pixel_size_um, binning, box_fraction=0.
     valid = ~np.isnan(contrast)
     if valid.sum() < 6:
         raise ValueError(f'only {valid.sum()} valid lattice points, can not fit the cross')
-    threshold = fit_fraction * np.percentile(contrast[valid], 95)
+    number_of_points = int(valid.sum())
+    fraction_used = None
+    if top_fraction is not None:
+        fraction_used = top_fraction
+        if reference_points is not None:
+            fraction_used = min(1.0, top_fraction * reference_points / number_of_points)
+        # fit only the strongest points, those of the cross core
+        threshold = np.percentile(contrast[valid], 100 * (1 - fraction_used))
+    else:
+        threshold = fit_fraction * np.percentile(contrast[valid], 95)
     used = valid & (contrast >= threshold)
     if used.sum() < 6:
         used = valid
@@ -250,9 +271,14 @@ def find_cross_center(image, ks, phases, pixel_size_um, binning, box_fraction=0.
     p5, p95 = np.percentile(contrast[valid], [5, 95])
     relief = float(1 - p5 / p95) if p95 > 0 else 0.0
     inside = bool(0 <= row_max < image.shape[0] and 0 <= col_max < image.shape[1])
+    # distance of the center from the nearest image edge in fringe periods;
+    # the core is partly outside the image when this is small
+    edge_distance = min(row_max, col_max, image.shape[0] - 1 - row_max, image.shape[1] - 1 - col_max)
+    edge_distance_periods = float(edge_distance / periods.max())
     return {
         'center': np.array([row_max, col_max]), 'is_maximum': is_maximum, 'coeffs': coeffs,
-        'relief': relief, 'inside': inside,
+        'relief': relief, 'inside': inside, 'edge_distance_periods': edge_distance_periods,
+        'number_of_points': number_of_points, 'fraction_used': fraction_used,
         'positions': positions, 'is_node': is_node, 'contrast': contrast, 'used': used,
         'box_size': box_size, 'periods': periods, 'image_shape': image.shape,
     }

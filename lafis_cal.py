@@ -39,6 +39,19 @@ lafisZeroImageShiftXLens = None            # set from saveZeroImageShiftDefocusX
 lafisIsDone = False            # set from saveZeroImageShiftDefocusXLens before doLafis
 lafisXtCorrectionX = 0.0       # set from doLafis as the correction made on XLens
 lafisXtCorrectionY = 0.0       # set from doLafis as the correction made on XLens
+# fraction of nodes/antinodes with the highest contrast fitted to find the
+# cross center, so weak fringes outside the cross do not pull the fit when
+# the cross is off center. It applies to an image with
+# lafisCrossReferencePoints valid nodes/antinodes and is scaled by
+# lafisCrossReferencePoints / number of valid points (up to 1): larger
+# fringes (smaller ks) when the core fills more of the image give fewer
+# points, and a larger fraction is fitted. The number of points and the
+# fraction used are logged for each image. Set lafisCrossReferencePoints to
+# None to always use lafisCrossTopFraction.
+lafisCrossTopFraction = 0.1
+lafisCrossReferencePoints = 1600   # about the valid points at 88000x, C3 offset -130 in the simulator
+# warn if the cross center is closer to the image edge than this, in fringe periods
+lafisCrossMinEdgePeriods = 3
 ########## 
 
 # calibration parameters
@@ -243,11 +256,15 @@ def _measure_cross(image, label=''):
     ks, phases = ronchi_lib.measure_ks_phases(image, ronchi_sem_lib.ronchiPixelSize, ronchi_sem_lib.ronchiBinning,
                                               ronchi_sem_lib.ronchiPeakRadius)
     result = ronchi_lib.find_cross_center(image, ks, phases, ronchi_sem_lib.ronchiPixelSize,
-                                          ronchi_sem_lib.ronchiBinning)
+                                          ronchi_sem_lib.ronchiBinning, top_fraction=lafisCrossTopFraction,
+                                          reference_points=lafisCrossReferencePoints)
     result.update({'ks': ks, 'phases': phases})
-    if result['relief'] < 0.3 or not result['inside']:
+    log(f"cross {label}: {result['number_of_points']} valid nodes/antinodes, fringe periods "
+        f"{result['periods'][0]:.0f} {result['periods'][1]:.0f} px, fitted top {result['fraction_used']:.0%}, "
+        f"center (x, y) ({result['center'][1]:.0f}, {result['center'][0]:.0f})")
+    if result['relief'] < 0.3 or result['edge_distance_periods'] < lafisCrossMinEdgePeriods:
         log(f"WARNING: cross center {label} may be unreliable: contrast relief {result['relief']:.2f}, "
-            f"center inside image {result['inside']}")
+            f"{result['edge_distance_periods']:.1f} fringe periods from the image edge")
     display_util.addCrossFit(image, result, subtitle=label)
     return result
 
