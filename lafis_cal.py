@@ -507,7 +507,7 @@ if __name__=='__main__':
     print(f'final pixel_xt_matrix: {pixel_xt_matrix}')
     if not failed_xt_pixel:
         print(f'final is_xt_matrix: {is_xt_matrix}')
-    if display_util.Cross_Images:
+    if False and display_util.Cross_Images:
         display_util.showCrossFit(title='LAFIS calibration cross centers')
     if display_util.Fit_X:
         display_util.showTransformFit()

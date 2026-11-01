@@ -61,7 +61,8 @@ def refine_c3_by_contrast(step=0.3, max_change=5.0, box_size=512, settle_delay_s
                           apply=True, show_plot=True):
     """
     Refine ImageDistanceOffset (C3) to on-plane by image contrast when xlpp is
-    already on-node. Normalized std (std / mean) is measured in a box at the
+    already on-node. It needs specimen contrast, so it is not valid at a
+    vacuum position. Normalized std (std / mean) is measured in a box at the
     image center and in four boxes touching the image corners. Off-plane, the
     corners have lower std/mean than the center. ImageDistanceOffset is scanned
     from start - max_change to start + max_change in increments of step
@@ -117,9 +118,14 @@ if __name__=='__main__':
                        xt_tilt, peak_radius=100, corr_scale=corr_scale,
                        c3_correction_factor=20 / 6.85)
     print('new StartC3Offset',new_ronchi_start_c3)
-    # refine C3 to on-plane by center vs corner contrast (xlpp must be on-node)
-    best_c3, c3_offsets, c3_diffs, region_stds = refine_c3_by_contrast(step=0.3, max_change=5.0, box_size=512,
-                       apply=True, show_plot=True)
-    print(f'refined ImageDistanceOffset {best_c3:.2f}')
-    if display_util.C3Scan_Offsets:
-        display_util.showC3ContrastScan()
+    # refine C3 to on-plane by center vs corner contrast (xlpp must be on-node).
+    # It needs specimen contrast, so it is not valid at a vacuum position.
+    if input('Refine on-plane condition using image contrast ? '
+             'Only valid on specimen, not at a vacuum position. (Y/N/y/n)').lower() == 'y':
+        best_c3, c3_offsets, c3_diffs, region_stds = refine_c3_by_contrast(step=0.3, max_change=5.0, box_size=512,
+                           apply=True, show_plot=True)
+        print(f'refined ImageDistanceOffset {best_c3:.2f}')
+        if display_util.C3Scan_Offsets:
+            display_util.showC3ContrastScan()
+    else:
+        print('on-plane refinement by contrast skipped')

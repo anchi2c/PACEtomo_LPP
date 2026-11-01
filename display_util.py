@@ -456,9 +456,9 @@ def resetCrossFit():
     Cross_Results = []
     Cross_SubTitle = []
 
-def showCrossFit(panel_width=4.5, title='', savefig=False):
+def showCrossFit(panel_width=4.5, title='', savefig=False, scans_per_row=2):
     """
-    One row per scan:
+    scans_per_row scans per row, two panels per scan:
     left: ronchigram with nodes (o) and antinodes (s) colored by local fringe
     contrast; points used in the fit have a black edge.
     right: contrast of the fitted points with contours of the 2D quadratic fit.
@@ -467,9 +467,17 @@ def showCrossFit(panel_width=4.5, title='', savefig=False):
     import matplotlib.pyplot as plt
     number_of_scans = len(Cross_Images)
     b = Cross_Display_Binning
-    fig, ax = plt.subplots(number_of_scans, 2, figsize=(2 * panel_width, number_of_scans * panel_width * 0.8), squeeze=False)
+    nrows = int(math.ceil(number_of_scans / scans_per_row))
+    ncols = 2 * scans_per_row
+    fig, ax = plt.subplots(nrows, ncols, figsize=(ncols * panel_width, nrows * panel_width * 0.8), squeeze=False)
     fig.suptitle(title or "Laser fringe cross center fit", fontweight="bold")
+    # hide panels without a scan in the last row
+    for k in range(number_of_scans, nrows * scans_per_row):
+        ax[k // scans_per_row][2 * (k % scans_per_row)].axis('off')
+        ax[k // scans_per_row][2 * (k % scans_per_row) + 1].axis('off')
     for n in range(number_of_scans):
+        row = n // scans_per_row
+        col = 2 * (n % scans_per_row)
         image = Cross_Images[n]
         r = Cross_Results[n]
         pos = np.asarray(r['positions'])
@@ -481,7 +489,7 @@ def showCrossFit(panel_width=4.5, title='', savefig=False):
         rows, cols = r['image_shape']
         vmax = np.percentile(contrast[valid], 98) if valid.any() else 1.0
         # left: image with lattice points (display pixels = unbinned / b)
-        a = ax[n][0]
+        a = ax[row][col]
         lo, hi = np.percentile(image, [1, 99])
         a.imshow(image, cmap='gray', vmin=lo, vmax=hi)
         for marker, mask in (('o', is_node), ('s', ~is_node)):
@@ -494,7 +502,7 @@ def showCrossFit(panel_width=4.5, title='', savefig=False):
         a.set_xlabel(f'x (px / {b})')
         a.set_ylabel(f'y (px / {b})')
         # right: fitted points and quadratic fit contours
-        c = ax[n][1]
+        c = ax[row][col + 1]
         sc = c.scatter(pos[used, 1], pos[used, 0], c=contrast[used], cmap='viridis', vmin=0, vmax=vmax, s=16)
         fig.colorbar(sc, ax=c, fraction=0.046, pad=0.04, label='contrast')
         rr, cc = np.meshgrid(np.linspace(0, rows, 80), np.linspace(0, cols, 80), indexing='ij')

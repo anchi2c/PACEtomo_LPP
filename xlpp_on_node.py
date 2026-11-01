@@ -306,6 +306,7 @@ if __name__=='__main__':
     ronchi_cal.sem.T()
     if display_util.Contrast_Phases:
         display_util.showContrastGrid()
-    if display_util.Quadrant_Stats:
+    # quadrant statistics only matter when quadrants were selected (number_of_quadrants < 4)
+    if display_util.Quadrant_Stats and any(q is not None for q in display_util.Quadrant_Selected):
         display_util.showQuadrantStats()
 
