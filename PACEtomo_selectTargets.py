@@ -78,6 +78,8 @@ ronchiMinErrForC3Correction = 0.5     # apply C3 on 1st Trial only if |c3 correc
 ronchiMinErrForC3CorrectionRedo = 0.5 # apply C3 on 2nd Trial only if |c3 correction| exceeds this (um)
 redo_ronchi_after_C3 = True       # up to 3 Trials: 1st C3, 2nd optional C3 + 3rd phase-only if 2nd C3 applied
 ronchiXLensTolerance = 0.000125   # reset XLensDeflector(2) to start if |x-x0| or |y-y0| exceeds this
+ronchiUnlockKsTolerance = 0.3     # ks vector magnitude differing from ronchiCorrectKs by more than this fraction is a deviation (its correction is skipped)
+ronchiUnlockConsecutive = 5       # pause with an OKBox to relock the laser after this many consecutive deviations
 ########## END Ronchigram settings ##########
 
 ########## END SETTINGS ########## 
@@ -154,11 +156,36 @@ def checkRonchigramSetup():
         log("NOTE: Ronchigram runs before each Preview.")
 
 
+def _ronchigram_correction_handling_unlock(c3_baseline_offset=None):
+    """
+    ronchi_sem_lib.doRonchigramCorrection; on XlppUnlockError (ks deviated from
+    ronchiCorrectKs in ronchiUnlockConsecutive consecutive ronchigrams), pause
+    with an OKBox so the laser cavity can be relocked, then redo the
+    correction from the same C3 baseline.
+    """
+    if c3_baseline_offset is None:
+        c3_baseline_offset = float(sem.ReportImageDistanceOffset())
+    while True:
+        try:
+            return ronchi_sem_lib.doRonchigramCorrection(c3_baseline_offset)
+        except ronchi_sem_lib.XlppUnlockError as e:
+            log(f"ERROR: XLPP laser unlocked? {e}")
+            sem.OKBox("\n".join([
+                "XLPP LASER UNLOCKED?",
+                "",
+                str(e),
+                "",
+                "Please relock the laser cavity, then press OK to redo the ronchigram correction.",
+            ]))
+            ronchi_sem_lib.resetXlppUnlockCount()
+            sem.SetImageDistanceOffset(c3_baseline_offset)
+            log("NOTE: Redoing ronchigram correction after laser relock.")
+
 def doRonchigramCorrection():
     if not doRonchigram:
         return
     ronchi_sem_lib.configure(globals(), log_fn=log)
-    ronchi_sem_lib.doRonchigramCorrection()
+    _ronchigram_correction_handling_unlock()
     # Trial shots here are not followed by a PACEtomo Record; clear the mdoc keys
     ronchi_sem_lib.reset_ronchi_measure_count()
 

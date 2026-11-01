@@ -62,6 +62,8 @@ ronchiMinErrForC3CorrectionRedo = 0.5        # apply C3 on 2nd Trial only if |c3
 redo_ronchi_after_C3 = True       # up to 3 Trials: 1st C3, 2nd optional C3 + 3rd phase-only if 2nd C3 applied
 ronchiXLensTolerance = 0.000125     # reset XLensDeflector(2) to start if |x-x0| or |y-y0| exceeds this
 ronchiXLensOffset  = (0.0, 0.0)     # XLens correction made by others (e.g. PACEtomo LAFIS); excluded from tolerance check
+ronchiUnlockKsTolerance = 0.3      # ks vector magnitude differing from ronchiCorrectKs by more than this fraction is a deviation
+ronchiUnlockConsecutive = 5        # raise XlppUnlockError after this many consecutive deviations
 ########## END Ronchigram settings ##########
 
 # Names configure() accepts from a caller namespace
@@ -72,6 +74,7 @@ SETTING_NAMES = (
     "ronchiC3CorrectionFactor", "ronchiCorrectConstantIterNumber",
     "ronchiMinErrForC3Correction", "ronchiMinErrForC3CorrectionRedo",
     "redo_ronchi_after_C3", "ronchiXLensTolerance", "ronchiXLensOffset",
+    "ronchiUnlockKsTolerance", "ronchiUnlockConsecutive",
 )
 
 ########## Session state (owned by this module) ##########
@@ -79,6 +82,21 @@ ronchiStartXLensX = None          # set from ReportXLensDeflector(2) in checkRon
 ronchiStartXLensY = None
 ronchiStartC3Offset = None        # set from ReportImageDistanceOffset in checkRonchigramSetup
 ronchiMeasureCount = 0            # incremented in _ronchi_trial_and_analyze to log result in frame stack mdoc. also used as part of its FrameBaseName
+ronchiKsDeviationCount = 0        # consecutive ronchigrams with ks deviating from ronchiCorrectKs
+
+class XlppKsDeviation(Exception):
+    """ks of a ronchigram deviate from ronchiCorrectKs; its correction is not applied."""
+
+class XlppUnlockError(Exception):
+    """
+    ks deviated from ronchiCorrectKs in ronchiUnlockConsecutive consecutive
+    ronchigrams: a laser cavity is probably unlocked.
+    """
+
+def resetXlppUnlockCount():
+    """Reset the consecutive ks deviation count, e.g. after the laser is relocked."""
+    global ronchiKsDeviationCount
+    ronchiKsDeviationCount = 0
 
 def _default_log(text, color=0, style=0):
     if text.startswith("DEBUG:") and not debug:
@@ -199,6 +217,7 @@ def checkRonchigramSetup():
         ronchiStartXLensX, ronchiStartXLensY = [float(v) for v in sem.ReportXLensDeflector(2)[:2]]
     if ronchiStartC3Offset is None:
         ronchiStartC3Offset = float(sem.ReportImageDistanceOffset())
+    resetXlppUnlockCount()
     log(
         f"NOTE: Ronchigram X lens deflector start ({ronchiStartXLensX:.6f}, {ronchiStartXLensY:.6f}), "
         f"reset tolerance {ronchiXLensTolerance}"
@@ -404,14 +423,43 @@ def _log_ronchi_phases(result, pass_label=""):
     )
     sem.AddToNextFrameStackMdoc(f'RonchiPhases{ronchiMeasureCount:02d}',f"{phases[0]:.3f}    {phases[1]:.3f}")
 
+def _check_ronchi_ks(result, pass_label=""):
+    """
+    Compare the magnitude of each measured k vector with ronchiCorrectKs.
+    A laser cavity that is unlocked gives unreasonably large or small ks.
+    Raises XlppKsDeviation if any differs by more than ronchiUnlockKsTolerance
+    (fraction), and XlppUnlockError when that happens in
+    ronchiUnlockConsecutive consecutive ronchigrams.
+    """
+    global ronchiKsDeviationCount
+    measured = np.linalg.norm(np.asarray(result["ks"], dtype=float), axis=1)
+    reference = np.linalg.norm(np.asarray(ronchiCorrectKs, dtype=float), axis=1)
+    deviation = np.abs(measured - reference) / reference
+    if np.all(deviation <= ronchiUnlockKsTolerance):
+        ronchiKsDeviationCount = 0
+        return
+    ronchiKsDeviationCount += 1
+    lasers = ", ".join(f"{name} |k| {m:.3f} vs {r:.3f} ({d:.0%})"
+                       for name, m, r, d in zip(("vertical", "horizontal"), measured, reference, deviation)
+                       if d > ronchiUnlockKsTolerance)
+    message = (f"Ronchigram{pass_label} ks deviate more than {ronchiUnlockKsTolerance:.0%} from ronchiCorrectKs: "
+               f"{lasers}; {ronchiKsDeviationCount} consecutive")
+    if ronchiKsDeviationCount >= ronchiUnlockConsecutive:
+        raise XlppUnlockError(message)
+    raise XlppKsDeviation(message)
+
 def _ronchi_trial_and_analyze(c3_baseline_offset, pass_label=""):
-    """Acquire Trial ronchigram and analyze. Returns analysis result dict."""
+    """
+    Acquire Trial ronchigram and analyze. Returns analysis result dict.
+    Raises XlppKsDeviation or XlppUnlockError if ks deviate from ronchiCorrectKs.
+    """
     global ronchiMeasureCount
     image = _acquire_ronchi_trial(c3_baseline_offset, pass_label=pass_label)
     result = _analyze_ronchi_image(image)
     ronchiMeasureCount += 1
     _log_ronchi_ks(result, pass_label=pass_label)
     _log_ronchi_phases(result, pass_label=pass_label)
+    _check_ronchi_ks(result, pass_label=pass_label)
     return result
 
 ###############
@@ -509,6 +557,11 @@ def doRonchiCorrection(c3_baseline_offset):
         if debug:
             log(f"DEBUG: Ronchigram pixel size {ronchiPixelSize} um, peak radius {ronchiPeakRadius} px")
         return result
+    except XlppUnlockError as e:
+        log(f"ERROR: {e}. A laser cavity is probably unlocked.")
+        if ronchiStartC3Offset is not None:
+            sem.SetImageDistanceOffset(ronchiStartC3Offset)
+        raise
     except Exception as e:
         log(f"WARNING: Ronchigram analysis failed: {e}. Continuing without laser correction.")
         if ronchiStartC3Offset is not None:
@@ -519,7 +572,9 @@ def doRonchigramCorrection(c3_baseline_offset=None):
     """
     Full Trial correction at the current position, then return to the Record area.
     c3_baseline_offset: None uses the current ImageDistanceOffset.
-    Errors are logged and swallowed. Returns the last analysis result dict or None.
+    Errors are logged and swallowed, except XlppUnlockError which is raised
+    to the caller after returning to the Record area.
+    Returns the last analysis result dict or None.
     """
     if not doRonchigram:
         return None
@@ -538,6 +593,9 @@ def doRonchigramCorrection(c3_baseline_offset=None):
     result = None
     try:
         result = doRonchiCorrection(c3_baseline_offset)
+    except XlppUnlockError:
+        sem.GoToLowDoseArea("R")
+        raise
     except Exception:
         pass  # already logged in doRonchiCorrection
     sem.GoToLowDoseArea("R")
