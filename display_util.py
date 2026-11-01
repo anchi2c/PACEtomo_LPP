@@ -618,3 +618,79 @@ def showCrossSteps(panel_width=4.5, title='', savefig=False):
     if savefig:
         plt.savefig((title or 'cross_steps') + '.png', dpi=300, bbox_inches="tight")
     plt.show()
+
+PixelShift_XT = []
+PixelShift_Measured = []
+PixelShift_Fitted = []
+PixelShift_Matrix = []
+
+def addPixelShifts(xt_changes, measured_shifts, fitted_shifts=None, pixel_xt_matrix=None):
+    """
+    Add a pixel_xt_matrix calibration for display.
+        xt_changes: applied xt changes (rad), one row per image
+        measured_shifts: measured pattern shift (x, y) px from the reference image
+        fitted_shifts: shifts predicted by the solved matrix, or None if the solve failed
+        pixel_xt_matrix: solved matrix (xt = pixel shift @ matrix), or None
+    """
+    global PixelShift_XT, PixelShift_Measured, PixelShift_Fitted, PixelShift_Matrix
+    PixelShift_XT.append(np.asarray(xt_changes, dtype=float))
+    PixelShift_Measured.append(np.asarray(measured_shifts, dtype=float))
+    PixelShift_Fitted.append(None if fitted_shifts is None else np.asarray(fitted_shifts, dtype=float))
+    PixelShift_Matrix.append(None if pixel_xt_matrix is None else np.asarray(pixel_xt_matrix, dtype=float))
+
+def resetPixelShifts():
+    global PixelShift_XT, PixelShift_Measured, PixelShift_Fitted, PixelShift_Matrix
+    PixelShift_XT = []
+    PixelShift_Measured = []
+    PixelShift_Fitted = []
+    PixelShift_Matrix = []
+
+def showPixelShifts(panel_width=5, title='', savefig=False):
+    """
+    One panel per pixel_xt_matrix calibration: measured pattern shifts (x, y)
+    from the reference image, which is (0, 0) at the center, labeled with the
+    sign of the applied xt change; hollow circles are the shifts predicted by
+    the solved matrix, joined to the measured ones by the residual. y points
+    down as in the image.
+    """
+    import matplotlib.pyplot as plt
+    number_of_cals = len(PixelShift_XT)
+    fig, ax = plt.subplots(1, number_of_cals, figsize=(number_of_cals * panel_width, panel_width), squeeze=False)
+    fig.suptitle(title or "pixel_xt_matrix calibration pixel shifts", fontweight="bold")
+    for n in range(number_of_cals):
+        xt = PixelShift_XT[n]
+        measured = PixelShift_Measured[n]
+        fitted = PixelShift_Fitted[n]
+        a = ax[0][n]
+        a.axhline(0, color='gray', linewidth=0.8)
+        a.axvline(0, color='gray', linewidth=0.8)
+        a.plot(0, 0, '+', color='black', markersize=14, markeredgewidth=2, label='reference (0, 0)')
+        a.scatter(measured[:, 0], measured[:, 1], color='tab:blue', s=40, zorder=3, label='measured')
+        if fitted is not None:
+            a.scatter(fitted[:, 0], fitted[:, 1], facecolors='none', edgecolors='tab:red', s=80, zorder=3,
+                      label='matrix fit')
+            for m, f in zip(measured, fitted):
+                a.plot([f[0], m[0]], [f[1], m[1]], '-', color='tab:red', linewidth=1)
+        scale = np.abs(xt).max() if np.abs(xt).max() > 0 else 1.0
+        for m, d in zip(measured, xt):
+            a.annotate(f'xt ({d[0] / scale:+.0f}, {d[1] / scale:+.0f})', (m[0], m[1]), textcoords='offset points',
+                       xytext=(6, 6), fontsize=8)
+        points = measured if fitted is None else np.vstack([measured, fitted])
+        limit = 1.25 * max(np.abs(points).max(), 1.0)
+        a.set_xlim(-limit, limit)
+        a.set_ylim(limit, -limit)       # y down as in the image
+        a.set_aspect('equal')
+        a.set_xlabel('pixel shift x (px)')
+        a.set_ylabel('pixel shift y (px)')
+        matrix = PixelShift_Matrix[n]
+        if matrix is not None:
+            residual = np.sqrt(np.mean(np.sum((measured - fitted) ** 2, axis=1)))
+            a.set_title(f'xt step {scale:.3e} rad, rms residual {residual:.1f} px\n'
+                        f'pixel_xt_matrix {np.array2string(matrix, precision=3)}'.replace('\n ', '\n'), fontsize=8)
+        else:
+            a.set_title(f'xt step {scale:.3e} rad, matrix solve failed', fontsize=8)
+        a.legend(fontsize=7, loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=3)
+    plt.tight_layout()
+    if savefig:
+        plt.savefig((title or 'pixel_shifts') + '.png', dpi=300, bbox_inches="tight")
+    plt.show()

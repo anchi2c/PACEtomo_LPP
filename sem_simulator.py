@@ -45,6 +45,11 @@ added_mdoc_dict = {}
 # script variables set by SetVariable and by sem calls such as ReportNavItem
 sim_variables = {}
 
+## when log_off is True, not to print to terminal.
+log_off = True
+
+## when save_frame_tif is True, save fake tif files
+save_frame_tif = False
 
 ## when test_rip is True, a -20 c3offset file is loaded
 test_rip = False
@@ -54,7 +59,8 @@ def pause():
 
 def _log(name: str, *args, **kwargs) -> None:
     arg_str = ", ".join([repr(a) for a in args] + [f"{k}={v!r}" for k, v in kwargs.items()])
-    print(f"[sem stub] {name}({arg_str})")
+    if not log_off:
+        print(f"[sem stub] {name}({arg_str})")
 
 def Echo(msg):
     _log(msg)
@@ -259,7 +265,6 @@ def GetImageShift(*args, **kwargs) -> tuple:
 
 def ReportImageShift(*args, **kwargs) -> tuple:
     _log("ReportImageShift", *args, **kwargs)
-    print('reported image shift',image_shift)
     return image_shift
 
 
@@ -587,13 +592,14 @@ StageZ = 80.2568
         base_name += f"_{ReportTiltAngle():03.2f}"
     file_name = base_name+".tif"
     full_path = os.path.join(frame_dir,file_name)
-    print(full_path)
-    if os.path.exists(full_path):
-        print(f'Existing path: {full_path}')
-        sys.exit()
-    f=open(full_path,'w')
-    f.write('fake tif\n')
-    f.close()
+    _log(full_path)
+    if save_frame_tif:
+        if os.path.exists(full_path):
+            _log(f'Existing path: {full_path}')
+            sys.exit()
+        f=open(full_path,'w')
+        f.write('fake tif\n')
+        f.close()
 
 def S(*args, **kwargs) -> None:
     _log("S", *args, **kwargs)
@@ -635,13 +641,14 @@ def T(*args, **kwargs) -> None:
         base_name += f"_{ReportTiltAngle():03.2f}"
     file_name = base_name+".tif"
     full_path = os.path.join(frame_dir,file_name)
-    print(full_path)
-    if os.path.exists(full_path):
-        print(f'Existing path: {full_path}')
-        sys.exit()
-    f=open(full_path,'w')
-    f.write('fake tif\n')
-    f.close()
+    _log(full_path)
+    if save_frame_tif:
+        if os.path.exists(full_path):
+            _log(f'Existing path: {full_path}')
+            sys.exit()
+        f=open(full_path,'w')
+        f.write('fake tif\n')
+        f.close()
 
 
 def AcquireToMatchBuffer(*args, **kwargs) -> None:
@@ -722,12 +729,12 @@ def bufferImage(*args, **kwargs) -> Any:
             pixel_xt_matrix = np.array([[1.338e-6, -2.006312e-7],[2.36091e-7, 1.5751567e-6]])  #starting guess mrad/pixel
     else:
         pixel_xt_matrix = np.array(pixel_xt_matrix)
-    print('pixel_xt_matrix', pixel_xt_matrix)
+    _log('pixel_xt_matrix', pixel_xt_matrix)
 
     # calculate pixel_is_matrix from saved is_xt_matrix
     is_xt_matrix, ronchi_c3_offset = cal_util.readCalibration('is_xt_matrix', cal_dir, ronchi_sem_lib.getOpticsKey(ronchi_c3_offset=None))
     pixel_is_matrix = -np.linalg.inv(is_xt_matrix) @ pixel_xt_matrix
-    print('perfect pixel_is_matrix', pixel_is_matrix)
+    _log('perfect pixel_is_matrix', pixel_is_matrix)
     # for lafis high off-plane
     is_scale = 1
     xt_scale = 1
@@ -738,12 +745,12 @@ def bufferImage(*args, **kwargs) -> Any:
         xt_x,xt_y,*_ = ReportXLensDeflector(2)
         shift_from_xt = np.array((xt_x,xt_y)) @ np.linalg.inv(pixel_xt_matrix) * xt_scale
         shift_from_is = np.array((is_x,is_y)) @ np.linalg.inv(pixel_is_matrix) * is_scale
-        print('shift_from_xt', xt_x, xt_y, shift_from_xt)
-        print('shift_from_is', is_x, is_y, shift_from_is)
+        _log('shift_from_xt', xt_x, xt_y, shift_from_xt)
+        _log('shift_from_is', is_x, is_y, shift_from_is)
         # defocus shifts xlpp the same way as xt, opposite to its correction
         shift_from_df = -defocus * sim_df_xt_vector @ np.linalg.inv(pixel_xt_matrix) * xt_scale
         shift_x, shift_y = (shift_from_is + shift_from_xt + shift_from_df).tolist()
-        print('simu total pixel shift x,y', shift_x, shift_y)
+        _log('simu total pixel shift x,y', shift_x, shift_y)
         shift_arr = shift_pad_or_crop(sim_arr, int(shift_y), int(shift_x))
         # sem functions is X,Y
         cropped_arr = CropCenterToSize(shift_arr, cropped_shape[1], cropped_shape[0])
@@ -758,7 +765,7 @@ def bufferImage(*args, **kwargs) -> Any:
             zoom_factor = abs((ref_c3_offset - ronchi_flat_c3_offset)/c3_distance)
         else:
             zoom_factor = 1
-        print('****zoom_factor',zoom_factor)
+        _log('****zoom_factor',zoom_factor)
         zoomed_arr = zoom_center_to_size(cropped_arr, zoom_factor)
         return zoomed_arr
     except Exception as e:
@@ -1234,7 +1241,7 @@ def SetNextLogOutputStyle(*args, **kwargs) -> None:
 
 def EchoBreakLines(*args, **kwargs) -> None:
     _log("EchoBreakLines", *args, **kwargs)
-    print('Script Log:', args[0])
+    _log('Script Log:', args[0])
 
 def SetStatusLine(*args, **kwargs) -> None:
     _log("SetStatusLine", *args, **kwargs)

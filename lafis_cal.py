@@ -52,6 +52,9 @@ lafisCrossTopFraction = 0.1
 lafisCrossReferencePoints = 1600   # about the valid points at 88000x, C3 offset -130 in the simulator
 # warn if the cross center is closer to the image edge than this, in fringe periods
 lafisCrossMinEdgePeriods = 3
+# show the cross center fit of every image (display_util.showCrossFit); the
+# pixel_xt_matrix calibration pixel shifts are always shown
+lafisShowCrossFit = False
 ########## 
 
 # calibration parameters
@@ -250,7 +253,7 @@ def _measure_cross(image, label=''):
     phases of the two fringe sets and the cross center by
     ronchi_lib.find_cross_center (2D quadratic fit of the local fringe
     contrast at nodes and antinodes). The fit is added to display_util for
-    display with showCrossFit. Returns the find_cross_center result with ks
+    display with showCrossFit if lafisShowCrossFit. Returns the find_cross_center result with ks
     and phases added; center is (row, col).
     """
     ks, phases = ronchi_lib.measure_ks_phases(image, ronchi_sem_lib.ronchiPixelSize, ronchi_sem_lib.ronchiBinning,
@@ -265,7 +268,8 @@ def _measure_cross(image, label=''):
     if result['relief'] < 0.3 or result['edge_distance_periods'] < lafisCrossMinEdgePeriods:
         log(f"WARNING: cross center {label} may be unreliable: contrast relief {result['relief']:.2f}, "
             f"{result['edge_distance_periods']:.1f} fringe periods from the image edge")
-    display_util.addCrossFit(image, result, subtitle=label)
+    if lafisShowCrossFit:
+        display_util.addCrossFit(image, result, subtitle=label)
     return result
 
 def _cross_shift_sem(reference, measured, label=''):
@@ -368,8 +372,11 @@ def _calibrate_pixel_xt_matrix(xt_scale, trial_offset_baseline, ronchi_c3_value)
         update_pixel_xt_matrix(observed_to_change_matrix)
     except Exception as e:
         log(f'Error: Calibration not updated {e} Bad pixel shift measured {pixel_shifts}')
+        display_util.addPixelShifts(cal_xt_changes, pixel_shifts, None, None)
         return None
-    pixel_residuals = cal_xt_changes @ np.linalg.inv(observed_to_change_matrix) - pixel_shifts
+    fitted_shifts = cal_xt_changes @ np.linalg.inv(observed_to_change_matrix)
+    display_util.addPixelShifts(cal_xt_changes, pixel_shifts, fitted_shifts, observed_to_change_matrix)
+    pixel_residuals = fitted_shifts - pixel_shifts
     return pixel_residuals
 
 def calibrateXtPixelMatrix():
@@ -468,7 +475,6 @@ if __name__=='__main__':
     #saveCalibrations()
     checkRonchigramSetup()
     setRunFrameBaseName('lafis_cal')
-    print(ronchi_sem_lib.ronchiC3Offset)
     saveZeroImageShiftDefocusXLens()
     readCalibrations()
     ##### calibrate ronchiCorrMatrix
@@ -481,7 +487,9 @@ if __name__=='__main__':
             display_util.showImages()
             # reset image_buffer
             display_util.image_buffer = []
-        if display_util.Cross_Images:
+        if display_util.PixelShift_XT:
+            display_util.showPixelShifts()
+        if lafisShowCrossFit and display_util.Cross_Images:
             display_util.showCrossFit(title='pixel_xt_matrix calibration cross centers')
             display_util.resetCrossFit()
     except Exception as e:
@@ -507,7 +515,7 @@ if __name__=='__main__':
     print(f'final pixel_xt_matrix: {pixel_xt_matrix}')
     if not failed_xt_pixel:
         print(f'final is_xt_matrix: {is_xt_matrix}')
-    if False and display_util.Cross_Images:
+    if lafisShowCrossFit and display_util.Cross_Images:
         display_util.showCrossFit(title='LAFIS calibration cross centers')
     if display_util.Fit_X:
         display_util.showTransformFit()
