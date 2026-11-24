@@ -368,34 +368,48 @@ C3Scan_RegionStds = []
 C3Scan_RegionNames = []
 C3Scan_Best = []
 C3Scan_Start = []
+C3Scan_WindowOffsets = []
+C3Scan_WindowStds = []
 
-def addC3ContrastScan(offsets, region_stds, region_names, best_offset, start_offset):
+def addC3ContrastScan(offsets, region_stds, region_names, best_offset, start_offset,
+                      window_offsets=None, window_stds=None):
     """
     Add a C3 (ImageDistanceOffset) contrast scan for display.
         offsets: scanned ImageDistanceOffset values
         region_stds: std/mean, array (number of offsets, number of regions); region 0 is the center
         region_names: names of the regions
+        window_offsets: optional center offset of each running window of the flattest-region analysis
+        window_stds: optional std of the difference in each running window
     """
     global C3Scan_Offsets, C3Scan_RegionStds, C3Scan_RegionNames, C3Scan_Best, C3Scan_Start
+    global C3Scan_WindowOffsets, C3Scan_WindowStds
     C3Scan_Offsets.append(np.asarray(offsets, dtype=float))
     C3Scan_RegionStds.append(np.asarray(region_stds, dtype=float))
     C3Scan_RegionNames.append(tuple(region_names))
     C3Scan_Best.append(best_offset)
     C3Scan_Start.append(start_offset)
+    has_window = window_offsets is not None and window_stds is not None
+    C3Scan_WindowOffsets.append(np.asarray(window_offsets, dtype=float) if has_window else None)
+    C3Scan_WindowStds.append(np.asarray(window_stds, dtype=float) if has_window else None)
 
 def resetC3ContrastScan():
     global C3Scan_Offsets, C3Scan_RegionStds, C3Scan_RegionNames, C3Scan_Best, C3Scan_Start
+    global C3Scan_WindowOffsets, C3Scan_WindowStds
     C3Scan_Offsets = []
     C3Scan_RegionStds = []
     C3Scan_RegionNames = []
     C3Scan_Best = []
     C3Scan_Start = []
+    C3Scan_WindowOffsets = []
+    C3Scan_WindowStds = []
 
 def showC3ContrastScan(panel_width=4.5, title='', savefig=False):
     """
     One row per C3 scan: std/mean of each region against ImageDistanceOffset,
     and the difference center - mean of corners. The start (gray dotted) and
-    picked best offset (red dashed) are marked.
+    picked best offset (red dashed) are marked. If available, the std of the
+    difference in each running window of the flattest-region analysis is
+    plotted against the window center on a second y axis of the difference plot.
     """
     import matplotlib.pyplot as plt
     number_of_scans = len(C3Scan_Offsets)
@@ -422,7 +436,17 @@ def showC3ContrastScan(panel_width=4.5, title='', savefig=False):
             c.axvline(C3Scan_Start[n], color='gray', linestyle=':', label='start')
             c.axvline(C3Scan_Best[n], color='red', linestyle='--', label='best')
             c.set_xlabel('ImageDistanceOffset')
-        b.legend(fontsize=7)
+        handles, labels = b.get_legend_handles_labels()
+        if C3Scan_WindowStds[n] is not None:
+            b2 = b.twinx()
+            b2.plot(C3Scan_WindowOffsets[n], C3Scan_WindowStds[n], marker='s', markersize=3,
+                    color='tab:orange', label='window std')
+            b2.set_ylabel('std of difference in window', color='tab:orange')
+            b2.tick_params(axis='y', labelcolor='tab:orange')
+            handles2, labels2 = b2.get_legend_handles_labels()
+            handles += handles2
+            labels += labels2
+        b.legend(handles, labels, fontsize=7)
     plt.tight_layout()
     if savefig:
         plt.savefig((title or 'c3_contrast_scan') + '.png', dpi=300, bbox_inches="tight")

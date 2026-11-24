@@ -174,7 +174,11 @@ def refine_c3_by_contrast(step=0.3, max_change=5.0, box_size=512, settle_delay_s
         _set_c3_from_below(sem, offsets[0], final_offset)
         print(f'ImageDistanceOffset set to {final_offset:.2f}')
     if show_plot:
-        display_util.addC3ContrastScan(offsets, region_stds, REGION_NAMES, best_offset, start_offset)
+        # center offset of each running window (window may have been reduced to the scan length)
+        window = len(offsets) - len(window_stds) + 1
+        window_offsets = offsets[window // 2:window // 2 + len(window_stds)]
+        display_util.addC3ContrastScan(offsets, region_stds, REGION_NAMES, best_offset, start_offset,
+                                       window_offsets, window_stds)
     return best_offset, offsets, diffs, region_stds
 
 if __name__=='__main__':
