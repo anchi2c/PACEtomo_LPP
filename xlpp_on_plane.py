@@ -57,8 +57,59 @@ def _pick_best_c3_offset(offsets, diffs, start_offset):
         return float(min(crossings, key=lambda o: abs(o - start_offset))), True
     return float(offsets[np.argmin(np.abs(diffs))]), False
 
+def _pick_best_c3_offset_by_cluster(offsets, region_stds):
+    """
+    Offset where the per-corner differences (center - each corner std/mean)
+    cluster most tightly around zero. At each offset, the root-mean-square of
+    every combination of three of the four corner differences is calculated
+    and the smallest is the score, so that one outlier corner is ignored.
+    Unlike the mean difference, this does not let corners above and below the
+    center cancel each other.
+    Returns (best_offset, rms) where rms[k] is the score at offsets[k].
+    """
+    corner_diffs = region_stds[:, :1] - region_stds[:, 1:]
+    n_corners = corner_diffs.shape[1]
+    # leave out one corner at a time: (number of offsets, number of corners)
+    rms_of_three = np.stack([
+        np.sqrt(np.mean(np.delete(corner_diffs, i, axis=1) ** 2, axis=1))
+        for i in range(n_corners)], axis=1)
+    rms = rms_of_three.min(axis=1)
+    return float(offsets[np.argmin(rms)]), rms
+
+def _set_c3_from_below(sem, low_offset, offset):
+    """Set ImageDistanceOffset approached from below, like the scan."""
+    sem.SetImageDistanceOffset(low_offset)
+    sem.SetImageDistanceOffset(offset)
+
+def _ask_user_best_c3(sem, candidates, low_offset, settle_delay_s):
+    """
+    Acquire a Trial image at each candidate offset and ask the user which is
+    better. candidates: list of (label, offset). Returns the chosen offset.
+    """
+    for label, offset in candidates:
+        _set_c3_from_below(sem, low_offset, offset)
+        if settle_delay_s > 0:
+            sem.Delay(settle_delay_s, "s")
+        sem.T()
+        print(f'{label}: Trial image acquired at C3 offset {offset:.2f}')
+    # each T pushes the previous image down one buffer, so the last is in A
+    buffers = 'ABCDEFGH'
+    n = len(candidates)
+    prompt_lines = []
+    for k, (label, offset) in enumerate(candidates):
+        prompt_lines.append(f'{k + 1}: {label} C3 offset {offset:.2f} (buffer {buffers[n - 1 - k]})')
+    print('\n'.join(prompt_lines))
+    while True:
+        answer = input('Which image is better? ' + ', '.join(
+            f'{k + 1}={label}' for k, (label, _) in enumerate(candidates)) + ' ').strip()
+        if answer.isdigit() and 1 <= int(answer) <= n:
+            label, offset = candidates[int(answer) - 1]
+            print(f'user chose {label} C3 offset {offset:.2f}')
+            return offset
+        print(f'please enter a number from 1 to {n}')
+
 def refine_c3_by_contrast(step=0.3, max_change=5.0, box_size=512, settle_delay_s=None,
-                          apply=True, show_plot=True):
+                          apply=True, show_plot=True, ask_user=True):
     """
     Refine ImageDistanceOffset (C3) to on-plane by image contrast when xlpp is
     already on-node. It needs specimen contrast, so it is not valid at a
@@ -69,6 +120,10 @@ def refine_c3_by_contrast(step=0.3, max_change=5.0, box_size=512, settle_delay_s
     (always increasing, to keep lens hysteresis the same), acquiring a Trial
     image at each value, and the offset with the smallest difference between
     the center and the mean of the corners is picked (see _pick_best_c3_offset).
+    A second pick is the offset where the four center - corner differences
+    cluster most tightly around zero (see _pick_best_c3_offset_by_cluster).
+    If ask_user and the two picks differ, a Trial image is acquired at each
+    and the user is asked which is better; otherwise the first pick is used.
     The result never moves more than max_change from the starting value.
     settle_delay_s: wait after each change, default ronchi_sem_lib.ronchiDelay.
     apply: set the best offset at the end (approached from below, as in the
@@ -102,11 +157,22 @@ def refine_c3_by_contrast(step=0.3, max_change=5.0, box_size=512, settle_delay_s
         print(f'best C3 offset {best_offset:.2f} ({how}), start {start_offset:.2f}, change {best_offset - start_offset:+.2f}')
         if not is_crossing and best_offset in (offsets[0], offsets[-1]):
             print(f'WARNING: best C3 offset is at the edge of the +/-{max_change} scan range')
+        cluster_offset, rms = _pick_best_c3_offset_by_cluster(offsets, region_stds)
+        cluster_offset = float(np.clip(cluster_offset, start_offset - max_change, start_offset + max_change))
+        print(f'tightest cluster C3 offset {cluster_offset:.2f} (best rms of 3 corner differences '
+              f'{rms.min():.4f}), change {cluster_offset - start_offset:+.2f}')
+        if cluster_offset in (offsets[0], offsets[-1]):
+            print(f'WARNING: tightest cluster C3 offset is at the edge of the +/-{max_change} scan range')
+        if ask_user and abs(cluster_offset - best_offset) > 1e-6:
+            best_offset = _ask_user_best_c3(sem, [('mean difference', best_offset),
+                                                  ('tightest cluster', cluster_offset)],
+                                            offsets[0], settle_delay_s)
+        elif ask_user:
+            print('both methods picked the same C3 offset')
     finally:
         # approach the final value from below, like the scan
-        sem.SetImageDistanceOffset(offsets[0])
         final_offset = best_offset if apply else start_offset
-        sem.SetImageDistanceOffset(final_offset)
+        _set_c3_from_below(sem, offsets[0], final_offset)
         print(f'ImageDistanceOffset set to {final_offset:.2f}')
     if show_plot:
         display_util.addC3ContrastScan(offsets, region_stds, REGION_NAMES, best_offset, start_offset)
