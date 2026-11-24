@@ -57,39 +57,61 @@ def _pick_best_c3_offset(offsets, diffs, start_offset):
         return float(min(crossings, key=lambda o: abs(o - start_offset))), True
     return float(offsets[np.argmin(np.abs(diffs))]), False
 
-def _fit_flat_cubic(offsets, diffs, low, high, number_of_trials=1001):
+def power_inflection(offsets, x0, power, a, c):
     """
-    Least-squares fit of a cubic whose inflection is a flat spot,
-    diff = a * (offset - x0)**3 + c, with x0 searched on a grid from low to
-    high. Returns (x0, coeffs, rss) with coeffs expanded for np.polyval.
+    a * sign(offset - x0) * |offset - x0|**power + c. For power > 1 the slope
+    is zero at x0, and the flat part around x0 is wider for a larger power.
     """
-    best = None
-    for x0 in np.linspace(low, high, number_of_trials):
-        design = np.column_stack([(offsets - x0) ** 3, np.ones_like(offsets)])
-        (a, c), _, _, _ = np.linalg.lstsq(design, diffs, rcond=None)
-        rss = float(np.sum((design @ np.array([a, c]) - diffs) ** 2))
-        if best is None or rss < best[2]:
-            best = (float(x0), (a, c), rss)
-    x0, (a, c), rss = best
-    coeffs = np.array([a, -3 * a * x0, 3 * a * x0 ** 2, c - a * x0 ** 3])
-    return x0, coeffs, rss
+    u = np.asarray(offsets, dtype=float) - x0
+    return a * np.sign(u) * np.abs(u) ** power + c
 
-def _pick_best_c3_offset_by_flat_fit(offsets, diffs, center_fraction=0.75, max_rss_ratio=2.0):
+def _fit_power_inflection(offsets, diffs, low, high, powers, number_of_x0=1001):
     """
-    Zero-slope point of a fit of the mean difference (center - mean of corners
-    std/mean) against C3 offset, using all scan points. Two models are fitted:
-      - a cubic with a flat inflection, a * (offset - x0)**3 + c (flat at x0)
-      - a 2nd order polynomial (flat at its vertex)
-    A model is used only if its zero-slope point is within the center
+    Least-squares fit of power_inflection to diffs, with x0 searched on a grid
+    from low to high and power over powers; a and c are solved linearly for
+    each (x0, power). Returns (params, rss) with params a dict of
+    x0, power, a, c.
+    """
+    x0s = np.linspace(low, high, number_of_x0)
+    y = diffs - diffs.mean()
+    best = None
+    for power in powers:
+        u = offsets[np.newaxis, :] - x0s[:, np.newaxis]
+        basis = np.sign(u) * np.abs(u) ** power
+        basis_centered = basis - basis.mean(axis=1, keepdims=True)
+        var = np.sum(basis_centered ** 2, axis=1)
+        cov = basis_centered @ y
+        valid = var > 0
+        rss = np.full(len(x0s), np.inf)
+        rss[valid] = np.sum(y ** 2) - cov[valid] ** 2 / var[valid]
+        k = int(np.argmin(rss))
+        if best is None or rss[k] < best[1]:
+            a = cov[k] / var[k]
+            c = diffs.mean() - a * basis[k].mean()
+            best = ({'x0': float(x0s[k]), 'power': float(power), 'a': float(a), 'c': float(c)},
+                    float(max(rss[k], 0.0)))
+    return best
+
+def _pick_best_c3_offset_by_flat_fit(offsets, diffs, center_fraction=0.75, max_rss_ratio=2.0,
+                                     max_line_rss_ratio=0.5, powers=np.arange(1.2, 8.01, 0.1)):
+    """
+    Flat point of a fit of the mean difference (center - mean of corners
+    std/mean) against C3 offset with a general power inflection function,
+    a * sign(offset - x0) * |offset - x0|**power + c (see power_inflection),
+    using all scan points. The slope is zero at x0, and the power sets how
+    wide the flat part is. x0 is searched only within the center
     center_fraction of the scanned offset range (the fit is least reliable
-    near the ends of the data) and its residual sum of squares is at most
-    max_rss_ratio times that of an unconstrained 3rd order polynomial fit (so
-    that a model which does not describe the data, e.g. a straight line, is
-    not used). If both qualify, the one with the smaller residual sum of
-    squares is used (both have 3 parameters).
-    Returns (best_offset, coeffs, search_range, info) where coeffs are for
-    np.polyval of the chosen fit, search_range is (low, high) and info
-    describes the chosen model, or why none was used if best_offset is None.
+    near the ends of the data), and power over powers.
+    The fit is used only if x0 is not at the edge of that range, and its
+    residual sum of squares is at most max_rss_ratio times that of an
+    unconstrained 3rd order polynomial fit (so that the fit is not used for
+    data it does not describe) and at most max_line_rss_ratio times that of a
+    straight line fit (so that data without a flat part, where a power near
+    1 fits as well as a line with an arbitrary x0, is not used).
+    Returns (best_offset, params, search_range, info) where params is a dict
+    of x0, power, a, c (None if fewer than 4 points), search_range is
+    (low, high) and info describes the fit, or why it was not used if
+    best_offset is None.
     """
     offsets = np.asarray(offsets, dtype=float)
     diffs = np.asarray(diffs, dtype=float)
@@ -98,33 +120,26 @@ def _pick_best_c3_offset_by_flat_fit(offsets, diffs, center_fraction=0.75, max_r
     search_range = (low, high)
     if len(offsets) < 4:
         return None, None, search_range, 'fewer than 4 scan points'
+    params, rss = _fit_power_inflection(offsets, diffs, low, high, powers)
     free_coeffs = np.polyfit(offsets, diffs, 3)
     free_rss = float(np.sum((np.polyval(free_coeffs, offsets) - diffs) ** 2))
-    max_rss = max_rss_ratio * free_rss
-    candidates = []
-    # cubic with a flat inflection, constrained to have it within the range
-    x0, cubic_coeffs, cubic_rss = _fit_flat_cubic(offsets, diffs, low, high)
-    # a flat spot at the edge of the allowed range means the best x0 is outside it
+    line_coeffs = np.polyfit(offsets, diffs, 1)
+    line_rss = float(np.sum((np.polyval(line_coeffs, offsets) - diffs) ** 2))
+    info = (f'power {params["power"]:.1f}, rss {rss:.3g}, '
+            f'unconstrained 3rd order {free_rss:.3g}, line {line_rss:.3g}')
+    # a best x0 at the edge of the grid means the flat point is outside the range
     grid_step = (high - low) / 1000
-    if low + grid_step < x0 < high - grid_step and cubic_rss <= max_rss:
-        candidates.append((cubic_rss, x0, cubic_coeffs, 'flat-inflection cubic'))
-    # 2nd order polynomial
-    quad_coeffs = np.polyfit(offsets, diffs, 2)
-    quad_rss = float(np.sum((np.polyval(quad_coeffs, offsets) - diffs) ** 2))
-    if quad_coeffs[0] != 0:
-        vertex = float(-quad_coeffs[1] / (2 * quad_coeffs[0]))
-        if low <= vertex <= high and quad_rss <= max_rss:
-            candidates.append((quad_rss, vertex, quad_coeffs, '2nd order'))
-    if not candidates:
-        return None, quad_coeffs, search_range, (
-            f'neither fit has its zero slope within the center {center_fraction:.0%} '
-            f'of the scan, {low:.2f} to {high:.2f}, with rss <= {max_rss_ratio:g} x '
-            f'unconstrained 3rd order {free_rss:.3g}; rss flat-inflection cubic '
-            f'{cubic_rss:.3g}, 2nd order {quad_rss:.3g}')
-    rss, best_offset, coeffs, model = min(candidates, key=lambda cand: cand[0])
-    info = (f'{model} fit, rss flat-inflection cubic {cubic_rss:.3g}, 2nd order {quad_rss:.3g}, '
-            f'unconstrained 3rd order {free_rss:.3g}')
-    return best_offset, coeffs, search_range, info
+    if not low + grid_step < params['x0'] < high - grid_step:
+        return None, params, search_range, (
+            f'flat point at the edge of the center {center_fraction:.0%} of the scan, '
+            f'{low:.2f} to {high:.2f}; {info}')
+    if rss > max_rss_ratio * free_rss:
+        return None, params, search_range, (
+            f'rss > {max_rss_ratio:g} x unconstrained 3rd order; {info}')
+    if rss > max_line_rss_ratio * line_rss:
+        return None, params, search_range, (
+            f'not clearly better than a straight line, rss > {max_line_rss_ratio:g} x line; {info}')
+    return params['x0'], params, search_range, info
 
 def _set_c3_from_below(sem, low_offset, offset):
     """Set ImageDistanceOffset approached from below, like the scan."""
@@ -170,9 +185,8 @@ def refine_c3_by_contrast(step=0.3, max_change=5.0, box_size=512, settle_delay_s
     (always increasing, to keep lens hysteresis the same), acquiring a Trial
     image at each value, and the offset with the smallest difference between
     the center and the mean of the corners is picked (see _pick_best_c3_offset).
-    A second pick is the zero-slope point of a fit of that difference against
-    C3 offset, either a cubic with a flat inflection or a 2nd order
-    polynomial, within the center 3/4 of the scan
+    A second pick is the flat point of a power inflection function fit of
+    that difference against C3 offset, within the center 3/4 of the scan
     (see _pick_best_c3_offset_by_flat_fit).
     If ask_user and the two picks differ, a Trial image is acquired at each
     and the user is asked which is better; otherwise the first pick is used.
@@ -209,7 +223,7 @@ def refine_c3_by_contrast(step=0.3, max_change=5.0, box_size=512, settle_delay_s
         print(f'best C3 offset {best_offset:.2f} ({how}), start {start_offset:.2f}, change {best_offset - start_offset:+.2f}')
         if not is_crossing and best_offset in (offsets[0], offsets[-1]):
             print(f'WARNING: best C3 offset is at the edge of the +/-{max_change} scan range')
-        fit_offset, fit_coeffs, fit_range, fit_info = _pick_best_c3_offset_by_flat_fit(offsets, diffs)
+        fit_offset, fit_params, fit_range, fit_info = _pick_best_c3_offset_by_flat_fit(offsets, diffs)
         if fit_offset is None:
             print(f'WARNING: flat fit ignored ({fit_info}); using the mean difference pick only')
         else:
@@ -228,8 +242,14 @@ def refine_c3_by_contrast(step=0.3, max_change=5.0, box_size=512, settle_delay_s
         _set_c3_from_below(sem, offsets[0], final_offset)
         print(f'ImageDistanceOffset set to {final_offset:.2f}')
     if show_plot:
+        fit_curve = fit_label = None
+        if fit_params is not None:
+            fine = np.linspace(offsets[0], offsets[-1], 200)
+            fit_curve = (fine, power_inflection(fine, fit_params['x0'], fit_params['power'],
+                                                fit_params['a'], fit_params['c']))
+            fit_label = f'power inflection fit (power {fit_params["power"]:.1f})'
         display_util.addC3ContrastScan(offsets, region_stds, REGION_NAMES, best_offset, start_offset,
-                                       fit_coeffs, fit_offset, fit_range)
+                                       fit_curve, fit_offset, fit_range, fit_label)
     return best_offset, offsets, diffs, region_stds
 
 if __name__=='__main__':
