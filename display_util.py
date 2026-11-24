@@ -370,19 +370,21 @@ C3Scan_Best = []
 C3Scan_Start = []
 C3Scan_FitCoeffs = []
 C3Scan_FitOffset = []
+C3Scan_FitRange = []
 
 def addC3ContrastScan(offsets, region_stds, region_names, best_offset, start_offset,
-                      fit_coeffs=None, fit_offset=None):
+                      fit_coeffs=None, fit_offset=None, fit_range=None):
     """
     Add a C3 (ImageDistanceOffset) contrast scan for display.
         offsets: scanned ImageDistanceOffset values
         region_stds: std/mean, array (number of offsets, number of regions); region 0 is the center
         region_names: names of the regions
-        fit_coeffs: optional np.polyfit coefficients of the 2nd order fit of the difference
-        fit_offset: optional zero-slope offset of that fit
+        fit_coeffs: optional np.polyfit coefficients of the polynomial fit of the difference
+        fit_offset: optional flat offset picked from that fit
+        fit_range: optional (low, high) offsets searched for the flat pick
     """
     global C3Scan_Offsets, C3Scan_RegionStds, C3Scan_RegionNames, C3Scan_Best, C3Scan_Start
-    global C3Scan_FitCoeffs, C3Scan_FitOffset
+    global C3Scan_FitCoeffs, C3Scan_FitOffset, C3Scan_FitRange
     C3Scan_Offsets.append(np.asarray(offsets, dtype=float))
     C3Scan_RegionStds.append(np.asarray(region_stds, dtype=float))
     C3Scan_RegionNames.append(tuple(region_names))
@@ -390,10 +392,11 @@ def addC3ContrastScan(offsets, region_stds, region_names, best_offset, start_off
     C3Scan_Start.append(start_offset)
     C3Scan_FitCoeffs.append(None if fit_coeffs is None else np.asarray(fit_coeffs, dtype=float))
     C3Scan_FitOffset.append(fit_offset)
+    C3Scan_FitRange.append(fit_range)
 
 def resetC3ContrastScan():
     global C3Scan_Offsets, C3Scan_RegionStds, C3Scan_RegionNames, C3Scan_Best, C3Scan_Start
-    global C3Scan_FitCoeffs, C3Scan_FitOffset
+    global C3Scan_FitCoeffs, C3Scan_FitOffset, C3Scan_FitRange
     C3Scan_Offsets = []
     C3Scan_RegionStds = []
     C3Scan_RegionNames = []
@@ -401,14 +404,15 @@ def resetC3ContrastScan():
     C3Scan_Start = []
     C3Scan_FitCoeffs = []
     C3Scan_FitOffset = []
+    C3Scan_FitRange = []
 
 def showC3ContrastScan(panel_width=4.5, title='', savefig=False):
     """
     One row per C3 scan: std/mean of each region against ImageDistanceOffset,
     and the difference center - mean of corners. The start (gray dotted) and
-    picked best offset (red dashed) are marked. If available, the 2nd order
-    fit of the difference (orange) and its zero-slope offset (orange dotted)
-    are drawn on the difference plot.
+    picked best offset (red dashed) are marked. If available, the polynomial
+    fit of the difference (orange), the range searched for its flat point
+    (shaded) and the flat pick (orange dotted) are drawn on the difference plot.
     """
     import matplotlib.pyplot as plt
     number_of_scans = len(C3Scan_Offsets)
@@ -437,9 +441,13 @@ def showC3ContrastScan(panel_width=4.5, title='', savefig=False):
             c.set_xlabel('ImageDistanceOffset')
         if C3Scan_FitCoeffs[n] is not None:
             fine = np.linspace(offsets[0], offsets[-1], 200)
-            b.plot(fine, np.polyval(C3Scan_FitCoeffs[n], fine), color='tab:orange', label='2nd order fit')
+            order = len(C3Scan_FitCoeffs[n]) - 1
+            label = {2: '2nd order fit', 3: 'flat-inflection cubic fit'}.get(order, f'order {order} fit')
+            b.plot(fine, np.polyval(C3Scan_FitCoeffs[n], fine), color='tab:orange', label=label)
+        if C3Scan_FitRange[n] is not None:
+            b.axvspan(*C3Scan_FitRange[n], color='tab:orange', alpha=0.08, label='flat search range')
         if C3Scan_FitOffset[n] is not None:
-            b.axvline(C3Scan_FitOffset[n], color='tab:orange', linestyle=':', label='fit zero slope')
+            b.axvline(C3Scan_FitOffset[n], color='tab:orange', linestyle=':', label='fit flat pick')
         b.legend(fontsize=7)
     plt.tight_layout()
     if savefig:

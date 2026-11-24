@@ -57,30 +57,74 @@ def _pick_best_c3_offset(offsets, diffs, start_offset):
         return float(min(crossings, key=lambda o: abs(o - start_offset))), True
     return float(offsets[np.argmin(np.abs(diffs))]), False
 
-def _pick_best_c3_offset_by_parabola(offsets, diffs):
+def _fit_flat_cubic(offsets, diffs, low, high, number_of_trials=1001):
     """
-    Offset where a 2nd order polynomial fit of the mean difference (center -
-    mean of corners std/mean) against C3 offset has zero slope (the vertex),
-    using all scan points.
-    Returns (best_offset, coeffs, reason) where coeffs are from np.polyfit
-    (highest power first). best_offset is None, with reason explaining why,
-    if there are fewer than 3 points, the fit has no curvature, or the
-    zero-slope offset is outside the scanned range.
+    Least-squares fit of a cubic whose inflection is a flat spot,
+    diff = a * (offset - x0)**3 + c, with x0 searched on a grid from low to
+    high. Returns (x0, coeffs, rss) with coeffs expanded for np.polyval.
+    """
+    best = None
+    for x0 in np.linspace(low, high, number_of_trials):
+        design = np.column_stack([(offsets - x0) ** 3, np.ones_like(offsets)])
+        (a, c), _, _, _ = np.linalg.lstsq(design, diffs, rcond=None)
+        rss = float(np.sum((design @ np.array([a, c]) - diffs) ** 2))
+        if best is None or rss < best[2]:
+            best = (float(x0), (a, c), rss)
+    x0, (a, c), rss = best
+    coeffs = np.array([a, -3 * a * x0, 3 * a * x0 ** 2, c - a * x0 ** 3])
+    return x0, coeffs, rss
+
+def _pick_best_c3_offset_by_flat_fit(offsets, diffs, center_fraction=0.75, max_rss_ratio=2.0):
+    """
+    Zero-slope point of a fit of the mean difference (center - mean of corners
+    std/mean) against C3 offset, using all scan points. Two models are fitted:
+      - a cubic with a flat inflection, a * (offset - x0)**3 + c (flat at x0)
+      - a 2nd order polynomial (flat at its vertex)
+    A model is used only if its zero-slope point is within the center
+    center_fraction of the scanned offset range (the fit is least reliable
+    near the ends of the data) and its residual sum of squares is at most
+    max_rss_ratio times that of an unconstrained 3rd order polynomial fit (so
+    that a model which does not describe the data, e.g. a straight line, is
+    not used). If both qualify, the one with the smaller residual sum of
+    squares is used (both have 3 parameters).
+    Returns (best_offset, coeffs, search_range, info) where coeffs are for
+    np.polyval of the chosen fit, search_range is (low, high) and info
+    describes the chosen model, or why none was used if best_offset is None.
     """
     offsets = np.asarray(offsets, dtype=float)
     diffs = np.asarray(diffs, dtype=float)
-    if len(offsets) < 3:
-        return None, None, 'fewer than 3 scan points'
-    coeffs = np.polyfit(offsets, diffs, 2)
-    a, b = coeffs[0], coeffs[1]
-    # no curvature: the slope is never zero within any useful range
-    if abs(a) * (offsets[-1] - offsets[0]) ** 2 < 1e-12 * max(1.0, np.abs(diffs).max()):
-        return None, coeffs, 'no curvature'
-    vertex = float(-b / (2 * a))
-    if not offsets[0] <= vertex <= offsets[-1]:
-        return None, coeffs, (f'zero-slope offset {vertex:.2f} is outside the scan range '
-                              f'{offsets[0]:.2f} to {offsets[-1]:.2f}')
-    return vertex, coeffs, ""
+    margin = 0.5 * (1 - center_fraction) * (offsets[-1] - offsets[0])
+    low, high = float(offsets[0] + margin), float(offsets[-1] - margin)
+    search_range = (low, high)
+    if len(offsets) < 4:
+        return None, None, search_range, 'fewer than 4 scan points'
+    free_coeffs = np.polyfit(offsets, diffs, 3)
+    free_rss = float(np.sum((np.polyval(free_coeffs, offsets) - diffs) ** 2))
+    max_rss = max_rss_ratio * free_rss
+    candidates = []
+    # cubic with a flat inflection, constrained to have it within the range
+    x0, cubic_coeffs, cubic_rss = _fit_flat_cubic(offsets, diffs, low, high)
+    # a flat spot at the edge of the allowed range means the best x0 is outside it
+    grid_step = (high - low) / 1000
+    if low + grid_step < x0 < high - grid_step and cubic_rss <= max_rss:
+        candidates.append((cubic_rss, x0, cubic_coeffs, 'flat-inflection cubic'))
+    # 2nd order polynomial
+    quad_coeffs = np.polyfit(offsets, diffs, 2)
+    quad_rss = float(np.sum((np.polyval(quad_coeffs, offsets) - diffs) ** 2))
+    if quad_coeffs[0] != 0:
+        vertex = float(-quad_coeffs[1] / (2 * quad_coeffs[0]))
+        if low <= vertex <= high and quad_rss <= max_rss:
+            candidates.append((quad_rss, vertex, quad_coeffs, '2nd order'))
+    if not candidates:
+        return None, quad_coeffs, search_range, (
+            f'neither fit has its zero slope within the center {center_fraction:.0%} '
+            f'of the scan, {low:.2f} to {high:.2f}, with rss <= {max_rss_ratio:g} x '
+            f'unconstrained 3rd order {free_rss:.3g}; rss flat-inflection cubic '
+            f'{cubic_rss:.3g}, 2nd order {quad_rss:.3g}')
+    rss, best_offset, coeffs, model = min(candidates, key=lambda cand: cand[0])
+    info = (f'{model} fit, rss flat-inflection cubic {cubic_rss:.3g}, 2nd order {quad_rss:.3g}, '
+            f'unconstrained 3rd order {free_rss:.3g}')
+    return best_offset, coeffs, search_range, info
 
 def _set_c3_from_below(sem, low_offset, offset):
     """Set ImageDistanceOffset approached from below, like the scan."""
@@ -126,8 +170,10 @@ def refine_c3_by_contrast(step=0.3, max_change=5.0, box_size=512, settle_delay_s
     (always increasing, to keep lens hysteresis the same), acquiring a Trial
     image at each value, and the offset with the smallest difference between
     the center and the mean of the corners is picked (see _pick_best_c3_offset).
-    A second pick is where a 2nd order polynomial fit of that difference
-    against C3 offset has zero slope (see _pick_best_c3_offset_by_parabola).
+    A second pick is the zero-slope point of a fit of that difference against
+    C3 offset, either a cubic with a flat inflection or a 2nd order
+    polynomial, within the center 3/4 of the scan
+    (see _pick_best_c3_offset_by_flat_fit).
     If ask_user and the two picks differ, a Trial image is acquired at each
     and the user is asked which is better; otherwise the first pick is used.
     The result never moves more than max_change from the starting value.
@@ -163,17 +209,16 @@ def refine_c3_by_contrast(step=0.3, max_change=5.0, box_size=512, settle_delay_s
         print(f'best C3 offset {best_offset:.2f} ({how}), start {start_offset:.2f}, change {best_offset - start_offset:+.2f}')
         if not is_crossing and best_offset in (offsets[0], offsets[-1]):
             print(f'WARNING: best C3 offset is at the edge of the +/-{max_change} scan range')
-        fit_offset, fit_coeffs, fit_reason = _pick_best_c3_offset_by_parabola(offsets, diffs)
+        fit_offset, fit_coeffs, fit_range, fit_info = _pick_best_c3_offset_by_flat_fit(offsets, diffs)
         if fit_offset is None:
-            print(f'WARNING: 2nd order fit ignored ({fit_reason}); using the mean difference pick only')
+            print(f'WARNING: flat fit ignored ({fit_info}); using the mean difference pick only')
         else:
             fit_offset = float(np.clip(fit_offset, start_offset - max_change, start_offset + max_change))
-            shape = 'maximum' if fit_coeffs[0] < 0 else 'minimum'
-            print(f'2nd order fit zero-slope C3 offset {fit_offset:.2f} ({shape}), '
+            print(f'flat fit C3 offset {fit_offset:.2f} ({fit_info}), '
                   f'change {fit_offset - start_offset:+.2f}')
         if ask_user and fit_offset is not None and abs(fit_offset - best_offset) > 1e-6:
             best_offset = _ask_user_best_c3(sem, [('mean difference', best_offset),
-                                                  ('2nd order fit', fit_offset)],
+                                                  ('flat fit', fit_offset)],
                                             offsets[0], settle_delay_s)
         elif ask_user and fit_offset is not None:
             print('both methods picked the same C3 offset')
@@ -184,7 +229,7 @@ def refine_c3_by_contrast(step=0.3, max_change=5.0, box_size=512, settle_delay_s
         print(f'ImageDistanceOffset set to {final_offset:.2f}')
     if show_plot:
         display_util.addC3ContrastScan(offsets, region_stds, REGION_NAMES, best_offset, start_offset,
-                                       fit_coeffs, fit_offset)
+                                       fit_coeffs, fit_offset, fit_range)
     return best_offset, offsets, diffs, region_stds
 
 if __name__=='__main__':
