@@ -57,24 +57,23 @@ def _pick_best_c3_offset(offsets, diffs, start_offset):
         return float(min(crossings, key=lambda o: abs(o - start_offset))), True
     return float(offsets[np.argmin(np.abs(diffs))]), False
 
-def _pick_best_c3_offset_by_cluster(offsets, region_stds):
+def _pick_best_c3_offset_by_flat_region(offsets, diffs, window=5):
     """
-    Offset where the per-corner differences (center - each corner std/mean)
-    cluster most tightly around zero. At each offset, the root-mean-square of
-    every combination of three of the four corner differences is calculated
-    and the smallest is the score, so that one outlier corner is ignored.
-    Unlike the mean difference, this does not let corners above and below the
-    center cancel each other.
-    Returns (best_offset, rms) where rms[k] is the score at offsets[k].
+    Center of the flattest region of the mean difference (center - mean of
+    corners std/mean) against C3 offset. A running window of `window`
+    consecutive scan points is slid along the scan, and its flatness is the
+    standard deviation of diffs within it (this catches both a slope and a
+    bend). The center offset of the window with the smallest std is picked.
+    window is reduced to the number of scan points if the scan is shorter, and
+    an even window has its center rounded up.
+    Returns (best_offset, window_stds) where window_stds[j] is the std of the
+    window starting at offsets[j].
     """
-    corner_diffs = region_stds[:, :1] - region_stds[:, 1:]
-    n_corners = corner_diffs.shape[1]
-    # leave out one corner at a time: (number of offsets, number of corners)
-    rms_of_three = np.stack([
-        np.sqrt(np.mean(np.delete(corner_diffs, i, axis=1) ** 2, axis=1))
-        for i in range(n_corners)], axis=1)
-    rms = rms_of_three.min(axis=1)
-    return float(offsets[np.argmin(rms)]), rms
+    diffs = np.asarray(diffs, dtype=float)
+    window = max(1, min(int(window), len(diffs)))
+    window_stds = np.array([diffs[j:j + window].std() for j in range(len(diffs) - window + 1)])
+    best_start = int(np.argmin(window_stds))
+    return float(offsets[best_start + window // 2]), window_stds
 
 def _set_c3_from_below(sem, low_offset, offset):
     """Set ImageDistanceOffset approached from below, like the scan."""
@@ -109,7 +108,8 @@ def _ask_user_best_c3(sem, candidates, low_offset, settle_delay_s):
         print(f'please enter a number from 1 to {n}')
 
 def refine_c3_by_contrast(step=0.3, max_change=5.0, box_size=512, settle_delay_s=None,
-                          apply=True, show_plot=True, ask_user=True):
+                          apply=True, show_plot=True, ask_user=True,
+                          flat_window=5):
     """
     Refine ImageDistanceOffset (C3) to on-plane by image contrast when xlpp is
     already on-node. It needs specimen contrast, so it is not valid at a
@@ -120,8 +120,9 @@ def refine_c3_by_contrast(step=0.3, max_change=5.0, box_size=512, settle_delay_s
     (always increasing, to keep lens hysteresis the same), acquiring a Trial
     image at each value, and the offset with the smallest difference between
     the center and the mean of the corners is picked (see _pick_best_c3_offset).
-    A second pick is the offset where the four center - corner differences
-    cluster most tightly around zero (see _pick_best_c3_offset_by_cluster).
+    A second pick is the center of the flattest region of that difference
+    against C3 offset, using a running window of flat_window scan points
+    (see _pick_best_c3_offset_by_flat_region).
     If ask_user and the two picks differ, a Trial image is acquired at each
     and the user is asked which is better; otherwise the first pick is used.
     The result never moves more than max_change from the starting value.
@@ -157,15 +158,13 @@ def refine_c3_by_contrast(step=0.3, max_change=5.0, box_size=512, settle_delay_s
         print(f'best C3 offset {best_offset:.2f} ({how}), start {start_offset:.2f}, change {best_offset - start_offset:+.2f}')
         if not is_crossing and best_offset in (offsets[0], offsets[-1]):
             print(f'WARNING: best C3 offset is at the edge of the +/-{max_change} scan range')
-        cluster_offset, rms = _pick_best_c3_offset_by_cluster(offsets, region_stds)
-        cluster_offset = float(np.clip(cluster_offset, start_offset - max_change, start_offset + max_change))
-        print(f'tightest cluster C3 offset {cluster_offset:.2f} (best rms of 3 corner differences '
-              f'{rms.min():.4f}), change {cluster_offset - start_offset:+.2f}')
-        if cluster_offset in (offsets[0], offsets[-1]):
-            print(f'WARNING: tightest cluster C3 offset is at the edge of the +/-{max_change} scan range')
-        if ask_user and abs(cluster_offset - best_offset) > 1e-6:
+        flat_offset, window_stds = _pick_best_c3_offset_by_flat_region(offsets, diffs, flat_window)
+        flat_offset = float(np.clip(flat_offset, start_offset - max_change, start_offset + max_change))
+        print(f'flattest region C3 offset {flat_offset:.2f} (std of difference over {flat_window} points '
+              f'{window_stds.min():.4f}), change {flat_offset - start_offset:+.2f}')
+        if ask_user and abs(flat_offset - best_offset) > 1e-6:
             best_offset = _ask_user_best_c3(sem, [('mean difference', best_offset),
-                                                  ('tightest cluster', cluster_offset)],
+                                                  ('flattest region', flat_offset)],
                                             offsets[0], settle_delay_s)
         elif ask_user:
             print('both methods picked the same C3 offset')
