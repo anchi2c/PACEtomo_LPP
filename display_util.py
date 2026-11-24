@@ -368,48 +368,47 @@ C3Scan_RegionStds = []
 C3Scan_RegionNames = []
 C3Scan_Best = []
 C3Scan_Start = []
-C3Scan_WindowOffsets = []
-C3Scan_WindowStds = []
+C3Scan_FitCoeffs = []
+C3Scan_FitOffset = []
 
 def addC3ContrastScan(offsets, region_stds, region_names, best_offset, start_offset,
-                      window_offsets=None, window_stds=None):
+                      fit_coeffs=None, fit_offset=None):
     """
     Add a C3 (ImageDistanceOffset) contrast scan for display.
         offsets: scanned ImageDistanceOffset values
         region_stds: std/mean, array (number of offsets, number of regions); region 0 is the center
         region_names: names of the regions
-        window_offsets: optional center offset of each running window of the flattest-region analysis
-        window_stds: optional std of the difference in each running window
+        fit_coeffs: optional np.polyfit coefficients of the 2nd order fit of the difference
+        fit_offset: optional zero-slope offset of that fit
     """
     global C3Scan_Offsets, C3Scan_RegionStds, C3Scan_RegionNames, C3Scan_Best, C3Scan_Start
-    global C3Scan_WindowOffsets, C3Scan_WindowStds
+    global C3Scan_FitCoeffs, C3Scan_FitOffset
     C3Scan_Offsets.append(np.asarray(offsets, dtype=float))
     C3Scan_RegionStds.append(np.asarray(region_stds, dtype=float))
     C3Scan_RegionNames.append(tuple(region_names))
     C3Scan_Best.append(best_offset)
     C3Scan_Start.append(start_offset)
-    has_window = window_offsets is not None and window_stds is not None
-    C3Scan_WindowOffsets.append(np.asarray(window_offsets, dtype=float) if has_window else None)
-    C3Scan_WindowStds.append(np.asarray(window_stds, dtype=float) if has_window else None)
+    C3Scan_FitCoeffs.append(None if fit_coeffs is None else np.asarray(fit_coeffs, dtype=float))
+    C3Scan_FitOffset.append(fit_offset)
 
 def resetC3ContrastScan():
     global C3Scan_Offsets, C3Scan_RegionStds, C3Scan_RegionNames, C3Scan_Best, C3Scan_Start
-    global C3Scan_WindowOffsets, C3Scan_WindowStds
+    global C3Scan_FitCoeffs, C3Scan_FitOffset
     C3Scan_Offsets = []
     C3Scan_RegionStds = []
     C3Scan_RegionNames = []
     C3Scan_Best = []
     C3Scan_Start = []
-    C3Scan_WindowOffsets = []
-    C3Scan_WindowStds = []
+    C3Scan_FitCoeffs = []
+    C3Scan_FitOffset = []
 
 def showC3ContrastScan(panel_width=4.5, title='', savefig=False):
     """
     One row per C3 scan: std/mean of each region against ImageDistanceOffset,
     and the difference center - mean of corners. The start (gray dotted) and
-    picked best offset (red dashed) are marked. If available, the std of the
-    difference in each running window of the flattest-region analysis is
-    plotted against the window center on a second y axis of the difference plot.
+    picked best offset (red dashed) are marked. If available, the 2nd order
+    fit of the difference (orange) and its zero-slope offset (orange dotted)
+    are drawn on the difference plot.
     """
     import matplotlib.pyplot as plt
     number_of_scans = len(C3Scan_Offsets)
@@ -436,17 +435,12 @@ def showC3ContrastScan(panel_width=4.5, title='', savefig=False):
             c.axvline(C3Scan_Start[n], color='gray', linestyle=':', label='start')
             c.axvline(C3Scan_Best[n], color='red', linestyle='--', label='best')
             c.set_xlabel('ImageDistanceOffset')
-        handles, labels = b.get_legend_handles_labels()
-        if C3Scan_WindowStds[n] is not None:
-            b2 = b.twinx()
-            b2.plot(C3Scan_WindowOffsets[n], C3Scan_WindowStds[n], marker='s', markersize=3,
-                    color='tab:orange', label='window std')
-            b2.set_ylabel('std of difference in window', color='tab:orange')
-            b2.tick_params(axis='y', labelcolor='tab:orange')
-            handles2, labels2 = b2.get_legend_handles_labels()
-            handles += handles2
-            labels += labels2
-        b.legend(handles, labels, fontsize=7)
+        if C3Scan_FitCoeffs[n] is not None:
+            fine = np.linspace(offsets[0], offsets[-1], 200)
+            b.plot(fine, np.polyval(C3Scan_FitCoeffs[n], fine), color='tab:orange', label='2nd order fit')
+        if C3Scan_FitOffset[n] is not None:
+            b.axvline(C3Scan_FitOffset[n], color='tab:orange', linestyle=':', label='fit zero slope')
+        b.legend(fontsize=7)
     plt.tight_layout()
     if savefig:
         plt.savefig((title or 'c3_contrast_scan') + '.png', dpi=300, bbox_inches="tight")
