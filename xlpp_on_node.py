@@ -372,8 +372,8 @@ if __name__=='__main__':
     if display_util.Quadrant_Stats and any(q is not None for q in display_util.Quadrant_Selected):
         display_util.showQuadrantStats()
     # _validate_anti_node can still pick the wrong phase sign depending on the ROI.
-    # Let the user flip it, as many times as needed to compare.
-    while input('Flip the anti-node phase (shift X-tilt by pi of phase) ? (Y/N/y/n)').lower() == 'y':
+    # Let the user flip it once.
+    if input('Flip the anti-node phase (shift X-tilt by pi of phase) ? (Y/N/y/n)').lower() == 'y':
         best_xt = flip_phase(best_xt)
     print(f'final X-tilt ({best_xt[0]:.6e}, {best_xt[1]:.6e})')
 
