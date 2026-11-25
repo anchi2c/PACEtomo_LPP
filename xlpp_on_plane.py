@@ -229,7 +229,8 @@ if __name__=='__main__':
     # ronchiStartC3 calibration
     new_ronchi_start_c3 = ronchi_cal.calibrate_ronchigram_start_c3(ronchi_fixed_pixel_size_um, ronchi_binning,
                        xt_tilt, peak_radius=100, corr_scale=corr_scale,
-                       c3_correction_factor=20 / 6.85)
+                       c3_correction_factor=20 / 6.85, show_plot=False,
+                       confirm=False)
     print('new StartC3Offset',new_ronchi_start_c3)
     # refine C3 to on-plane by center vs corner contrast (xlpp must be on-node).
     # It needs specimen contrast, so it is not valid at a vacuum position.

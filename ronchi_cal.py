@@ -208,8 +208,13 @@ def _refine_ronchigram_start_c3(c3_delta_scale,
 
 def calibrate_ronchigram_start_c3(pixel_size_um, binning,
                        measure_scope_shift, peak_radius=100, corr_scale=1e-5,
-                       c3_correction_factor=20 / 6.85):
-    """FFT peak ks -> C3imagingdistance saved as the new ronchiStartC3Offset"""
+                       c3_correction_factor=20 / 6.85, show_plot=True, confirm=True):
+    """
+    FFT peak ks -> C3imagingdistance saved as the new ronchiStartC3Offset
+    show_plot: show the scatter fit plot (display_util.showScatterFit)
+    confirm: ask the user before saving the result; if False, a converged
+    result is saved without asking
+    """
     c3_delta_scale = 5
     c3_offset_diff_threshold = 0.2
     residual_threshold = 2
@@ -261,7 +266,7 @@ def calibrate_ronchigram_start_c3(pixel_size_um, binning,
                         c3_correction_factor)
     new_trial_offset_baseline = c3_offset_arr.mean()
     """
-    if display_util.Scatter_X:
+    if show_plot and display_util.Scatter_X:
         display_util.showScatterFit()
 
     sem.SetImageDistanceOffset(new_trial_offset_baseline)
@@ -269,7 +274,7 @@ def calibrate_ronchigram_start_c3(pixel_size_um, binning,
     print('displaying images for validation....')
     if False and display_util.image_buffer:
         display_util.showImages()
-    if input('Is this a good ronchiStartC3 ? (Y/N/y/n)').lower() == 'y':
+    if not confirm or input('Is this a good ronchiStartC3 ? (Y/N/y/n)').lower() == 'y':
         new_trial_offset_baseline = c3_offset_arr.mean()
         ronchi_sem_lib.ronchiStartC3Offset = new_trial_offset_baseline
         ronchi_sem_lib.ronchiC3Offset = ronchi_offset0
