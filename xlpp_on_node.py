@@ -338,7 +338,7 @@ if __name__=='__main__':
             print(f'refinement converged after {i + 1} iterations')
             break
     else:
-        print(f'WARNING: refinement did not converge within {max_refine_iterations} iterations')
+        print(f'WARNING: refinement did not converge within {max_refine_iterations} iterations, but we still apply it')
     ronchi_cal.sem.SetXLensDeflector(2, best_xt[0], best_xt[1])
     ronchi_cal.sem.T()
     if display_util.Contrast_Phases:

@@ -146,35 +146,8 @@ def _set_c3_from_below(sem, low_offset, offset):
     sem.SetImageDistanceOffset(low_offset)
     sem.SetImageDistanceOffset(offset)
 
-def _ask_user_best_c3(sem, candidates, low_offset, settle_delay_s):
-    """
-    Acquire a Trial image at each candidate offset and ask the user which is
-    better. candidates: list of (label, offset). Returns the chosen offset.
-    """
-    for label, offset in candidates:
-        _set_c3_from_below(sem, low_offset, offset)
-        if settle_delay_s > 0:
-            sem.Delay(settle_delay_s, "s")
-        sem.T()
-        print(f'{label}: Trial image acquired at C3 offset {offset:.2f}')
-    # each T pushes the previous image down one buffer, so the last is in A
-    buffers = 'ABCDEFGH'
-    n = len(candidates)
-    prompt_lines = []
-    for k, (label, offset) in enumerate(candidates):
-        prompt_lines.append(f'{k + 1}: {label} C3 offset {offset:.2f} (buffer {buffers[n - 1 - k]})')
-    print('\n'.join(prompt_lines))
-    while True:
-        answer = input('Which image is better? ' + ', '.join(
-            f'{k + 1}={label}' for k, (label, _) in enumerate(candidates)) + ' ').strip()
-        if answer.isdigit() and 1 <= int(answer) <= n:
-            label, offset = candidates[int(answer) - 1]
-            print(f'user chose {label} C3 offset {offset:.2f}')
-            return offset
-        print(f'please enter a number from 1 to {n}')
-
 def refine_c3_by_contrast(step=0.3, max_change=5.0, box_size=512, settle_delay_s=None,
-                          apply=True, show_plot=True, ask_user=True):
+                          apply=True, show_plot=True, fit_offset_correction=-1.0):
     """
     Refine ImageDistanceOffset (C3) to on-plane by image contrast when xlpp is
     already on-node. It needs specimen contrast, so it is not valid at a
@@ -188,8 +161,9 @@ def refine_c3_by_contrast(step=0.3, max_change=5.0, box_size=512, settle_delay_s
     A second pick is the flat point of a power inflection function fit of
     that difference against C3 offset, within the center 3/4 of the scan
     (see _pick_best_c3_offset_by_flat_fit).
-    If ask_user and the two picks differ, a Trial image is acquired at each
-    and the user is asked which is better; otherwise the first pick is used.
+    The flat-fit pick plus fit_offset_correction is used when the fit is valid
+    (the fit pick is usually at the high end, so the default correction is
+    -1.0); otherwise the first pick is used.
     The result never moves more than max_change from the starting value.
     settle_delay_s: wait after each change, default ronchi_sem_lib.ronchiDelay.
     apply: set the best offset at the end (approached from below, as in the
@@ -220,9 +194,9 @@ def refine_c3_by_contrast(step=0.3, max_change=5.0, box_size=512, settle_delay_s
         # never move away from the start by more than max_change
         best_offset = float(np.clip(best_offset, start_offset - max_change, start_offset + max_change))
         how = 'zero crossing' if is_crossing else 'smallest |difference|'
-        print(f'best C3 offset {best_offset:.2f} ({how}), start {start_offset:.2f}, change {best_offset - start_offset:+.2f}')
+        print(f'mean difference C3 offset {best_offset:.2f} ({how}), start {start_offset:.2f}, change {best_offset - start_offset:+.2f}')
         if not is_crossing and best_offset in (offsets[0], offsets[-1]):
-            print(f'WARNING: best C3 offset is at the edge of the +/-{max_change} scan range')
+            print(f'WARNING: mean difference C3 offset is at the edge of the +/-{max_change} scan range')
         fit_offset, fit_params, fit_range, fit_info = _pick_best_c3_offset_by_flat_fit(offsets, diffs)
         if fit_offset is None:
             print(f'WARNING: flat fit ignored ({fit_info}); using the mean difference pick only')
@@ -230,12 +204,11 @@ def refine_c3_by_contrast(step=0.3, max_change=5.0, box_size=512, settle_delay_s
             fit_offset = float(np.clip(fit_offset, start_offset - max_change, start_offset + max_change))
             print(f'flat fit C3 offset {fit_offset:.2f} ({fit_info}), '
                   f'change {fit_offset - start_offset:+.2f}')
-        if ask_user and fit_offset is not None and abs(fit_offset - best_offset) > 1e-6:
-            best_offset = _ask_user_best_c3(sem, [('mean difference', best_offset),
-                                                  ('flat fit', fit_offset)],
-                                            offsets[0], settle_delay_s)
-        elif ask_user and fit_offset is not None:
-            print('both methods picked the same C3 offset')
+            # the flat-fit pick is usually at the high end
+            best_offset = float(np.clip(fit_offset + fit_offset_correction,
+                                        start_offset - max_change, start_offset + max_change))
+            print(f'using flat fit C3 offset {fit_offset:.2f} {fit_offset_correction:+.2f} = {best_offset:.2f}, '
+                  f'change {best_offset - start_offset:+.2f}')
     finally:
         # approach the final value from below, like the scan
         final_offset = best_offset if apply else start_offset
