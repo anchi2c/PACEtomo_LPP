@@ -277,19 +277,30 @@ def _image_mean_at_xt(xt, settle_delay_s=0.0):
     ronchi_cal.sem.T()
     return float(np.asarray(ronchi_cal.sem.bufferImage("A"), dtype=float).mean())
 
+def _pi_shifted_xt(xt):
+    """
+    xt shifted by pi of phase along both row vectors of ronchiCorrMatrix (the
+    other anti-node phase sign). The direction (+pi or -pi) is chosen at
+    random, so repeated shifts do not walk the x-tilt away in one direction
+    and drift the on-cross alignment.
+    Returns (new_xt, sign).
+    """
+    corr = np.asarray(ronchiCorrMatrix, dtype=float) * corr_scale
+    sign = int(np.random.choice([-1, 1]))
+    return np.asarray(xt, dtype=float) + sign * np.pi * (corr[0] + corr[1]), sign
+
 def _validate_anti_node(best_xt, settle_delay_s=0.0):
     """
     std/mean does not distinguish the wanted anti-node from the opposite phase
     sign, but the overall image mean is lower at the xlpp anti-node. Compare
     the overall mean of a Trial image at best_xt with one at the x-tilt shifted
-    by pi of phase along both row vectors of ronchiCorrMatrix (the other phase
-    sign), and return the one with the lower mean.
+    by pi of phase in a random direction (see _pi_shifted_xt), and return the
+    one with the lower mean.
     XLensDeflector(2) is restored to its value before the check.
     Returns (xt, flipped).
     """
-    corr = np.asarray(ronchiCorrMatrix, dtype=float) * corr_scale
     best_xt = np.asarray(best_xt, dtype=float)
-    flipped_xt = best_xt + np.pi * corr[0] + np.pi * corr[1]
+    flipped_xt, sign = _pi_shifted_xt(best_xt)
     xt_before = np.array(ronchi_cal.sem.ReportXLensDeflector(2), dtype=float)
     try:
         mean_best = _image_mean_at_xt(best_xt, settle_delay_s)
@@ -297,12 +308,26 @@ def _validate_anti_node(best_xt, settle_delay_s=0.0):
     finally:
         ronchi_cal.sem.SetXLensDeflector(2, xt_before[0], xt_before[1])
     print(f'anti-node check: image mean {mean_best:.2f} at best_xt ({best_xt[0]:.6e}, {best_xt[1]:.6e}), '
-          f'{mean_flipped:.2f} at pi-shifted xt ({flipped_xt[0]:.6e}, {flipped_xt[1]:.6e})')
+          f'{mean_flipped:.2f} at {"+" if sign > 0 else "-"}pi-shifted xt ({flipped_xt[0]:.6e}, {flipped_xt[1]:.6e})')
     if mean_flipped < mean_best:
         print('anti-node check: pi-shifted xt has the lower mean, phase flipped')
         return flipped_xt, True
     print('anti-node check: best_xt has the lower mean, kept')
     return best_xt, False
+
+def flip_phase(xt, settle_delay_s=0.0):
+    """
+    Shift xt by pi of phase in a random direction (see _pi_shifted_xt), set
+    it and acquire a Trial image.
+    Returns the new xt.
+    """
+    new_xt, sign = _pi_shifted_xt(xt)
+    ronchi_cal.sem.SetXLensDeflector(2, new_xt[0], new_xt[1])
+    if settle_delay_s > 0:
+        ronchi_cal.sem.Delay(settle_delay_s, "s")
+    ronchi_cal.sem.T()
+    print(f'phase flipped by {"+" if sign > 0 else "-"}pi: X-tilt set to ({new_xt[0]:.6e}, {new_xt[1]:.6e})')
+    return new_xt
 
 def phase_distance(xt_a, xt_b):
     """
@@ -346,4 +371,9 @@ if __name__=='__main__':
     # quadrant statistics only matter when quadrants were selected (number_of_quadrants < 4)
     if display_util.Quadrant_Stats and any(q is not None for q in display_util.Quadrant_Selected):
         display_util.showQuadrantStats()
+    # _validate_anti_node can still pick the wrong phase sign depending on the ROI.
+    # Let the user flip it, as many times as needed to compare.
+    while input('Flip the anti-node phase (shift X-tilt by pi of phase) ? (Y/N/y/n)').lower() == 'y':
+        best_xt = flip_phase(best_xt)
+    print(f'final X-tilt ({best_xt[0]:.6e}, {best_xt[1]:.6e})')
 
