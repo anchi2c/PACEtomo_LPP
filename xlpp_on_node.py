@@ -279,11 +279,11 @@ def _image_mean_at_xt(xt, settle_delay_s=0.0):
 
 def _validate_anti_node(best_xt, settle_delay_s=0.0):
     """
-    std/mean does not distinguish the +90 degree phase shift (wanted) from the
-    -90 degree one, but the overall image mean is lower at -90 degree. Compare
+    std/mean does not distinguish the wanted anti-node from the opposite phase
+    sign, but the overall image mean is lower at the xlpp anti-node. Compare
     the overall mean of a Trial image at best_xt with one at the x-tilt shifted
     by pi of phase along both row vectors of ronchiCorrMatrix (the other phase
-    sign), and return the one with the higher mean.
+    sign), and return the one with the lower mean.
     XLensDeflector(2) is restored to its value before the check.
     Returns (xt, flipped).
     """
@@ -298,10 +298,10 @@ def _validate_anti_node(best_xt, settle_delay_s=0.0):
         ronchi_cal.sem.SetXLensDeflector(2, xt_before[0], xt_before[1])
     print(f'anti-node check: image mean {mean_best:.2f} at best_xt ({best_xt[0]:.6e}, {best_xt[1]:.6e}), '
           f'{mean_flipped:.2f} at pi-shifted xt ({flipped_xt[0]:.6e}, {flipped_xt[1]:.6e})')
-    if mean_flipped > mean_best:
-        print('anti-node check: pi-shifted xt has the higher mean, phase flipped')
+    if mean_flipped < mean_best:
+        print('anti-node check: pi-shifted xt has the lower mean, phase flipped')
         return flipped_xt, True
-    print('anti-node check: best_xt has the higher mean, kept')
+    print('anti-node check: best_xt has the lower mean, kept')
     return best_xt, False
 
 def phase_distance(xt_a, xt_b):
@@ -321,7 +321,7 @@ if __name__=='__main__':
         ronchi_cal.ronchi_sem_lib.ronchiC3Offset = 1
     best_xt, params, std_grid, xt_grid = find_maximum_contrast_xts(5, box_size=None, box_center=None, settle_delay_s=0.0,
                               frequency=1.0, show_plot=True)
-    # std/mean can not tell +90 from -90 degree phase shift; use the image mean
+    # std/mean can not tell the anti-node phase sign; the anti-node has the lower image mean
     best_xt, flipped = _validate_anti_node(best_xt)
     max_refine_iterations = 5
     # stop refining when best_xt moves less than this phase magnitude (rad)
