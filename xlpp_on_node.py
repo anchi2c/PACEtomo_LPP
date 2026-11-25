@@ -269,6 +269,41 @@ def refine_maximum_contrast_xts(best_xt, number_of_changes=5, fraction_of_period
                                       subtitle=f'refine {number_of_changes}x{number_of_changes}')
     return refined_xt, coeffs, contrast_grid, xt_grid
 
+def _image_mean_at_xt(xt, settle_delay_s=0.0):
+    """Set XLensDeflector(2) to xt, acquire a Trial image and return its overall mean."""
+    ronchi_cal.sem.SetXLensDeflector(2, xt[0], xt[1])
+    if settle_delay_s > 0:
+        ronchi_cal.sem.Delay(settle_delay_s, "s")
+    ronchi_cal.sem.T()
+    return float(np.asarray(ronchi_cal.sem.bufferImage("A"), dtype=float).mean())
+
+def _validate_anti_node(best_xt, settle_delay_s=0.0):
+    """
+    std/mean does not distinguish the +90 degree phase shift (wanted) from the
+    -90 degree one, but the overall image mean is lower at -90 degree. Compare
+    the overall mean of a Trial image at best_xt with one at the x-tilt shifted
+    by pi of phase along both row vectors of ronchiCorrMatrix (the other phase
+    sign), and return the one with the higher mean.
+    XLensDeflector(2) is restored to its value before the check.
+    Returns (xt, flipped).
+    """
+    corr = np.asarray(ronchiCorrMatrix, dtype=float) * corr_scale
+    best_xt = np.asarray(best_xt, dtype=float)
+    flipped_xt = best_xt + np.pi * corr[0] + np.pi * corr[1]
+    xt_before = np.array(ronchi_cal.sem.ReportXLensDeflector(2), dtype=float)
+    try:
+        mean_best = _image_mean_at_xt(best_xt, settle_delay_s)
+        mean_flipped = _image_mean_at_xt(flipped_xt, settle_delay_s)
+    finally:
+        ronchi_cal.sem.SetXLensDeflector(2, xt_before[0], xt_before[1])
+    print(f'anti-node check: image mean {mean_best:.2f} at best_xt ({best_xt[0]:.6e}, {best_xt[1]:.6e}), '
+          f'{mean_flipped:.2f} at pi-shifted xt ({flipped_xt[0]:.6e}, {flipped_xt[1]:.6e})')
+    if mean_flipped > mean_best:
+        print('anti-node check: pi-shifted xt has the higher mean, phase flipped')
+        return flipped_xt, True
+    print('anti-node check: best_xt has the higher mean, kept')
+    return best_xt, False
+
 def phase_distance(xt_a, xt_b):
     """
     Magnitude (rad) of the phase change between two x-tilts, using
@@ -286,6 +321,8 @@ if __name__=='__main__':
         ronchi_cal.ronchi_sem_lib.ronchiC3Offset = 1
     best_xt, params, std_grid, xt_grid = find_maximum_contrast_xts(5, box_size=None, box_center=None, settle_delay_s=0.0,
                               frequency=1.0, show_plot=True)
+    # std/mean can not tell +90 from -90 degree phase shift; use the image mean
+    best_xt, flipped = _validate_anti_node(best_xt)
     max_refine_iterations = 5
     # stop refining when best_xt moves less than this phase magnitude (rad)
     refine_phase_threshold = 2 * np.pi / 30
